@@ -819,7 +819,11 @@ public class MainActivity extends Activity {
             // 2. 좌측 반투명 메뉴 배경판 색칠하기
             LinearLayout leftPane = (LinearLayout) ((LinearLayout) layoutMainMenu).getChildAt(0);
             leftPane.setBackgroundColor(ThemeManager.getOverlayBackgroundColor());
-
+            View statusBar = findViewById(R.id.layout_status_bar);
+            if (statusBar != null) {
+                // 🚀 [수정] 방금 만든 상태바 전용 색상 Getter를 불러옵니다!
+                statusBar.setBackgroundColor(ThemeManager.getStatusBarBackgroundColor());
+            }
             int primary = ThemeManager.getTextColorPrimary();
             int secondary = ThemeManager.getTextColorSecondary();
 
@@ -851,7 +855,8 @@ public class MainActivity extends Activity {
             if (tvMenuPreviewArtist != null) tvMenuPreviewArtist.setTextColor(secondary);
             if (tvStatusClock != null) tvStatusClock.setTextColor(primary);
             if (tvStatusBattery != null) tvStatusBattery.setTextColor(primary);
-            int themeColor = ThemeManager.getTextColorPrimary();
+            // 🚀 [수정 완료] 앱 내의 모든 막대바를 '테마 버튼 포커스 색상(강조색)'으로 진하게 물들입니다!
+            int themeColor = ThemeManager.getListButtonFocusedBg() | 0xFF000000;
 
             // 1. 플레이어 화면의 음악 재생 바
             if (playerProgress != null) {
@@ -885,6 +890,8 @@ public class MainActivity extends Activity {
                     pbBrightness.getProgressDrawable().setColorFilter(themeColor, android.graphics.PorterDuff.Mode.SRC_IN);
                 }
             }
+            android.view.ViewGroup root = findViewById(android.R.id.content);
+            applyFontToAllViews(root, ThemeManager.getCustomFont());
         } catch (Exception e) {}
     }
     // 💡 [추가] 테마 리스트를 쫙 보여주고 사용자가 고를 수 있게 하는 전용 화면
@@ -1119,7 +1126,16 @@ public class MainActivity extends Activity {
         layoutStorageMode.setVisibility(state == STATE_STORAGE ? View.VISIBLE : View.GONE);
         layoutWebServerMode.setVisibility(state == STATE_WEBSERVER ? View.VISIBLE : View.GONE);
         layoutVolumeOverlay.setVisibility(View.GONE);
-
+        View statusBar = findViewById(R.id.layout_status_bar);
+        if (statusBar != null) {
+            if (state == STATE_PLAYER) {
+                // 플레이어 화면(음악 재생 화면)일 때는 무조건 완전 투명하게!
+                statusBar.setBackgroundColor(0x00000000);
+            } else {
+                // 그 외의 다른 화면(메뉴, 설정, 파일 탐색기 등)일 때는 테마에 지정된 상태바 색상으로 복구!
+                statusBar.setBackgroundColor(ThemeManager.getStatusBarBackgroundColor());
+            }
+        }
         if (state == STATE_MENU) {
             isPickingBackground = false;
             View c = getCurrentFocus();
@@ -1611,6 +1627,7 @@ public class MainActivity extends Activity {
 
     private void createCategoryHeader(String title) {
         TextView tv = new TextView(this);
+        tv.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
         tv.setText(title);
         // 💡 하늘색을 빼고, 애플 스타일의 은은한 반투명 흰색 & 굵은 글씨로 변경!
         tv.setTextColor(0xBBFFFFFF);
@@ -1631,12 +1648,14 @@ public class MainActivity extends Activity {
         layout.setBackgroundColor(ThemeManager.getListButtonNormalBg());
 
         TextView tvLeft = new TextView(this);
+        tvLeft.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.NORMAL);
         tvLeft.setText(leftText);
         tvLeft.setTextColor(ThemeManager.getTextColorPrimary()); // 🚀 테마 매니저
         tvLeft.setTextSize(18);
         tvLeft.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
 
         TextView tvRight = new TextView(this);
+        tvRight.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
         tvRight.setText(rightText);
         tvRight.setTextSize(18);
         tvRight.setTypeface(null, android.graphics.Typeface.BOLD);
@@ -1685,6 +1704,8 @@ public class MainActivity extends Activity {
     }
     private Button createListButton(String text) {
         final Button btn = new Button(this);
+        // [수정] 기본 폰트 대신 테마 폰트를 장착합니다.
+        btn.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.NORMAL);
         btn.setSoundEffectsEnabled(false);
         btn.setText(text);
         btn.setTextSize(18);
@@ -3722,6 +3743,27 @@ public class MainActivity extends Activity {
             // 사용된 용량만큼 파이 조각 덮어 그리기 (시작점 -90도는 12시 방향)
             float sweepAngle = percentage * 360f;
             canvas.drawArc(rect, -90, sweepAngle, true, paintUsed); // 🚀 useCenter를 true로 하여 꽉 찬 조각을 만듭니다.
+        }
+    }
+    // 💡 [추가] 화면에 존재하는 모든 글씨를 찾아내 테마 폰트로 갈아입히는 재귀 엔진!
+    private void applyFontToAllViews(android.view.ViewGroup parent, android.graphics.Typeface font) {
+        if (font == null) return;
+        for (int i = 0; i < parent.getChildCount(); i++) {
+            android.view.View child = parent.getChildAt(i);
+
+            // 1. 만약 폴더(레이아웃)라면 안쪽으로 파고듭니다.
+            if (child instanceof android.view.ViewGroup) {
+                applyFontToAllViews((android.view.ViewGroup) child, font);
+            }
+            // 2. 만약 글씨(TextView, Button 등)라면 폰트를 즉시 교체합니다.
+            else if (child instanceof android.widget.TextView) {
+                // 기존에 굵은 글씨(Bold) 설정이 되어있었다면 그 특성은 유지해 줍니다!
+                android.graphics.Typeface current = ((android.widget.TextView) child).getTypeface();
+                int style = android.graphics.Typeface.NORMAL;
+                if (current != null) style = current.getStyle();
+
+                ((android.widget.TextView) child).setTypeface(font, style);
+            }
         }
     }
 }

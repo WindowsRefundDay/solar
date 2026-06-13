@@ -264,6 +264,7 @@
     </FrameLayout>
 
     <RelativeLayout
+        android:id="@+id/layout_status_bar"
         android:layout_width="match_parent"
         android:layout_height="36dp"
         android:paddingLeft="10dp"
