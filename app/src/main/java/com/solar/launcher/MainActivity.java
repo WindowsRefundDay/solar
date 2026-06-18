@@ -1928,9 +1928,17 @@ public class MainActivity extends Activity {
     private void applyKeyboardTheme() {
         if (tvKeyboardSsid == null || tvKeyboardInput == null || tvKeyCurrent == null) return;
         ThemeManager.applyThemedTextStyle(tvKeyboardSsid, ThemeManager.getSectionHeaderTextColor());
-        tvKeyboardInput.setBackground(createButtonBackground(ThemeManager.getRowSelectionFillColor()));
         float menuTextPx = getResources().getDimension(R.dimen.y1_menu_text_size);
         int keyPad = (int) (6 * getResources().getDisplayMetrics().density);
+        int layoutPad = (int) (15 * getResources().getDisplayMetrics().density);
+        int inputRowW = screenWidthPx > 0 ? screenWidthPx - layoutPad * 2 : listRowWidthPx;
+        tvKeyboardInput.setBackground(getY1RowBackground(true, inputRowW, Y1_ROW_MENU));
+        tvKeyboardInput.setMinHeight(y1RowHeightPx);
+        tvKeyboardInput.setPadding(keyPad, 0, keyPad, 0);
+        tvKeyboardInput.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuTextPx);
+        tvKeyboardInput.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
+        tvKeyboardInput.setSelected(true);
+        enableMarquee(tvKeyboardInput);
         android.graphics.drawable.Drawable keySelBg = getY1RowBackground(true,
                 (int) (52 * getResources().getDisplayMetrics().density), Y1_ROW_MENU);
         tvKeyCurrent.setBackground(keySelBg);
@@ -1954,6 +1962,7 @@ public class MainActivity extends Activity {
             tvKeyboardHint.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.NORMAL);
             ThemeManager.applyThemedTextStyle(tvKeyboardHint, ThemeManager.getHintTextColor());
         }
+        if (currentScreenState == STATE_WIFI_KEYBOARD) updateKeyboardUI();
     }
 
     private void applyOverlayScreenTextThemes() {
@@ -4753,7 +4762,7 @@ public class MainActivity extends Activity {
             inputPlaceholder = typedPassword.length() == 0;
         }
         ThemeManager.applyThemedTextStyle(tvKeyboardInput, inputPlaceholder
-                ? ThemeManager.getSettingMenuTextColorNormal()
+                ? ThemeManager.getHintTextColor()
                 : ThemeManager.getSettingMenuTextColorSelected());
     }
 
