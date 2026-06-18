@@ -4260,6 +4260,7 @@ public class MainActivity extends Activity {
         }
         currentScreenState = state;
         updateSoulseekSharePolicy();
+        layoutMainMenu.setVisibility(state == STATE_MENU ? View.VISIBLE : View.GONE);
         layoutBrowserMode.setVisibility((state == STATE_BROWSER || state == STATE_PODCASTS || state == STATE_SOULSEEK || state == STATE_APPS || state == STATE_MORE) ? View.VISIBLE : View.GONE);
         layoutPlayerMode.setVisibility(state == STATE_PLAYER ? View.VISIBLE : View.GONE);
         layoutSettingsMode.setVisibility(state == STATE_SETTINGS ? View.VISIBLE : View.GONE);
