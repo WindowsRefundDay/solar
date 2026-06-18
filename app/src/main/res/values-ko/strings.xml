@@ -315,6 +315,9 @@
     <string name="datetime_hour">시 (24시간)</string>
     <string name="datetime_minute">분</string>
     <string name="update_current_version">현재 버전</string>
+    <string name="update_releases">릴리스</string>
+    <string name="update_installed_marker"> · 설치됨</string>
+    <string name="update_already_installed">이미 이 버전입니다.</string>
     <string name="update_latest_version">최신 버전</string>
     <string name="update_latest_stable">최신 정식 버전</string>
     <string name="update_latest_nightly">최신 야간 빌드</string>

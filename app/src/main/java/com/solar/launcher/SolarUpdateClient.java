@@ -35,18 +35,43 @@ public final class SolarUpdateClient {
             this.nightly = nightly;
         }
 
+        public String listLabel() {
+            return nightly ? tag : ("v" + versionName);
+        }
+
+        public boolean matchesInstalled(int localCode, String localName) {
+            String local = localName == null ? "" : localName.trim();
+            if (nightly) return local.startsWith("nightly-") && tag.equals(local);
+            if (local.startsWith("nightly-")) return false;
+            return local.equals(versionName);
+        }
+
         public boolean isNewerThan(int localCode, String localName) {
+            return compareToInstalled(localCode, localName) == InstallRelation.UPGRADE;
+        }
+
+        /** Same channel ordering — used to pick pm vs system install. */
+        public InstallRelation compareToInstalled(int localCode, String localName) {
+            if (matchesInstalled(localCode, localName)) return InstallRelation.SAME;
             String local = localName == null ? "" : localName.trim();
             if (nightly) {
-                if (local.startsWith("nightly-")) {
-                    if (versionCode > 0 && localCode > 0) return versionCode > localCode;
-                    return !tag.equals(local);
+                if (!local.startsWith("nightly-")) return InstallRelation.SIDEGRADE;
+                if (versionCode > 0 && localCode > 0) {
+                    if (versionCode > localCode) return InstallRelation.UPGRADE;
+                    if (versionCode < localCode) return InstallRelation.DOWNGRADE;
                 }
-                return true;
+                return InstallRelation.SIDEGRADE;
             }
-            if (local.startsWith("nightly-")) return true;
-            return compareSemver(local, versionName) < 0;
+            if (local.startsWith("nightly-")) return InstallRelation.SIDEGRADE;
+            int cmp = compareSemver(local, versionName);
+            if (cmp < 0) return InstallRelation.UPGRADE;
+            if (cmp > 0) return InstallRelation.DOWNGRADE;
+            return InstallRelation.SIDEGRADE;
         }
+    }
+
+    public enum InstallRelation {
+        SAME, UPGRADE, DOWNGRADE, SIDEGRADE
     }
 
     private SolarUpdateClient() {}
@@ -175,5 +200,17 @@ public final class SolarUpdateClient {
         if (!r.isNewerThan(1, "0.1")) throw new AssertionError("stable newer");
         ReleaseInfo n = new ReleaseInfo("nightly-10", "nightly-10", 10, "https://x/a.apk", true);
         if (!n.isNewerThan(5, "nightly-5")) throw new AssertionError("nightly newer");
+        if (!"nightly-10".equals(n.listLabel())) throw new AssertionError("nightly label");
+        if (!n.matchesInstalled(10, "nightly-10")) throw new AssertionError("nightly installed");
+        if (!r.matchesInstalled(0, "0.2")) throw new AssertionError("stable installed");
+        if (n.compareToInstalled(5, "nightly-5") != InstallRelation.UPGRADE) {
+            throw new AssertionError("nightly upgrade");
+        }
+        if (n.compareToInstalled(15, "nightly-15") != InstallRelation.DOWNGRADE) {
+            throw new AssertionError("nightly downgrade");
+        }
+        if (r.compareToInstalled(0, "0.3") != InstallRelation.DOWNGRADE) {
+            throw new AssertionError("stable downgrade");
+        }
     }
 }

@@ -8282,32 +8282,20 @@ public class MainActivity extends Activity {
 
         final int localCode = myVersionCode;
         final String localName = myVersionName;
-        final LinearLayout rowCurrent = createSettingRow(RowKeys.UPDATE_CURRENT, R.string.update_current_version,
-                "v" + localName);
-        final LinearLayout rowStable = createSettingRow(RowKeys.UPDATE_STABLE, R.string.update_latest_stable,
-                getString(R.string.update_checking));
-        final LinearLayout rowNightly = createSettingRow(RowKeys.UPDATE_NIGHTLY, R.string.update_latest_nightly,
-                getString(R.string.update_checking));
-        containerSettingsItems.addView(rowCurrent);
-        containerSettingsItems.addView(rowStable);
-        containerSettingsItems.addView(rowNightly);
+        containerSettingsItems.addView(createSettingRow(RowKeys.UPDATE_CURRENT, R.string.update_current_version,
+                "v" + localName));
 
-        final Button btnStable = createListButton(getString(R.string.update_download_stable));
-        btnStable.setVisibility(View.GONE);
-        containerSettingsItems.addView(btnStable);
-        final Button btnNightly = createListButton(getString(R.string.update_download_nightly));
-        btnNightly.setVisibility(View.GONE);
-        containerSettingsItems.addView(btnNightly);
+        final Button loadingRow = createListButton(getString(R.string.update_checking));
+        loadingRow.setEnabled(false);
+        containerSettingsItems.addView(loadingRow);
 
-        checkGitHubUpdates(localCode, localName, rowStable, rowNightly, btnStable, btnNightly);
+        loadGitHubReleaseList(localCode, localName, loadingRow);
         if (containerSettingsItems.getChildCount() > 1) {
             containerSettingsItems.getChildAt(1).requestFocus();
         }
     }
 
-    private void checkGitHubUpdates(final int localCode, final String localName,
-            final LinearLayout rowStable, final LinearLayout rowNightly,
-            final Button btnStable, final Button btnNightly) {
+    private void loadGitHubReleaseList(final int localCode, final String localName, final View loadingView) {
         final String repo = OTA_GITHUB_REPO != null && !OTA_GITHUB_REPO.trim().isEmpty()
                 ? OTA_GITHUB_REPO.trim() : SolarUpdateClient.DEFAULT_REPO;
         final String token = OTA_GITHUB_TOKEN;
@@ -8317,83 +8305,75 @@ public class MainActivity extends Activity {
                 try {
                     final List<SolarUpdateClient.ReleaseInfo> releases =
                             SolarUpdateClient.fetchReleases(repo, token);
-                    final SolarUpdateClient.ReleaseInfo stable =
-                            SolarUpdateClient.latestStable(releases);
-                    final SolarUpdateClient.ReleaseInfo nightly =
-                            SolarUpdateClient.latestNightly(releases);
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
-                            bindUpdateOffer(rowStable, btnStable, stable, localCode, localName, false);
-                            bindUpdateOffer(rowNightly, btnNightly, nightly, localCode, localName, true);
+                            if (loadingView.getParent() != null) {
+                                containerSettingsItems.removeView(loadingView);
+                            }
+                            if (releases.isEmpty()) {
+                                Button empty = createListButton(getString(R.string.update_none_found));
+                                empty.setEnabled(false);
+                                containerSettingsItems.addView(empty);
+                                return;
+                            }
+                            int insertAt = containerSettingsItems.getChildCount();
+                            for (int i = 0; i < releases.size(); i++) {
+                                final SolarUpdateClient.ReleaseInfo release = releases.get(i);
+                                String label = release.listLabel();
+                                if (release.matchesInstalled(localCode, localName)) {
+                                    label += getString(R.string.update_installed_marker);
+                                }
+                                Button btn = createListButton(label);
+                                if (release.matchesInstalled(localCode, localName)) {
+                                    btn.setEnabled(false);
+                                } else {
+                                    btn.setOnClickListener(new View.OnClickListener() {
+                                        @Override
+                                        public void onClick(View v) {
+                                            clickFeedback();
+                                            downloadAndInstallApk(release);
+                                        }
+                                    });
+                                }
+                                containerSettingsItems.addView(btn, insertAt + i);
+                            }
+                            if (insertAt < containerSettingsItems.getChildCount()) {
+                                containerSettingsItems.getChildAt(insertAt).requestFocus();
+                            }
                         }
                     });
                 } catch (Exception e) {
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
-                            setSettingRowValue(rowStable, getString(R.string.update_network_error),
-                                    ThemeManager.getDimmedTextColor(0x88));
-                            setSettingRowValue(rowNightly, getString(R.string.update_network_error),
-                                    ThemeManager.getDimmedTextColor(0x88));
+                            if (loadingView.getParent() != null) {
+                                containerSettingsItems.removeView(loadingView);
+                            }
+                            Button err = createListButton(getString(R.string.update_network_error));
+                            err.setEnabled(false);
+                            containerSettingsItems.addView(err);
                         }
                     });
                 }
             }
         }, "SolarUpdateCheck").start();
     }
-
-    private void bindUpdateOffer(final LinearLayout row, final Button btn,
-            final SolarUpdateClient.ReleaseInfo offer, final int localCode, final String localName,
-            final boolean nightlyChannel) {
-        if (offer == null || offer.apkUrl.isEmpty()) {
-            setSettingRowValue(row, getString(R.string.update_none_found), ThemeManager.getDimmedTextColor(0x88));
-            btn.setVisibility(View.GONE);
+    private void downloadAndInstallApk(final SolarUpdateClient.ReleaseInfo release) {
+        if (!BuildConfig.FEATURE_OTA_UPDATE || release == null) return;
+        if (release.apkUrl == null || release.apkUrl.trim().isEmpty()) {
+            Toast.makeText(this, getString(R.string.update_url_missing), Toast.LENGTH_SHORT).show();
             return;
         }
-        String label = nightlyChannel ? offer.tag : ("v" + offer.versionName);
-        setSettingRowValue(row, label, ThemeManager.getTextColorPrimary());
-        if (offer.isNewerThan(localCode, localName)) {
-            btn.setVisibility(View.VISIBLE);
-            btn.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    clickFeedback();
-                    downloadAndInstallApk(offer.apkUrl);
-                }
-            });
-        } else {
-            btn.setVisibility(View.VISIBLE);
-            btn.setText(getString(R.string.update_up_to_date));
-            btn.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    clickFeedback();
-                }
-            });
-        }
-    }
-
-    private void setSettingRowValue(LinearLayout row, String value, int color) {
-        if (row == null) return;
-        int seenText = 0;
-        for (int i = 0; i < row.getChildCount(); i++) {
-            View child = row.getChildAt(i);
-            if (!(child instanceof TextView)) continue;
-            seenText++;
-            if (seenText == 2) {
-                TextView tv = (TextView) child;
-                tv.setText(value);
-                ThemeManager.applyThemedTextStyle(tv, color);
-                return;
-            }
-        }
-    }
-
-    private void downloadAndInstallApk(final String apkUrl) {
-        if (!BuildConfig.FEATURE_OTA_UPDATE) return;
-        if (apkUrl == null || apkUrl.trim().isEmpty()) {
-            Toast.makeText(this, getString(R.string.update_url_missing), Toast.LENGTH_SHORT).show();
+        int localCode = BuildConfig.VERSION_CODE;
+        String localName = BuildConfig.VERSION_NAME;
+        try {
+            android.content.pm.PackageInfo pInfo = getPackageManager().getPackageInfo(getPackageName(), 0);
+            localCode = pInfo.versionCode;
+            localName = pInfo.versionName;
+        } catch (Exception ignored) {}
+        if (release.matchesInstalled(localCode, localName)) {
+            Toast.makeText(this, getString(R.string.update_already_installed), Toast.LENGTH_SHORT).show();
             return;
         }
         final ProgressBar progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
@@ -8407,12 +8387,14 @@ public class MainActivity extends Activity {
         layout.setPadding(50, 50, 50, 50);
         layout.addView(progressBar);
         layout.addView(tvProgress);
+        String dialogTitle = getString(R.string.update_download_title) + " — " + release.listLabel();
         final AlertDialog progressDialog = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-                .setTitle(getString(R.string.update_download_title))
+                .setTitle(dialogTitle)
                 .setView(layout)
                 .setCancelable(false)
                 .create();
         progressDialog.show();
+        final String apkUrl = release.apkUrl;
 
         new Thread(new Runnable() {
             @Override
@@ -8467,7 +8449,7 @@ public class MainActivity extends Activity {
                         @Override
                         public void run() {
                             progressDialog.dismiss();
-                            installApk(updateFile);
+                            installApk(updateFile, release);
                         }
                     });
                 } catch (Exception e) {
@@ -8482,6 +8464,7 @@ public class MainActivity extends Activity {
             }
         }).start();
     }
+
     private LinearLayout createHomeOrderRow(final HomeMenuConfig.Entry entry, boolean moving) {
         final String rowKey = RowKeys.homeShortcut(entry.id);
         final LinearLayout layout = createRearrangeListRow(rowKey, getString(entry.labelResId),
@@ -13517,20 +13500,61 @@ public class MainActivity extends Activity {
         }, 1500);
     }
 
+    private boolean installViaPackageManager(File apkFile, boolean allowDowngrade) {
+        if (apkFile == null || !apkFile.isFile()) return false;
+        String cmd = allowDowngrade
+                ? "pm install -r -d " + shQuote(apkFile.getAbsolutePath())
+                : "pm install -r " + shQuote(apkFile.getAbsolutePath());
+        return runSuCommandSilently(cmd);
+    }
+
     private void installApk(File apkFile) {
+        installApk(apkFile, null);
+    }
+
+    private void installApk(File apkFile, SolarUpdateClient.ReleaseInfo release) {
         try {
-            if (apkFile != null && apkFile.isFile()) {
-                if (isInstalledAsSystemApp()) {
-                    if (installSystemApk(apkFile)) {
-                        Toast.makeText(this, getString(R.string.toast_install_reboot), Toast.LENGTH_LONG).show();
-                        rebootDeviceSilently();
-                        return;
-                    }
-                } else if (runSuCommandSilently("pm install -r " + shQuote(apkFile.getAbsolutePath()))) {
-                    Toast.makeText(this, getString(R.string.toast_install_ok), Toast.LENGTH_SHORT).show();
-                    return;
-                }
+            if (apkFile == null || !apkFile.isFile()) {
+                Toast.makeText(this, getString(R.string.toast_install_failed), Toast.LENGTH_SHORT).show();
+                return;
             }
+            int localCode = BuildConfig.VERSION_CODE;
+            String localName = BuildConfig.VERSION_NAME;
+            try {
+                android.content.pm.PackageInfo pInfo = getPackageManager().getPackageInfo(getPackageName(), 0);
+                localCode = pInfo.versionCode;
+                localName = pInfo.versionName;
+            } catch (Exception ignored) {}
+            SolarUpdateClient.InstallRelation relation = release != null
+                    ? release.compareToInstalled(localCode, localName)
+                    : SolarUpdateClient.InstallRelation.UPGRADE;
+
+            if (release != null && relation == SolarUpdateClient.InstallRelation.SAME) {
+                Toast.makeText(this, getString(R.string.update_already_installed), Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            boolean systemApp = isInstalledAsSystemApp();
+            boolean tryPmFirst = !systemApp || relation == SolarUpdateClient.InstallRelation.UPGRADE;
+            boolean allowDowngrade = relation == SolarUpdateClient.InstallRelation.DOWNGRADE
+                    || relation == SolarUpdateClient.InstallRelation.SIDEGRADE;
+
+            if (tryPmFirst && installViaPackageManager(apkFile, allowDowngrade)) {
+                Toast.makeText(this, getString(R.string.toast_install_ok), Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            if (systemApp && installSystemApk(apkFile)) {
+                Toast.makeText(this, getString(R.string.toast_install_reboot), Toast.LENGTH_LONG).show();
+                rebootDeviceSilently();
+                return;
+            }
+
+            if (!systemApp && installViaPackageManager(apkFile, true)) {
+                Toast.makeText(this, getString(R.string.toast_install_ok), Toast.LENGTH_SHORT).show();
+                return;
+            }
+
             Intent intent = new Intent(Intent.ACTION_VIEW);
             intent.setDataAndType(Uri.fromFile(apkFile), "application/vnd.android.package-archive");
             intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);

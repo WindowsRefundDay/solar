@@ -1,5 +1,6 @@
 #!/system/bin/sh
-# Root: replace Solar system APK. Usage: update-system-apk.sh /path/to/downloaded.apk
+# Root: install or downgrade Solar at /system/app (PackageManager cannot downgrade system apps).
+# Usage: update-system-apk.sh /path/to/downloaded.apk
 APK="$1"
 DEST="/system/app/com.solar.launcher.apk"
 [ -n "$APK" ] && [ -f "$APK" ] || exit 1

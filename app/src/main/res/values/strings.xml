@@ -363,6 +363,9 @@
     <string name="update_latest_version">Latest Version</string>
     <string name="update_latest_stable">Latest Stable</string>
     <string name="update_latest_nightly">Latest Nightly</string>
+    <string name="update_releases">Releases</string>
+    <string name="update_installed_marker"> · installed</string>
+    <string name="update_already_installed">Already on this release.</string>
     <string name="update_checking">Checking…</string>
     <string name="update_download">DOWNLOAD &amp; UPDATE</string>
     <string name="update_download_stable">DOWNLOAD STABLE</string>
