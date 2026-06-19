@@ -1,6 +1,7 @@
 package com.solar.launcher;
 
 import com.solar.launcher.soulseek.ReachCache;
+import com.solar.launcher.soulseek.StreamTempCache;
 import com.solar.launcher.soulseek.SoulseekAccount;
 import com.solar.launcher.soulseek.SoulseekClient;
 import com.solar.launcher.soulseek.SoulseekSearchHistory;
@@ -4327,6 +4328,10 @@ public class MainActivity extends Activity {
             flushPodcastResumeIfNeeded();
             pausePodcastBackgroundDownload();
             clearPlayerScrubCursorMode(false);
+            if (!playback.isMusicActive() || state != STATE_SETTINGS
+                    || !SettingsScreens.MUSIC_QUEUE.equals(settingsSubScreenKey)) {
+                purgeStreamTempFiles();
+            }
         }
         if (state != STATE_PLAYER) maybeRenamePodcastGrowingCache();
 
@@ -5608,9 +5613,10 @@ public class MainActivity extends Activity {
         int h = isFullWidthMenus && screenHeightPx > statusH
                 ? screenHeightPx - statusH
                 : (int) getResources().getDimension(R.dimen.y1_settings_menu_height);
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(w, h);
-        if (listThemes != null) listThemes.setLayoutParams(lp);
-        if (listMusicQueue != null) listMusicQueue.setLayoutParams(lp);
+        FrameLayout.LayoutParams themesLp = new FrameLayout.LayoutParams(w, h);
+        FrameLayout.LayoutParams queueLp = new FrameLayout.LayoutParams(w, h);
+        if (listThemes != null) listThemes.setLayoutParams(themesLp);
+        if (listMusicQueue != null) listMusicQueue.setLayoutParams(queueLp);
     }
 
     private boolean podcastDualPaneActive() {
@@ -6781,8 +6787,10 @@ public class MainActivity extends Activity {
                 addContextAction(getString(R.string.library_queue_remove), new Runnable() {
                     @Override
                     public void run() {
+                        if (isMusicQueueNowPlayingSlot(idx)) return;
                         playback.removeMusicTrackAt(idx);
-                        purgeUnreferencedReachCache();
+                        purgeStreamTempFiles();
+                        updateMusicTrackCountUi();
                         Toast.makeText(MainActivity.this, getString(R.string.library_queue_removed),
                                 Toast.LENGTH_SHORT).show();
                         if (playback.musicPlaylist().isEmpty()) {
@@ -9689,14 +9697,22 @@ public class MainActivity extends Activity {
     }
 
     private void openMusicQueueEditor() {
+        if (!playback.isMusicActive() || playback.musicPlaylist().isEmpty()) {
+            Toast.makeText(this, getString(R.string.library_queue_empty), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        playback.clampMusicIndex();
         musicQueueMoveFrom = -1;
-        musicQueueEditorFocus = playback.musicIndex() + 1;
+        musicQueueEditorFocus = Math.min(playback.musicIndex() + 1, playback.musicPlaylist().size());
         musicQueueReturnScreen = currentScreenState == STATE_PLAYER ? STATE_PLAYER : STATE_MENU;
         setSettingsSubScreen(SettingsScreens.MUSIC_QUEUE);
         changeScreen(STATE_SETTINGS);
     }
 
     private void setMusicQueueListVisible(boolean visible) {
+        if (visible) {
+            setThemesListVisible(false);
+        }
         if (settingsScrollView != null) {
             settingsScrollView.setVisibility(visible ? View.GONE : View.VISIBLE);
         }
@@ -9737,6 +9753,7 @@ public class MainActivity extends Activity {
         playback.moveMusicTrack(from, to);
         musicQueueMoveFrom = to;
         musicQueueEditorFocus = to + 1;
+        updateMusicTrackCountUi();
         refreshMusicQueueList();
     }
 
@@ -9782,16 +9799,26 @@ public class MainActivity extends Activity {
     }
 
     private void buildMusicQueueEditorUI() {
+        if (!playback.isMusicActive() || playback.musicPlaylist().isEmpty()) {
+            settingsSubScreenKey = null;
+            setMusicQueueListVisible(false);
+            buildSettingsUI();
+            return;
+        }
+        playback.clampMusicIndex();
         setSettingsSubScreen(SettingsScreens.MUSIC_QUEUE);
         updateStatusBarTitle();
+        setThemesListVisible(false);
         setMusicQueueListVisible(true);
         containerSettingsItems.removeAllViews();
+        if (listMusicQueue == null) return;
         if (musicQueueListAdapter == null) {
             musicQueueListAdapter = new MusicQueueListAdapter();
         }
         listMusicQueue.setAdapter(musicQueueListAdapter);
         int focusListPos = musicQueueEditorFocus > 0 ? musicQueueEditorFocus
                 : playback.musicIndex() + 1;
+        focusListPos = Math.min(focusListPos, playback.musicPlaylist().size());
         scrollMusicQueueToListPos(focusListPos);
     }
 
@@ -9873,6 +9900,7 @@ public class MainActivity extends Activity {
     }
 
     private String musicTrackLabel(File f) {
+        if (f == null) return "";
         SongItem si = findSongItem(f);
         if (si != null) return si.title + " · " + si.artist;
         String n = f.getName();
@@ -11647,7 +11675,35 @@ public class MainActivity extends Activity {
     }
 
     private void purgeUnreferencedReachCache() {
-        ReachCache.purgeUnreferenced(getCacheDir(), playback.musicPlaylist());
+        purgeStreamTempFiles();
+    }
+
+    private void purgeStreamTempFiles() {
+        StreamTempCache.purgeReach(getCacheDir(), playback.musicPlaylist(),
+                reachGrowingCacheFile, reachQueuePartialFile);
+        StreamTempCache.purgePodcastStream(getCacheDir(),
+                podcastGrowingCacheFile, podcastGrowingCacheFinal);
+    }
+
+    private void updateMusicTrackCountUi() {
+        if (tvPlayerTrackCount == null) return;
+        if (playback.isPodcastActive()) {
+            int idx = playback.podcastIndex();
+            int total = playback.podcastQueue().size();
+            if (idx < 0 || total <= 0) {
+                tvPlayerTrackCount.setText("— / —");
+            } else {
+                tvPlayerTrackCount.setText(PlaybackCoordinator.formatTrackPosition(idx, total));
+            }
+            return;
+        }
+        int total = playback.musicPlaylist().size();
+        if (!playback.isMusicActive() || total <= 0) {
+            tvPlayerTrackCount.setText("— / —");
+            return;
+        }
+        tvPlayerTrackCount.setText(
+                PlaybackCoordinator.formatTrackPosition(playback.musicIndex(), total));
     }
 
     private void replaceReachFileInQueue(File oldF, File newF) {
@@ -12101,6 +12157,7 @@ public class MainActivity extends Activity {
             playerProgress.setProgress(0);
             tvPlayerTimeCurrent.setText("00:00");
             tvPlayerTimeTotal.setText("00:00");
+            updateMusicTrackCountUi();
         }
         isPausedByHand = false;
         playerReturnScreen = STATE_SOULSEEK;
@@ -12181,6 +12238,7 @@ public class MainActivity extends Activity {
                     }
                     if (dur > 0) tvPlayerTimeTotal.setText(formatTime(dur));
                     updateReachGrowingDurationUi();
+                    updateMusicTrackCountUi();
                     int growingSeek = reachGrowingSeekMs;
                     reachGrowingSeekMs = 0;
                     if (growingSeek > 0) {
@@ -12273,7 +12331,9 @@ public class MainActivity extends Activity {
         reachGrowingPreparedBytes = 0;
         reachGrowingTotalBytes = 0;
         reachGrowingSeekMs = 0;
+        reachQueuePartialFile = null;
         progressHandler.removeCallbacks(reachGrowingEdgePoll);
+        purgeStreamTempFiles();
         if (!isSoulseekUiActive()) soulseekOffScreenCleanup();
     }
 
@@ -12320,6 +12380,9 @@ public class MainActivity extends Activity {
 
     void teardownPodcastSession() {
         stopPodcastDownloadFully();
+        StreamTempCache.purgePodcastStream(getCacheDir(), null, null);
+        podcastGrowingCacheFile = null;
+        podcastGrowingCacheFinal = null;
         podcastUiGen++;
         setBlockingLoading(false);
         podcastProbeStatusRow = null;
@@ -12866,7 +12929,7 @@ public class MainActivity extends Activity {
         String showTitle = podcastSelected != null ? podcastSelected.title : playback.podcastShowTitle();
         tvPlayerTitle.setText(ep.title);
         tvPlayerArtist.setText(showTitle.isEmpty() ? "Podcast" : showTitle);
-        tvPlayerTrackCount.setText(String.format(Locale.US, "%02d / %02d", index + 1, playback.podcastQueue().size()));
+        tvPlayerTrackCount.setText(PlaybackCoordinator.formatTrackPosition(index, playback.podcastQueue().size()));
         tvPlayerTimeCurrent.setText("00:00");
         tvPlayerTimeTotal.setText(getString(R.string.podcasts_buffering));
         ivAlbumArt.setImageResource(R.drawable.default_album);
@@ -13583,6 +13646,7 @@ public class MainActivity extends Activity {
             playerProgress.setProgress(0);
             tvPlayerTimeCurrent.setText("00:00");
             tvPlayerTimeTotal.setText("00:00");
+            updateMusicTrackCountUi();
         }
         isPausedByHand = false;
         changeScreen(STATE_PLAYER);
@@ -13609,6 +13673,11 @@ public class MainActivity extends Activity {
     private void prepareMusicTrack(int index) {
         if (playback.musicPlaylist().isEmpty())
             return;
+        if (index < 0 || index >= playback.musicPlaylist().size()) {
+            playback.clampMusicIndex();
+            index = playback.musicIndex();
+        }
+        playback.setMusicIndex(index);
         final File track = playback.musicPlaylist().get(index);
         lastAlbumArtBytes = null;
         currentAlbumColor = ThemeManager.getListButtonFocusedBg() | 0xFF000000;
@@ -13804,9 +13873,7 @@ public class MainActivity extends Activity {
                         } catch (Exception e) {
                         }
                         tvPlayerTimeTotal.setText(formatTime(mp.getDuration()));
-                        String currentTrackNum = String.format(Locale.US, "%02d", index + 1);
-                        String totalTrackNum = String.format(Locale.US, "%02d", playback.musicPlaylist().size());
-                        tvPlayerTrackCount.setText(currentTrackNum + " / " + totalTrackNum);
+                        updateMusicTrackCountUi();
                         if (!isPausedByHand) {
                             mp.start();
                         }
@@ -16047,17 +16114,33 @@ public class MainActivity extends Activity {
         private static final int TYPE_BACK = 0;
         private static final int TYPE_TRACK = 1;
 
+        private java.util.List<File> snapshotQueue() {
+            return new ArrayList<File>(playback.musicPlaylist());
+        }
+
         @Override public int getViewTypeCount() { return 2; }
         @Override
         public int getItemViewType(int position) {
             return position == 0 ? TYPE_BACK : TYPE_TRACK;
         }
-        @Override public int getCount() { return playback.musicPlaylist().size() + 1; }
+        @Override public int getCount() {
+            return snapshotQueue().size() + 1;
+        }
         @Override public Object getItem(int position) { return position; }
         @Override public long getItemId(int position) { return position; }
 
         @Override
         public View getView(final int position, View convertView, android.view.ViewGroup parent) {
+            try {
+                return buildQueueRowView(position, convertView);
+            } catch (Exception e) {
+                Button err = createListButton("…");
+                err.setEnabled(false);
+                return err;
+            }
+        }
+
+        private View buildQueueRowView(final int position, View convertView) {
             if (position == 0) {
                 Button btn;
                 if (convertView instanceof Button) {
@@ -16084,6 +16167,10 @@ public class MainActivity extends Activity {
             }
 
             final int queueIdx = position - 1;
+            java.util.List<File> playlist = snapshotQueue();
+            if (queueIdx < 0 || queueIdx >= playlist.size()) {
+                return new View(MainActivity.this);
+            }
             LinearLayout layout;
             if (convertView instanceof LinearLayout && "queue_row".equals(convertView.getTag())) {
                 layout = (LinearLayout) convertView;
@@ -16129,7 +16216,8 @@ public class MainActivity extends Activity {
             }
 
             final TextView tvLeft = (TextView) layout.findViewWithTag(TAG_REARRANGE_LABEL);
-            final File track = playback.musicPlaylist().get(queueIdx);
+            final File track = playlist.get(queueIdx);
+            if (tvLeft == null) return layout;
             final boolean nowPlaying = isMusicQueueNowPlayingSlot(queueIdx);
             final boolean moving = musicQueueMoveFrom == queueIdx;
             String num = String.format(Locale.US, "%02d · ", queueIdx + 1);
@@ -16148,8 +16236,6 @@ public class MainActivity extends Activity {
             return layout;
         }
     }
-
-    // 💡 [추가] 딱 10개의 버튼만 만들어서 수천 곡의 텍스트를 갈아끼우며 재활용하는 마법의 어댑터!
     private class SongListAdapter extends android.widget.BaseAdapter {
         private List<SongItem> items;
 

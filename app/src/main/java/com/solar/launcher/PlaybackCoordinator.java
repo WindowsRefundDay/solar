@@ -44,11 +44,33 @@ public final class PlaybackCoordinator {
     }
 
     public int musicIndex() {
+        clampMusicIndex();
         return musicIndex;
     }
 
     public void setMusicIndex(int index) {
         musicIndex = index;
+        clampMusicIndex();
+    }
+
+    /** Keep index in range — avoids corrupt queue / track-count UI after edits. */
+    void clampMusicIndex() {
+        if (musicActive.isEmpty()) {
+            musicIndex = 0;
+            return;
+        }
+        if (musicIndex < 0 || musicIndex >= musicActive.size()) {
+            musicIndex = Math.max(0, Math.min(musicIndex, musicActive.size() - 1));
+        }
+    }
+
+    /** Safe "01 / 05" label for Now Playing (never NaN/∞). */
+    public static String formatTrackPosition(int index, int total) {
+        if (total <= 0) return "— / —";
+        int pos = index + 1;
+        if (pos < 1) pos = 1;
+        if (pos > total) pos = total;
+        return String.format(java.util.Locale.US, "%02d / %02d", pos, total);
     }
 
     public List<OpenRssClient.Episode> podcastQueue() {
@@ -87,14 +109,15 @@ public final class PlaybackCoordinator {
     }
 
     public void activateMusic(List<File> playlist, int startIndex, boolean shuffle) {
-        activeMode = Mode.MUSIC;
         musicOriginal.clear();
         musicActive.clear();
         musicInitiator = null;
         if (playlist == null || playlist.isEmpty()) {
             musicIndex = 0;
+            activeMode = Mode.NONE;
             return;
         }
+        activeMode = Mode.MUSIC;
         musicOriginal.addAll(playlist);
         musicActive.addAll(playlist);
         File currentSong = musicOriginal.get(Math.max(0, Math.min(startIndex, musicOriginal.size() - 1)));
@@ -137,9 +160,11 @@ public final class PlaybackCoordinator {
     public void removeMusicTrackAt(int index) {
         if (index < 0 || index >= musicActive.size()) return;
         File removed = musicActive.remove(index);
-        if (musicIndex >= musicActive.size()) musicIndex = Math.max(0, musicActive.size() - 1);
         if (musicIndex > index) musicIndex--;
-        else if (musicIndex == index && musicIndex >= musicActive.size()) musicIndex = Math.max(0, musicActive.size() - 1);
+        else if (musicIndex == index && musicIndex >= musicActive.size()) {
+            musicIndex = Math.max(0, musicActive.size() - 1);
+        }
+        clampMusicIndex();
         musicOriginal.remove(removed);
     }
 
@@ -150,7 +175,7 @@ public final class PlaybackCoordinator {
         if (musicIndex == from) musicIndex = to;
         else if (from < musicIndex && to >= musicIndex) musicIndex--;
         else if (from > musicIndex && to <= musicIndex) musicIndex++;
-        // ponytail: manual queue order is authoritative; shuffle-off restores this order
+        clampMusicIndex();
         musicOriginal.clear();
         musicOriginal.addAll(musicActive);
     }

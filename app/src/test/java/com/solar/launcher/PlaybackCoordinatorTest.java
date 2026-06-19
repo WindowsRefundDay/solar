@@ -33,4 +33,25 @@ public class PlaybackCoordinatorTest {
         assertEquals(3, pc.musicIndex());
         assertEquals(pc.musicPlaylist(), pc.musicOriginal());
     }
+
+    @Test
+    public void formatTrackPosition_neverInfinity() {
+        if (!"— / —".equals(PlaybackCoordinator.formatTrackPosition(0, 0))) {
+            throw new AssertionError("empty queue");
+        }
+        if (!"01 / 03".equals(PlaybackCoordinator.formatTrackPosition(0, 3))) {
+            throw new AssertionError("first track");
+        }
+        if (!"03 / 03".equals(PlaybackCoordinator.formatTrackPosition(99, 3))) {
+            throw new AssertionError("clamp high index");
+        }
+    }
+
+    @Test
+    public void activateMusic_emptyClearsMode() {
+        PlaybackCoordinator pc = new PlaybackCoordinator();
+        pc.activateMusic(files("a"), 0, false);
+        pc.activateMusic(new ArrayList<File>(), 0, false);
+        if (pc.isMusicActive()) throw new AssertionError("empty should clear music mode");
+    }
 }
