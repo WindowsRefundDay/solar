@@ -463,11 +463,12 @@ public class MainActivity extends Activity {
     private Button btnThemeInterstitialDownload, btnThemeInterstitialBack;
     private FrameLayout settingsMenuHost;
     private View settingsPreviewPane;
-    private long centerKeyDownTime = 0;
     private boolean centerLongPressHandled = false;
+    /** Hold past this KeyEvent repeat count, then release — sleep (com.innioasis.y1 LongDownCenterUtil). */
+    private boolean centerPrepareSleep = false;
+    private static final int CENTER_SLEEP_REPEAT = 50;
     private long backKeyDownTime = 0;
     private boolean backLongPressHandled = false;
-    private static final long CENTER_LONG_PRESS_MS = 600;
     private static final long BACK_LONG_PRESS_MS = 600;
     private static final long MEDIA_SKIP_LONG_PRESS_MS = 500;
     private static final int MEDIA_SCRUB_STEP_MS = 5000;
@@ -4622,7 +4623,18 @@ public class MainActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
-        // ponytail: overlay is visual-only unless focused — intercept before ListView eats center
+        // ponytail: intercept center before focused rows/ListView eat it (com.innioasis.y1 BaseActivity)
+        if (isCenterKey(event.getKeyCode())) {
+            if (isWakingKeyEvent(event)) return true;
+            if (themedContextMenu != null && themedContextMenu.isShowing()) {
+                if (event.getAction() == KeyEvent.ACTION_DOWN) return trackCenterKeyDown(event, true);
+                if (event.getAction() == KeyEvent.ACTION_UP) return handleCenterKeyUp(event, true);
+                return true;
+            }
+            if (event.getAction() == KeyEvent.ACTION_DOWN) return trackCenterKeyDown(event, false);
+            if (event.getAction() == KeyEvent.ACTION_UP) return handleCenterKeyUp(event, false);
+            return true;
+        }
         if (themedContextMenu != null && themedContextMenu.isShowing()) {
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
                 return onKeyDown(event.getKeyCode(), event);
@@ -4633,6 +4645,21 @@ public class MainActivity extends Activity {
             return true;
         }
         return super.dispatchKeyEvent(event);
+    }
+
+    private static boolean isCenterKey(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER;
+    }
+
+    private boolean isWakingKeyEvent(KeyEvent event) {
+        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        boolean isScreenOn = true;
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 20) isScreenOn = pm.isInteractive();
+            else isScreenOn = pm.isScreenOn();
+        } catch (Exception ignored) {}
+        return !isScreenOn || ((event.getFlags() & KeyEvent.FLAG_WOKE_HERE) != 0)
+                || (System.currentTimeMillis() - lastScreenOnTime < 500);
     }
 
     // 💡 [추가] 과부하 방지용 타이머 변수
@@ -6541,10 +6568,44 @@ public class MainActivity extends Activity {
     }
 
     private void handleCenterLongPress() {
-        if (currentScreenState == STATE_MENU || currentScreenState == STATE_SETTINGS) {
-            clickFeedback();
-            showButtonRadiusMenu();
+        lockScreen();
+    }
+
+    /** Center/OK hold — arm sleep on release after repeat threshold (stock Y1 / LongDownCenterUtil). */
+    private boolean trackCenterKeyDown(KeyEvent event, boolean fromContextMenu) {
+        if (fromContextMenu) {
+            suppressListClickUntil = System.currentTimeMillis() + CONTEXT_MENU_CLICK_SUPPRESS_MS;
         }
+        if (event.getRepeatCount() == 0) {
+            centerLongPressHandled = false;
+            centerPrepareSleep = false;
+        } else if (event.getRepeatCount() >= CENTER_SLEEP_REPEAT) {
+            centerPrepareSleep = true;
+        }
+        return true;
+    }
+
+    private boolean handleCenterKeyUp(KeyEvent event, boolean fromContextMenu) {
+        if (centerPrepareSleep && !centerLongPressHandled) {
+            centerPrepareSleep = false;
+            handleCenterLongPress();
+            centerLongPressHandled = true;
+            return true;
+        }
+        if (centerLongPressHandled) {
+            centerPrepareSleep = false;
+            return true;
+        }
+        if (fromContextMenu) {
+            suppressListClickUntil = System.currentTimeMillis() + CONTEXT_MENU_CLICK_SUPPRESS_MS;
+            themedContextMenu.activateFocused();
+            clickFeedback();
+            return true;
+        }
+        try {
+            handleCenterShortClick();
+        } catch (Exception ignored) {}
+        return true;
     }
 
     private void dismissThemedContextMenu() {
@@ -7093,13 +7154,21 @@ public class MainActivity extends Activity {
             java.lang.reflect.Method goToSleep = PowerManager.class.getMethod(
                     "goToSleep", long.class);
             goToSleep.invoke(pm, android.os.SystemClock.uptimeMillis());
-            return;
+            boolean on = true;
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= 20) on = pm.isInteractive();
+                else on = pm.isScreenOn();
+            } catch (Exception ignored) {}
+            if (!on) return;
         } catch (Exception ignored) {}
-        try {
-            Runtime.getRuntime().exec(new String[] {"input", "keyevent", "26"});
-        } catch (Exception e) {
-            Toast.makeText(this, getString(R.string.context_action_lock_failed), Toast.LENGTH_SHORT).show();
+        // ponytail: /system/app APK is not android.uid.system on Y1 — root power key works
+        for (String su : new String[] {"/system/xbin/su", "su"}) {
+            try {
+                Process p = Runtime.getRuntime().exec(new String[] {su, "-c", "input keyevent 26"});
+                if (p.waitFor() == 0) return;
+            } catch (Exception ignored) {}
         }
+        Toast.makeText(this, getString(R.string.context_action_lock_failed), Toast.LENGTH_SHORT).show();
     }
 
     private void restartCurrentPodcast() {
@@ -9786,13 +9855,13 @@ public class MainActivity extends Activity {
         listMusicQueue.post(new Runnable() {
             @Override
             public void run() {
+                if (listMusicQueue == null) return;
                 listMusicQueue.setSelection(listPos);
-                for (int i = 0; i < listMusicQueue.getChildCount(); i++) {
-                    View v = listMusicQueue.getChildAt(i);
-                    if (listMusicQueue.getPositionForView(v) == listPos && v.isFocusable()) {
-                        v.requestFocus();
-                        break;
-                    }
+                int first = listMusicQueue.getFirstVisiblePosition();
+                int childIdx = listPos - first;
+                if (childIdx >= 0 && childIdx < listMusicQueue.getChildCount()) {
+                    View v = listMusicQueue.getChildAt(childIdx);
+                    if (v != null && v.isFocusable()) v.requestFocus();
                 }
             }
         });
@@ -14434,7 +14503,7 @@ public class MainActivity extends Activity {
                 || (System.currentTimeMillis() - lastScreenOnTime < 500);
 
         if (isWakingUp) {
-            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
+            if (isCenterKey(keyCode)) {
                 return true;
             }
 
@@ -14481,23 +14550,11 @@ public class MainActivity extends Activity {
             if (keyCode == KeyEvent.KEYCODE_BACK) {
                 return handleBackKeyDown(event);
             }
-            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
-                suppressListClickUntil = System.currentTimeMillis() + CONTEXT_MENU_CLICK_SUPPRESS_MS;
-                centerKeyDownTime = System.currentTimeMillis();
-                centerLongPressHandled = false;
-                return true;
-            }
             return true;
         }
 
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             return handleBackKeyDown(event);
-        }
-
-        if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
-            centerKeyDownTime = System.currentTimeMillis();
-            centerLongPressHandled = false;
-            return true;
         }
 
         if (currentScreenState == STATE_WIFI_KEYBOARD) {
@@ -14826,31 +14883,6 @@ public class MainActivity extends Activity {
             } else {
                 clickFeedback();
                 handleBackShortPress();
-            }
-            return true;
-        }
-
-        if (themedContextMenu != null && themedContextMenu.isShowing()) {
-            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
-                suppressListClickUntil = System.currentTimeMillis() + CONTEXT_MENU_CLICK_SUPPRESS_MS;
-                themedContextMenu.activateFocused();
-                clickFeedback();
-                return true;
-            }
-        }
-
-        if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
-            long held = System.currentTimeMillis() - centerKeyDownTime;
-            try {
-                if (held >= CENTER_LONG_PRESS_MS) {
-                    if (!centerLongPressHandled) {
-                        handleCenterLongPress();
-                        centerLongPressHandled = true;
-                    }
-                } else {
-                    handleCenterShortClick();
-                }
-            } catch (Exception e) {
             }
             return true;
         }
@@ -16140,6 +16172,11 @@ public class MainActivity extends Activity {
             }
         }
 
+        private void applyMusicQueueListRowParams(View row) {
+            row.setLayoutParams(new android.widget.AbsListView.LayoutParams(
+                    android.widget.AbsListView.LayoutParams.MATCH_PARENT, y1RowHeightPx));
+        }
+
         private View buildQueueRowView(final int position, View convertView) {
             if (position == 0) {
                 Button btn;
@@ -16147,73 +16184,77 @@ public class MainActivity extends Activity {
                     btn = (Button) convertView;
                 } else {
                     btn = createListButton(getString(R.string.common_back_short));
-                    btn.setLayoutParams(new android.widget.AbsListView.LayoutParams(
-                            android.widget.AbsListView.LayoutParams.MATCH_PARENT, y1RowHeightPx));
-                    btn.setOnClickListener(new View.OnClickListener() {
-                        @Override
-                        public void onClick(View v) {
-                            clickFeedback();
-                            if (musicQueueMoveFrom >= 0) {
-                                musicQueueMoveFrom = -1;
-                                refreshMusicQueueList();
-                            } else {
-                                setMusicQueueListVisible(false);
-                                changeScreen(musicQueueReturnScreen);
-                            }
-                        }
-                    });
+                    applyMusicQueueListRowParams(btn);
                 }
+                btn.setOnClickListener(new View.OnClickListener() {
+                    @Override
+                    public void onClick(View v) {
+                        clickFeedback();
+                        if (musicQueueMoveFrom >= 0) {
+                            musicQueueMoveFrom = -1;
+                            refreshMusicQueueList();
+                        } else {
+                            setMusicQueueListVisible(false);
+                            changeScreen(musicQueueReturnScreen);
+                        }
+                    }
+                });
                 return btn;
             }
 
             final int queueIdx = position - 1;
             java.util.List<File> playlist = snapshotQueue();
             if (queueIdx < 0 || queueIdx >= playlist.size()) {
-                return new View(MainActivity.this);
+                View empty = new View(MainActivity.this);
+                applyMusicQueueListRowParams(empty);
+                return empty;
             }
             LinearLayout layout;
             if (convertView instanceof LinearLayout && "queue_row".equals(convertView.getTag())) {
                 layout = (LinearLayout) convertView;
             } else {
-                layout = createRearrangeListRow(null, "", new View.OnFocusChangeListener() {
-                    @Override
-                    public void onFocusChange(View v, boolean hasFocus) {
-                        if (!(v instanceof LinearLayout)) return;
-                        LinearLayout row = (LinearLayout) v;
-                        int qIdx = listMusicQueue.getPositionForView(v) - 1;
-                        if (qIdx < 0) return;
-                        boolean moving = musicQueueMoveFrom == qIdx;
-                        boolean nowPlaying = isMusicQueueNowPlayingSlot(qIdx);
-                        bindRearrangeRowAdornment(row, moving, hasFocus && !nowPlaying);
-                        if (hasFocus) {
-                            musicQueueEditorFocus = listMusicQueue.getPositionForView(v);
-                            TextView tv = (TextView) row.findViewWithTag(TAG_REARRANGE_LABEL);
-                            if (tv != null) enableMarquee(tv);
-                        }
-                    }
-                });
+                layout = createRearrangeListRow(null, "", null);
                 layout.setTag("queue_row");
-                layout.setOnClickListener(new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        clickFeedback();
-                        int qIdx = listMusicQueue.getPositionForView(v) - 1;
-                        if (qIdx < 0) return;
-                        if (isMusicQueueNowPlayingSlot(qIdx)) return;
-                        if (musicQueueMoveFrom < 0) {
-                            if (canPickMusicQueueMoveFrom(qIdx)) {
-                                musicQueueMoveFrom = qIdx;
-                                refreshMusicQueueList();
-                            }
-                        } else if (musicQueueMoveFrom == qIdx) {
-                            musicQueueMoveFrom = -1;
-                            refreshMusicQueueList();
-                        } else if (canDropMusicQueueMoveAt(qIdx)) {
-                            applyMusicQueueMove(musicQueueMoveFrom, qIdx);
-                        }
-                    }
-                });
             }
+            applyMusicQueueListRowParams(layout);
+            layout.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+                @Override
+                public void onFocusChange(View v, boolean hasFocus) {
+                    if (!(v instanceof LinearLayout)) return;
+                    LinearLayout row = (LinearLayout) v;
+                    boolean moving = musicQueueMoveFrom == queueIdx;
+                    boolean nowPlaying = isMusicQueueNowPlayingSlot(queueIdx);
+                    bindRearrangeRowAdornment(row, moving, hasFocus && !nowPlaying);
+                    int rowW = y1ActiveRowWidthPx();
+                    row.setBackground(getY1RowBackground(hasFocus, rowW, Y1_ROW_MENU));
+                    TextView tvLeft = (TextView) row.findViewWithTag(TAG_REARRANGE_LABEL);
+                    if (tvLeft != null) {
+                        ThemeManager.applyThemedTextStyle(tvLeft, hasFocus
+                                ? y1RowTextColorSelected(Y1_ROW_MENU) : y1RowTextColorNormal(Y1_ROW_MENU));
+                        tvLeft.setSelected(hasFocus);
+                        if (hasFocus) enableMarquee(tvLeft);
+                    }
+                    if (hasFocus) musicQueueEditorFocus = position;
+                }
+            });
+            layout.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    if (isMusicQueueNowPlayingSlot(queueIdx)) return;
+                    if (musicQueueMoveFrom < 0) {
+                        if (canPickMusicQueueMoveFrom(queueIdx)) {
+                            musicQueueMoveFrom = queueIdx;
+                            refreshMusicQueueList();
+                        }
+                    } else if (musicQueueMoveFrom == queueIdx) {
+                        musicQueueMoveFrom = -1;
+                        refreshMusicQueueList();
+                    } else if (canDropMusicQueueMoveAt(queueIdx)) {
+                        applyMusicQueueMove(musicQueueMoveFrom, queueIdx);
+                    }
+                }
+            });
 
             final TextView tvLeft = (TextView) layout.findViewWithTag(TAG_REARRANGE_LABEL);
             final File track = playlist.get(queueIdx);
