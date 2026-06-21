@@ -22,6 +22,7 @@ public final class RowKeys {
     public static final String WIFI_SETUP = "settings.wifi_setup";
     public static final String SOULSEEK = "settings.soulseek";
     public static final String AUTO_FETCH = "settings.auto_fetch";
+    public static final String ABOUT = "settings.about";
     public static final String SYSTEM_UPDATE = "settings.system_update";
     public static final String BLUETOOTH_SETUP = "settings.bluetooth_setup";
     public static final String BRIGHTNESS = "settings.brightness";
@@ -91,6 +92,7 @@ public final class RowKeys {
         if (WIFI_SETUP.equals(rowKey)) return R.string.settings_wifi_setup;
         if (SOULSEEK.equals(rowKey)) return R.string.settings_soulseek;
         if (AUTO_FETCH.equals(rowKey)) return R.string.settings_auto_fetch;
+        if (ABOUT.equals(rowKey)) return R.string.settings_about;
         if (SYSTEM_UPDATE.equals(rowKey)) return R.string.settings_app_version;
         if (BLUETOOTH_SETUP.equals(rowKey)) return R.string.settings_bluetooth_setup;
         if (BRIGHTNESS.equals(rowKey)) return R.string.settings_display_brightness;

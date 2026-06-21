@@ -634,6 +634,20 @@ public class ThemeManager {
         return (lighter + 0.05) / (darker + 0.05);
     }
 
+    /** Representative brand orange from colour logotype — contrast probe for wordmark variant. */
+    public static final int SOLAR_BRAND_ORANGE = 0xFFF5A020;
+
+    /** Pick landscape SOLAR logotype asset path for inline attribution on {@code backgroundArgb}. */
+    public static String pickSolarLogotypeAsset(int backgroundArgb) {
+        int bg = backgroundArgb | 0xFF000000;
+        if (contrastRatio(SOLAR_BRAND_ORANGE, bg) >= 3.0) {
+            return "logo/solar_logotype_colour_full_res.png";
+        }
+        return relativeLuminance(bg) > 0.45
+                ? "logo/solar_logotype_black_full_res.png"
+                : "logo/solar_logotype_white_full_res.png";
+    }
+
     /** ponytail: min 3:1 for menu labels on neutral panel; fix light-on-light themes */
     public static int ensureReadableOnBackground(int textColor, int backgroundColor) {
         int fg = textColor | 0xFF000000;

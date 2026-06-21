@@ -2242,7 +2242,13 @@ public class MainActivity extends Activity {
             int statusTextColor = ThemeManager.getStatusBarTextColor();
 
             applyAllHomeMenuRowStyles();
-            if (currentScreenState == STATE_SETTINGS) applyAllSettingsRowStyles();
+            if (currentScreenState == STATE_SETTINGS) {
+                if (SettingsScreens.ABOUT.equals(settingsSubScreenKey)) {
+                    buildAboutUI();
+                } else {
+                    applyAllSettingsRowStyles();
+                }
+            }
             refreshY1ThemedActionButtons();
             applyKeyboardTheme();
             applyOverlayScreenTextThemes();
@@ -3004,6 +3010,19 @@ public class MainActivity extends Activity {
 
     private boolean isThemeVariantPickerActive() {
         return SettingsScreens.THEME_VARIANT.equals(settingsSubScreenKey);
+    }
+
+    private boolean handleAboutSettingsBack() {
+        if (SettingsScreens.SYSTEM_UPDATE.equals(settingsSubScreenKey)) {
+            buildAboutUI();
+            return true;
+        }
+        if (SettingsScreens.ABOUT.equals(settingsSubScreenKey)) {
+            restoreSettingsPreviewPane();
+            buildSettingsUI();
+            return true;
+        }
+        return false;
     }
 
     private boolean handleSoulseekSettingsBack() {
@@ -4647,6 +4666,10 @@ public class MainActivity extends Activity {
                 buildUnifiedThemesUI();
             } else if (SettingsScreens.THEME_VARIANT.equals(settingsSubScreenKey) && themeVariantEntry != null) {
                 openThemeVariantBrowser(themeVariantEntry);
+            } else if (SettingsScreens.ABOUT.equals(settingsSubScreenKey)) {
+                buildAboutUI();
+            } else if (SettingsScreens.SYSTEM_UPDATE.equals(settingsSubScreenKey)) {
+                buildUpdateSettingsUI();
             } else {
                 buildSettingsUI();
             }
@@ -6503,6 +6526,13 @@ public class MainActivity extends Activity {
         if (RowKeys.SCREEN_TIMEOUT.equals(rowKey)) return screenTimeoutStateText();
         if (RowKeys.FULL_WIDTH.equals(rowKey)) return stateOnOff(isFullWidthMenus);
         if (RowKeys.AUTO_FETCH.equals(rowKey)) return stateOnOff(isAutoFetchEnabled);
+        if (RowKeys.ABOUT.equals(rowKey)) {
+            try {
+                return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            } catch (Exception e) {
+                return BuildConfig.VERSION_NAME;
+            }
+        }
         if (RowKeys.NOW_PLAYING_ALBUM_BLUR.equals(rowKey)) return stateOnOff(playerAlbumBlurEnabled);
         if (RowKeys.WIDGET_CLOCK.equals(rowKey)) return stateOnOff(isWidgetClockOn);
         if (RowKeys.WIDGET_BATTERY.equals(rowKey)) return stateOnOff(isWidgetBatteryOn);
@@ -6751,7 +6781,10 @@ public class MainActivity extends Activity {
 
         String solarKey = resolveSoulseekSolarConfigKey(rowKey);
         Bitmap icon = null;
-        if (isAppearancePreviewRow(rowKey)) {
+        if (RowKeys.ABOUT.equals(rowKey)) {
+            icon = ThemeManager.getSolarConfigIcon("appAbout");
+        }
+        if (icon == null && isAppearancePreviewRow(rowKey)) {
             icon = ThemeManager.getSettingIcon("theme");
         }
         if (icon == null) {
@@ -9091,6 +9124,16 @@ public class MainActivity extends Activity {
         Toast.makeText(this, getString(R.string.toast_added_to_queue), Toast.LENGTH_SHORT).show();
     }
 
+    private void queueReachTrackAfterCurrent(File track, String meta) {
+        if (track == null || !track.isFile()) return;
+        playback.queueReachAfterCurrent(track, meta != null ? meta : track.getName());
+        persistPlaybackQueue();
+        refreshContextQueueTierIfOpen();
+        refreshReachProgressUi();
+        suppressListClickUntil = System.currentTimeMillis() + 400;
+        Toast.makeText(this, getString(R.string.toast_added_to_queue), Toast.LENGTH_SHORT).show();
+    }
+
     private int virtualListFocusPosition() {
         if (listVirtualSongs == null) return -1;
         View focused = listVirtualSongs.getFocusedChild();
@@ -9495,6 +9538,7 @@ public class MainActivity extends Activity {
             if (handleHomeScreenEditorBack()) return;
             if (handleLanguageSettingsBack()) return;
             if (handleSoulseekSettingsBack()) return;
+            if (handleAboutSettingsBack()) return;
             if (handleThemeGalleryBack()) return;
             changeScreen(STATE_MENU);
         }
@@ -9882,17 +9926,15 @@ public class MainActivity extends Activity {
         });
         containerSettingsItems.addView(btnAutoFetch);
 
-        if (BuildConfig.FEATURE_OTA_UPDATE) {
-            LinearLayout btnAppVersion = createSettingsRow(RowKeys.SYSTEM_UPDATE, R.string.settings_app_version, true);
-            btnAppVersion.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    clickFeedback();
-                    buildUpdateSettingsUI();
-                }
-            });
-            containerSettingsItems.addView(btnAppVersion);
-        }
+        LinearLayout btnAbout = createSettingsRow(RowKeys.ABOUT, R.string.settings_about, true);
+        btnAbout.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildAboutUI();
+            }
+        });
+        containerSettingsItems.addView(btnAbout);
 
 
 
@@ -10323,6 +10365,199 @@ public class MainActivity extends Activity {
         btnBack.requestFocus();
     }
 
+    private void restoreSettingsPreviewPane() {
+        if (settingsPreviewPane != null) {
+            settingsPreviewPane.setVisibility(isFullWidthMenus ? View.GONE : View.VISIBLE);
+        }
+    }
+
+    private int sampleScreenBackgroundColor() {
+        try {
+            if (ivMainBg != null && ivMainBg.getDrawable() instanceof android.graphics.drawable.BitmapDrawable) {
+                Bitmap bm = ((android.graphics.drawable.BitmapDrawable) ivMainBg.getDrawable()).getBitmap();
+                if (bm != null && !bm.isRecycled() && bm.getWidth() > 0 && bm.getHeight() > 0) {
+                    return bm.getPixel(bm.getWidth() / 2, bm.getHeight() / 2);
+                }
+            }
+        } catch (Exception ignored) {}
+        return ThemeManager.relativeLuminance(ThemeManager.getTextColorPrimary()) > 0.45
+                ? 0xFF333333 : 0xFFCCCCCC;
+    }
+
+    private Bitmap loadAssetBitmap(String assetPath) {
+        java.io.InputStream in = null;
+        try {
+            in = getAssets().open(assetPath);
+            return BitmapFactory.decodeStream(in);
+        } catch (Exception ignored) {
+            return null;
+        } finally {
+            if (in != null) {
+                try { in.close(); } catch (Exception ignored) {}
+            }
+        }
+    }
+
+    private CharSequence buildAboutAttributionLine() {
+        String logotypePath = ThemeManager.pickSolarLogotypeAsset(sampleScreenBackgroundColor());
+        Bitmap logoBmp = loadAssetBitmap(logotypePath);
+        String prefix = getString(R.string.about_brought_by_prefix);
+        String suffix = getString(R.string.about_brought_by_suffix);
+        if (logoBmp == null) {
+            return prefix + "Solar" + suffix;
+        }
+        int textPx = (int) getResources().getDimension(R.dimen.y1_menu_text_size);
+        float scale = textPx / (float) Math.max(1, logoBmp.getHeight());
+        int w = Math.max(1, (int) (logoBmp.getWidth() * scale));
+        int h = Math.max(1, textPx);
+        Bitmap scaled = Bitmap.createScaledBitmap(logoBmp, w, h, true);
+        if (scaled != logoBmp) logoBmp.recycle();
+        android.text.SpannableString span = new android.text.SpannableString(prefix + " \uFFFC " + suffix);
+        android.graphics.drawable.BitmapDrawable bd =
+                new android.graphics.drawable.BitmapDrawable(getResources(), scaled);
+        bd.setBounds(0, 0, w, h);
+        span.setSpan(new android.text.style.ImageSpan(bd, android.text.style.ImageSpan.ALIGN_BASELINE),
+                prefix.length() + 1, prefix.length() + 2, android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        return span;
+    }
+
+    private String installedVersionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception ignored) {
+            return BuildConfig.VERSION_NAME;
+        }
+    }
+
+    private void buildAboutUI() {
+        setSettingsSubScreen(SettingsScreens.ABOUT);
+        updateStatusBarTitle();
+        updateScreenBackground(STATE_SETTINGS);
+        if (settingsPreviewPane != null) settingsPreviewPane.setVisibility(View.GONE);
+        containerSettingsItems.removeAllViews();
+
+        Button btnBack = createListButton(getString(R.string.common_back_short));
+        styleSecondaryLabel(btnBack);
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                restoreSettingsPreviewPane();
+                buildSettingsUI();
+            }
+        });
+        containerSettingsItems.addView(btnBack);
+
+        float density = getResources().getDisplayMetrics().density;
+        int hPad = (int) (10 * density);
+        int logoSize = (int) (132 * density);
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(hPad, hPad, hPad, hPad / 2);
+        header.setFocusable(false);
+
+        ImageView logo = new ImageView(this);
+        Bitmap appIcon = loadAssetBitmap("logo/square_full_logo_colour.png");
+        if (appIcon != null) {
+            logo.setImageBitmap(appIcon);
+            logo.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        }
+        LinearLayout.LayoutParams logoLp = new LinearLayout.LayoutParams(logoSize, logoSize);
+        logoLp.rightMargin = hPad;
+        header.addView(logo, logoLp);
+
+        TextView tvVersion = new TextView(this);
+        tvVersion.setText(getString(R.string.about_version, installedVersionName()));
+        tvVersion.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
+        tvVersion.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                getResources().getDimension(R.dimen.y1_menu_text_size) * 1.15f);
+        ThemeManager.applyThemedTextStyle(tvVersion, ThemeManager.getTextColorPrimary());
+        header.addView(tvVersion, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        containerSettingsItems.addView(header);
+
+        TextView attribution = new TextView(this);
+        attribution.setFocusable(false);
+        attribution.setGravity(Gravity.CENTER);
+        attribution.setText(buildAboutAttributionLine());
+        attribution.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                getResources().getDimension(R.dimen.y1_menu_text_size));
+        ThemeManager.applyThemedTextStyle(attribution, ThemeManager.getTextColorPrimary());
+        attribution.setPadding(hPad, hPad / 2, hPad, hPad);
+        containerSettingsItems.addView(attribution);
+
+        if (BuildConfig.FEATURE_OTA_UPDATE) {
+            final Button otaProbe = createListButton(getString(R.string.update_checking));
+            otaProbe.setEnabled(false);
+            containerSettingsItems.addView(otaProbe);
+            probeAboutOtaAvailability(otaProbe);
+        }
+
+        btnBack.requestFocus();
+    }
+
+    private void probeAboutOtaAvailability(final Button placeholder) {
+        if (!ConnectivityHelper.isOnline(this)) {
+            replaceAboutOtaPlaceholder(placeholder, null, true);
+            return;
+        }
+        final String updatesUrl = OTA_UPDATES_URL != null && !OTA_UPDATES_URL.trim().isEmpty()
+                ? OTA_UPDATES_URL.trim() : SolarUpdateClient.DEFAULT_UPDATES_URL;
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                boolean ok = false;
+                try {
+                    SolarUpdateClient.fetchUpdates(updatesUrl);
+                    ok = true;
+                } catch (Exception ignored) {}
+                final boolean reachable = ok;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (!SettingsScreens.ABOUT.equals(settingsSubScreenKey)) return;
+                        if (reachable) {
+                            Button updateBtn = createListButton(getString(R.string.about_update_button));
+                            updateBtn.setOnClickListener(new View.OnClickListener() {
+                                @Override
+                                public void onClick(View v) {
+                                    clickFeedback();
+                                    buildUpdateSettingsUI();
+                                }
+                            });
+                            replaceAboutOtaPlaceholder(placeholder, updateBtn, false);
+                        } else {
+                            replaceAboutOtaPlaceholder(placeholder, null, true);
+                        }
+                    }
+                });
+            }
+        }, "AboutOtaProbe").start();
+    }
+
+    private void replaceAboutOtaPlaceholder(Button placeholder, Button replacement, boolean showUnavailable) {
+        if (placeholder == null || placeholder.getParent() != containerSettingsItems) return;
+        int idx = containerSettingsItems.indexOfChild(placeholder);
+        containerSettingsItems.removeView(placeholder);
+        if (replacement != null) {
+            containerSettingsItems.addView(replacement, idx);
+            return;
+        }
+        if (showUnavailable) {
+            TextView note = new TextView(this);
+            note.setFocusable(false);
+            note.setText(getString(R.string.about_update_unavailable));
+            note.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                    getResources().getDimension(R.dimen.y1_menu_text_size) * 0.85f);
+            ThemeManager.applyThemedTextStyle(note, ThemeManager.getTextColorSecondary());
+            int pad = (int) (12 * getResources().getDisplayMetrics().density);
+            note.setPadding(pad, pad / 2, pad, pad);
+            containerSettingsItems.addView(note, idx);
+        }
+    }
+
     private void buildSoulseekAboutInfoUI() {
         setSettingsSubScreen(SettingsScreens.SOULSEEK_ABOUT);
         updateStatusBarTitle();
@@ -10357,7 +10592,7 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View v) {
                 clickFeedback();
-                buildSettingsUI();
+                buildAboutUI();
             }
         });
         containerSettingsItems.addView(btnBack);
@@ -13110,9 +13345,9 @@ public class MainActivity extends Activity {
                         tryReachId3FromPartial(partialFile);
                     } else if (action == SOULSEEK_ACTION_QUEUE && reachQueuePartialFile == null) {
                         reachQueuePartialFile = partialFile;
-                        appendTrackToMusicQueue(partialFile);
-                        soulseekUiMode = SOULSEEK_UI_RESULTS;
-                        buildSoulseekResultsUI();
+                        String meta = soulseekActiveDownload != null
+                                ? soulseekActiveDownload.title() : partialFile.getName();
+                        queueReachTrackAfterCurrent(partialFile, meta);
                     }
                 }
             });
@@ -13126,6 +13361,8 @@ public class MainActivity extends Activity {
                     final int action = soulseekPendingAction;
                     final File queuePartial = reachQueuePartialFile;
                     final boolean reachStream = reachPartialPlaybackStarted;
+                    final String reachMeta = soulseekActiveDownload != null
+                            ? soulseekActiveDownload.title() : (file != null ? file.getName() : "");
                     stopSoulseekDownloadUiRunnables();
                     if (!reachStream) progressHandler.removeCallbacks(reachGrowingEdgePoll);
                     soulseekActiveDownload = null;
@@ -13155,7 +13392,9 @@ public class MainActivity extends Activity {
                     } else if (action == SOULSEEK_ACTION_QUEUE) {
                         soulseekUiMode = SOULSEEK_UI_RESULTS;
                         if (queuePartial != null && !queuePartial.equals(file)) {
-                            replaceReachFileInQueue(queuePartial, file);
+                            playback.replaceReachFileInQueue(queuePartial, file, reachMeta);
+                            persistPlaybackQueue();
+                            refreshContextQueueTierIfOpen();
                         }
                         if (currentScreenState == STATE_SOULSEEK) buildSoulseekResultsUI();
                     } else {
@@ -13703,14 +13942,7 @@ public class MainActivity extends Activity {
     }
 
     private void replaceReachFileInQueue(File oldF, File newF) {
-        List<File> pl = playback.musicPlaylist();
-        for (int i = 0; i < pl.size(); i++) {
-            if (oldF.equals(pl.get(i))) pl.set(i, newF);
-        }
-        List<File> orig = playback.musicOriginal();
-        for (int i = 0; i < orig.size(); i++) {
-            if (oldF.equals(orig.get(i))) orig.set(i, newF);
-        }
+        playback.replaceReachFileInQueue(oldF, newF, newF != null ? newF.getName() : null);
     }
 
     private void saveReachTrackToLibrary(final File src) {
@@ -13922,6 +14154,7 @@ public class MainActivity extends Activity {
         stopSoulseekDownloadUiRunnables();
         prepareSoulseekBrowserChrome();
         browserStatusTitle = action == SOULSEEK_ACTION_PLAY ? getString(R.string.status_buffering)
+                : action == SOULSEEK_ACTION_QUEUE ? getString(R.string.status_queuing)
                 : getString(R.string.status_downloading);
         updateStatusBarTitle();
         if (tvBrowserPath != null) {
@@ -13932,12 +14165,6 @@ public class MainActivity extends Activity {
         Button titleRow = createListButton(r.title());
         titleRow.setEnabled(false);
         containerBrowserItems.addView(titleRow);
-
-        Button peerRow = createListButton(getString(R.string.soulseek_download_from, r.username)
-                + (r.size > 0 ? " · " + formatSoulseekSize(r.size) : "")
-                + (r.freeSlot ? " · " + getString(R.string.soulseek_slot_free) : ""));
-        peerRow.setEnabled(false);
-        containerBrowserItems.addView(peerRow);
 
         int hPad = (int) (10 * getResources().getDisplayMetrics().density);
         LinearLayout progressRow = new LinearLayout(this);
@@ -13960,9 +14187,7 @@ public class MainActivity extends Activity {
         soulseekDownloadPercentText.setTextColor(y1RowTextColorNormal(y1RowKindForScreen()));
         soulseekDownloadPercentText.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
                 getResources().getDimension(R.dimen.y1_menu_text_size));
-        soulseekDownloadPercentText.setText(action == SOULSEEK_ACTION_PLAY
-                ? getString(R.string.soulseek_buffering, 0)
-                : getString(R.string.soulseek_download_progress, 0));
+        soulseekDownloadPercentText.setText(reachDownloadPercentLabel(action, 0));
         progressRow.addView(soulseekDownloadPercentText);
         containerBrowserItems.addView(progressRow);
 
@@ -13971,16 +14196,12 @@ public class MainActivity extends Activity {
         soulseekDownloadDetailText.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
                 getResources().getDimension(R.dimen.y1_menu_text_size) * 0.85f);
         soulseekDownloadDetailText.setPadding(hPad, 0, hPad, hPad / 2);
-        String totalLabel = r.size > 0 ? formatSoulseekSize(r.size) : "?";
-        soulseekDownloadDetailText.setText(getString(R.string.soulseek_download_detail,
-                "0 B", totalLabel, getString(R.string.soulseek_download_speed_unknown),
-                getString(R.string.soulseek_download_eta_pending)));
+        soulseekDownloadDetailText.setText(formatSoulseekDownloadStatusLine(
+                formatSoulseekDownloadPhase(soulseekDownloadPhase, soulseekDownloadPhaseDetail),
+                getString(R.string.soulseek_download_speed_unknown)));
         containerBrowserItems.addView(soulseekDownloadDetailText);
 
-        soulseekDownloadStatusRow = createListButton(formatSoulseekDownloadPhase(
-                soulseekDownloadPhase, soulseekDownloadPhaseDetail));
-        soulseekDownloadStatusRow.setEnabled(false);
-        containerBrowserItems.addView(soulseekDownloadStatusRow);
+        soulseekDownloadStatusRow = null;
 
         soulseekTryAnotherRow = createListButton(getString(R.string.soulseek_try_another_result));
         soulseekTryAnotherRow.setVisibility(View.GONE);
@@ -14062,6 +14283,22 @@ public class MainActivity extends Activity {
         return phase;
     }
 
+    private String reachDownloadPercentLabel(int action, int pct) {
+        if (action == SOULSEEK_ACTION_PLAY) {
+            return getString(R.string.soulseek_buffering, pct);
+        }
+        if (action == SOULSEEK_ACTION_QUEUE) {
+            return getString(R.string.soulseek_queue_progress, pct);
+        }
+        return getString(R.string.soulseek_download_progress, pct);
+    }
+
+    private String formatSoulseekDownloadStatusLine(String phaseLine, String statsLine) {
+        if (phaseLine == null || phaseLine.length() == 0) return statsLine != null ? statsLine : "";
+        if (statsLine == null || statsLine.length() == 0) return phaseLine;
+        return getString(R.string.soulseek_download_status, phaseLine, statsLine);
+    }
+
     private void updateSoulseekDownloadStatusUi() {
         if (soulseekUiMode != SOULSEEK_UI_DOWNLOAD || soulseekActiveDownload == null) return;
         long elapsed = android.os.SystemClock.uptimeMillis() - soulseekDownloadStartMs;
@@ -14072,18 +14309,11 @@ public class MainActivity extends Activity {
         }
         if (soulseekDownloadStalled && soulseekDownloadLastDone <= 0) {
             phaseLine = getString(R.string.soulseek_stall_hint, formatSoulseekElapsed(elapsed))
-                    + "\n" + phaseLine;
+                    + " · " + phaseLine;
         }
-        if (soulseekDownloadStatusRow != null) soulseekDownloadStatusRow.setText(phaseLine);
-        if (tvBrowserPath != null) {
-            int pct = soulseekDownloadProgressBar != null ? soulseekDownloadProgressBar.getProgress() : 0;
-            String verb = soulseekPendingAction == SOULSEEK_ACTION_PLAY ? "Buffering" : "Downloading";
-            if (pct > 0) {
-                tvBrowserPath.setText(getString(R.string.path_soulseek_action,
-                        verb, soulseekActiveDownload.title(), pct));
-            } else {
-                tvBrowserPath.setText(getString(R.string.path_soulseek, phaseLine.replace('\n', ' ')));
-            }
+        if (soulseekDownloadDetailText != null && soulseekDownloadLastDone <= 0) {
+            soulseekDownloadDetailText.setText(formatSoulseekDownloadStatusLine(phaseLine,
+                    getString(R.string.soulseek_download_speed_unknown)));
         }
     }
 
@@ -14649,9 +14879,7 @@ public class MainActivity extends Activity {
         refreshReachProgressUi();
         if (soulseekDownloadProgressBar != null) soulseekDownloadProgressBar.setProgress(pct);
         if (soulseekDownloadPercentText != null) {
-            soulseekDownloadPercentText.setText(soulseekPendingAction == SOULSEEK_ACTION_PLAY
-                    ? getString(R.string.soulseek_buffering, pct)
-                    : getString(R.string.soulseek_download_progress, pct));
+            soulseekDownloadPercentText.setText(reachDownloadPercentLabel(soulseekPendingAction, pct));
         }
         if (soulseekDownloadDetailText != null) {
             long now = android.os.SystemClock.uptimeMillis();
@@ -14677,12 +14905,10 @@ public class MainActivity extends Activity {
             }
             String doneLabel = formatSoulseekSize(done);
             String totalLabel = total > 0 ? formatSoulseekSize(total) : "?";
-            soulseekDownloadDetailText.setText(getString(R.string.soulseek_download_detail,
-                    doneLabel, totalLabel, speed, eta));
-        }
-        if (tvBrowserPath != null && soulseekActiveDownload != null) {
-            String verb = soulseekPendingAction == SOULSEEK_ACTION_PLAY ? "Buffering" : "Downloading";
-            tvBrowserPath.setText(getString(R.string.path_soulseek_action, verb, soulseekActiveDownload.title(), pct));
+            String stats = getString(R.string.soulseek_download_detail,
+                    doneLabel, totalLabel, speed, eta);
+            String phaseLine = formatSoulseekDownloadPhase(soulseekDownloadPhase, soulseekDownloadPhaseDetail);
+            soulseekDownloadDetailText.setText(formatSoulseekDownloadStatusLine(phaseLine, stats));
         }
     }
 

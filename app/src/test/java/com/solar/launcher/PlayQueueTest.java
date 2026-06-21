@@ -90,6 +90,35 @@ public class PlayQueueTest {
     }
 
     @Test
+    public void playbackCoordinator_queueReachAfterCurrent_keepsPlayHead() throws Exception {
+        PlaybackCoordinator pc = new PlaybackCoordinator();
+        List<File> pl = new ArrayList<File>();
+        pl.add(new File("/a.mp3"));
+        pl.add(new File("/b.mp3"));
+        pc.activateMusic(pl, 0, false);
+        File tmp = File.createTempFile("stream", ".tmp");
+        tmp.deleteOnExit();
+        int at = pc.queueReachAfterCurrent(tmp, "reach");
+        if (at != 1) throw new AssertionError("insert after current");
+        if (pc.unifiedQueue().index() != 0) throw new AssertionError("play head unchanged");
+        if (pc.unifiedQueue().size() != 3) throw new AssertionError("size");
+        if (pc.unifiedQueue().items().get(1).kind != PlayQueue.ItemKind.REACH_STREAM) {
+            throw new AssertionError("reach kind");
+        }
+    }
+
+    @Test
+    public void replaceFileRef_updatesReachSlot() {
+        PlayQueue q = new PlayQueue();
+        File partial = new File("/cache/partial.tmp");
+        File complete = new File("/cache/complete.mp3");
+        q.append(PlayQueue.QueueItem.music(new File("/a.mp3")));
+        q.append(PlayQueue.QueueItem.reach(partial, "Song"));
+        q.replaceFileRef(partial, complete, "Song");
+        if (!complete.equals(q.items().get(1).file)) throw new AssertionError("replaced file");
+    }
+
+    @Test
     public void move_nowPlayingIndexFollowsTrack() {
         PlayQueue q = new PlayQueue();
         java.util.List<PlayQueue.QueueItem> items = new ArrayList<PlayQueue.QueueItem>();

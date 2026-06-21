@@ -39,6 +39,7 @@
     <string name="settings_sub_soulseek_connection">Settings: Reach / Connection</string>
     <string name="settings_sub_soulseek_about">Settings: Reach / About</string>
     <string name="settings_sub_system_update">Settings: System Update</string>
+    <string name="settings_sub_about">Settings: About</string>
     <string name="settings_sub_home">Settings: Home Screen</string>
     <string name="settings_sub_home_arrange">Settings: Home Screen / Arrange</string>
     <string name="settings_sub_home_more_arrange">Settings: More Menu</string>
@@ -62,6 +63,7 @@
     <string name="status_soulseek">Reach</string>
     <string name="status_buffering">Buffering</string>
     <string name="status_downloading">Downloading</string>
+    <string name="status_queuing">Queuing</string>
     <string name="status_download_failed">Download failed</string>
     <string name="status_podcasts_results">Podcasts: Results</string>
     <string name="status_podcasts_episodes">Podcasts: Episodes</string>
@@ -184,6 +186,12 @@
     <string name="settings_auto_fetch">Auto Fetch Album Art</string>
     <string name="settings_system_update">System Update</string>
     <string name="settings_app_version">App Version</string>
+    <string name="settings_about">About</string>
+    <string name="about_version">Version %1$s</string>
+    <string name="about_brought_by_prefix">Brought to you by The </string>
+    <string name="about_brought_by_suffix"> Project</string>
+    <string name="about_update_button">Update / Change App Version</string>
+    <string name="about_update_unavailable">Updates unavailable — check Wi‑Fi connection</string>
     <string name="settings_bluetooth_setup">Bluetooth Setup</string>
     <string name="settings_display_brightness">Display Brightness</string>
     <string name="settings_storage_info">Storage Info</string>
@@ -400,7 +408,9 @@
     <string name="soulseek_play">▶ Play</string>
     <string name="soulseek_save">Save to Library</string>
     <string name="soulseek_buffering">Buffering… %1$d%%</string>
+    <string name="soulseek_queue_progress">Queuing… %1$d%%</string>
     <string name="soulseek_download_progress">Downloading… %1$d%%</string>
+    <string name="soulseek_download_status">%1$s · %2$s</string>
     <string name="soulseek_download_in_progress">Download in progress.</string>
     <string name="soulseek_queued">Connecting to peer…</string>
     <string name="soulseek_cancel_download">✕ Cancel Download</string>

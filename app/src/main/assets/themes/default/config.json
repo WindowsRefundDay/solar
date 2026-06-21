@@ -1,15 +1,18 @@
 {
   "theme_info": {
-    "title": "Circular",
-    "author": "sipped",
-    "authorUrl": "https://github.com/sipped",
-    "description": "Circular, a Spotify inspired theme. Built upon u/Neither-Classic2058's YellowSub theme.",
+    "title": "Aura",
+    "author": "The Solar Project",
+    "authorUrl": "https://github.com/thesolarproject/solar",
+    "description": "The Default Look for Solar",
     "externalDownloadUrl": ""
   },
   "themeCover": "cover_YS.png",
   "desktopWallpaper": "desk_bg001_YS.png",
   "globalWallpaper": "global_bg001_YS.png",
   "fontFamily": "opensans-condbold.ttf",
+  "solarConfig": {
+    "appAbout": "square_full_logo_colour.png"
+  },
   "itemConfig": {
     "itemTextColor": "#ffffff",
     "itemSelectedTextColor": "#ffffff",

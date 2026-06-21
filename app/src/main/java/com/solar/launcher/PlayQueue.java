@@ -98,6 +98,19 @@ public final class PlayQueue {
         items.add(item);
     }
 
+    public void replaceFileRef(File oldF, File newF, String reachMeta) {
+        if (oldF == null || newF == null) return;
+        for (int i = 0; i < items.size(); i++) {
+            QueueItem q = items.get(i);
+            if (q.file == null || !q.file.equals(oldF)) continue;
+            if (q.kind == ItemKind.REACH_STREAM) {
+                items.set(i, QueueItem.reach(newF, reachMeta != null ? reachMeta : newF.getName()));
+            } else if (q.kind == ItemKind.MUSIC_FILE) {
+                items.set(i, QueueItem.music(newF));
+            }
+        }
+    }
+
     /** Insert after queue index {@code afterIndex}; use -1 to prepend when non-empty. Returns new index. */
     public int insertAfter(int afterIndex, QueueItem item) {
         if (item == null) return -1;

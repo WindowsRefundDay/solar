@@ -224,6 +224,29 @@ public final class PlaybackCoordinator {
         return insertAt;
     }
 
+    /** Insert Reach after now-playing without moving the play head or starting playback. */
+    public int queueReachAfterCurrent(File temp, String meta) {
+        if (temp == null || !temp.isFile()) return -1;
+        int playHead = queue.index();
+        int after = queue.isEmpty() ? -1 : playHead;
+        int insertAt = queue.insertAfter(after, PlayQueue.QueueItem.reach(temp, meta));
+        if (insertAt < 0) return -1;
+        if (!musicOriginal.contains(temp)) musicOriginal.add(temp);
+        if (activeMode == Mode.NONE && !queue.isEmpty()) activeMode = Mode.MUSIC;
+        if (queue.index() != playHead && !queue.isEmpty()) {
+            queue.setIndex(Math.max(0, Math.min(playHead, queue.size() - 1)));
+        }
+        return insertAt;
+    }
+
+    public void replaceReachFileInQueue(File oldF, File newF, String meta) {
+        if (oldF == null || newF == null) return;
+        queue.replaceFileRef(oldF, newF, meta);
+        for (int i = 0; i < musicOriginal.size(); i++) {
+            if (oldF.equals(musicOriginal.get(i))) musicOriginal.set(i, newF);
+        }
+    }
+
     public void removeMusicTrackAt(int index) {
         int idx = 0;
         for (int i = 0; i < queue.items().size(); i++) {

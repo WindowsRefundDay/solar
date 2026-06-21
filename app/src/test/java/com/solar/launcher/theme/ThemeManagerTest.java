@@ -31,6 +31,18 @@ public class ThemeManagerTest {
     }
 
     @Test
+    public void pickSolarLogotypeAsset_contrastAware() {
+        String onWhite = ThemeManager.pickSolarLogotypeAsset(0xFFFFFFFF);
+        if (!onWhite.contains("colour") && !onWhite.contains("black")) {
+            throw new AssertionError("white bg: " + onWhite);
+        }
+        String onDark = ThemeManager.pickSolarLogotypeAsset(0xFF050505);
+        if (!onDark.contains("colour")) throw new AssertionError("dark bg: " + onDark);
+        String onOrange = ThemeManager.pickSolarLogotypeAsset(0xFFF0A830);
+        if (!onOrange.contains("black")) throw new AssertionError("clash bg: " + onOrange);
+    }
+
+    @Test
     public void selfCheck() {
         ThemeManager.selfCheck();
     }
