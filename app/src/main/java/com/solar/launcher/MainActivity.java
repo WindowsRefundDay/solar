@@ -461,20 +461,11 @@ public class MainActivity extends Activity {
     private Button btnThemeInterstitialDownload, btnThemeInterstitialBack;
     private FrameLayout settingsMenuHost;
     private View settingsPreviewPane;
-    private boolean centerLongPressHandled = false;
     private boolean centerMovePickHandled = false;
     private long centerKeyDownTime = 0;
     private static final long CENTER_SLEEP_HOLD_MS = 300;
     /** Hold center this long (while pressed) before pick-up move mode — must exceed a normal tap. */
     private static final long CENTER_MOVE_HOLD_MS = 450;
-    private final Runnable centerSleepRunnable = new Runnable() {
-        @Override
-        public void run() {
-            if (centerLongPressHandled || centerKeyDownTime == 0) return;
-            centerLongPressHandled = true;
-            performScreenSleep(false);
-        }
-    };
     private final Runnable centerMovePickRunnable = new Runnable() {
         @Override
         public void run() {
@@ -5481,24 +5472,26 @@ public class MainActivity extends Activity {
     }
 
     private boolean runSuCommandSilently(String command) {
-        java.io.DataOutputStream os = null;
-        Process process = null;
-        try {
-            process = Runtime.getRuntime().exec("su");
-            os = new java.io.DataOutputStream(process.getOutputStream());
-            os.writeBytes(command + "\n");
-            os.writeBytes("exit\n");
-            os.flush();
-            int exit = process.waitFor();
-            return exit == 0;
-        } catch (Throwable ignored) {
-            return false;
-        } finally {
-            if (os != null) {
-                try { os.close(); } catch (Exception ignored) {}
+        for (String su : new String[] {"/system/xbin/su", "su"}) {
+            java.io.DataOutputStream os = null;
+            Process process = null;
+            try {
+                process = Runtime.getRuntime().exec(su);
+                os = new java.io.DataOutputStream(process.getOutputStream());
+                os.writeBytes(command + "\n");
+                os.writeBytes("exit\n");
+                os.flush();
+                int exit = process.waitFor();
+                if (exit == 0) return true;
+            } catch (Throwable ignored) {
+            } finally {
+                if (os != null) {
+                    try { os.close(); } catch (Exception ignored) {}
+                }
+                if (process != null) process.destroy();
             }
-            if (process != null) process.destroy();
         }
+        return false;
     }
 
     private static String shQuote(String s) {
@@ -6862,18 +6855,14 @@ public class MainActivity extends Activity {
             suppressListClickUntil = System.currentTimeMillis() + CONTEXT_MENU_CLICK_SUPPRESS_MS;
         }
         if (event.getRepeatCount() == 0) {
-            centerLongPressHandled = false;
             centerMovePickHandled = false;
             centerKeyDownTime = System.currentTimeMillis();
-            clockHandler.removeCallbacks(centerSleepRunnable);
             clockHandler.removeCallbacks(centerMovePickRunnable);
             clockHandler.removeCallbacks(keyboardDelRepeatRunnable);
             if (isKeyboardDelSelected()) {
                 clockHandler.postDelayed(keyboardDelRepeatRunnable, 80);
             } else if (canScheduleCenterMovePick()) {
                 clockHandler.postDelayed(centerMovePickRunnable, CENTER_MOVE_HOLD_MS);
-            } else if (!suppressCenterSleepForReorder()) {
-                clockHandler.postDelayed(centerSleepRunnable, CENTER_SLEEP_HOLD_MS);
             }
         }
         return true;
@@ -6887,15 +6876,9 @@ public class MainActivity extends Activity {
 
     private boolean handleCenterKeyUp(KeyEvent event, boolean fromContextMenu) {
         long heldMs = centerKeyDownTime > 0 ? System.currentTimeMillis() - centerKeyDownTime : 0;
-        clockHandler.removeCallbacks(centerSleepRunnable);
         clockHandler.removeCallbacks(centerMovePickRunnable);
         clockHandler.removeCallbacks(keyboardDelRepeatRunnable);
         centerKeyDownTime = 0;
-        if (centerLongPressHandled) {
-            centerLongPressHandled = false;
-            centerMovePickHandled = false;
-            return true;
-        }
         if (fromContextMenu) {
             suppressListClickUntil = System.currentTimeMillis() + CONTEXT_MENU_CLICK_SUPPRESS_MS;
             if (contextMenuInQueueTier) {
@@ -9014,18 +8997,35 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** Screen off — su power key first (Y1), then goToSleep; shared by hold-center and context menu. */
+    /** Screen off — root power key only (Y1); shared by hold-center and context menu. */
     private void performScreenSleep(boolean feedback) {
-        if (feedback) clickFeedback();
-        if (trySuScreenOff()) return;
+        // #region agent log
+        org.json.JSONObject d = new org.json.JSONObject();
         try {
-            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-            java.lang.reflect.Method goToSleep = PowerManager.class.getMethod(
-                    "goToSleep", long.class);
-            goToSleep.invoke(pm, android.os.SystemClock.uptimeMillis());
-            if (!isScreenInteractive()) return;
+            d.put("feedback", feedback);
+            d.put("contextMenuOpen", themedContextMenu != null && themedContextMenu.isShowing());
+            d.put("screenInteractive", isScreenInteractive());
         } catch (Exception ignored) {}
-        if (trySuScreenOff()) return;
+        AgentDebugLog.log("MainActivity.performScreenSleep", "enter", "H1-H3", d);
+        // #endregion
+        if (feedback) clickFeedback();
+        dismissThemedContextMenu();
+        if (trySuScreenOff()) {
+            // #region agent log
+            AgentDebugLog.log("MainActivity.performScreenSleep", "su_ok_first", "H1", null);
+            // #endregion
+            return;
+        }
+        try { Thread.sleep(80); } catch (InterruptedException ignored) {}
+        if (trySuScreenOff()) {
+            // #region agent log
+            AgentDebugLog.log("MainActivity.performScreenSleep", "su_ok_retry", "H1", null);
+            // #endregion
+            return;
+        }
+        // #region agent log
+        AgentDebugLog.log("MainActivity.performScreenSleep", "su_failed", "H1", null);
+        // #endregion
         Toast.makeText(this, getString(R.string.context_action_lock_failed), Toast.LENGTH_SHORT).show();
     }
 
@@ -15575,12 +15575,35 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** True when Solar lives under /system/app (OTA must replace that APK, not pm install). */
+    private boolean shouldReplaceSystemApk() {
+        if (isInstalledAsSystemApp()) return true;
+        return new File(SYSTEM_APK_PATH).exists();
+    }
+
     private boolean installSystemApk(File apkFile) {
-        if (installSystemApkViaBundledScript(apkFile)) return true;
+        // #region agent log
+        org.json.JSONObject d = new org.json.JSONObject();
+        try {
+            d.put("apk", apkFile != null ? apkFile.getAbsolutePath() : null);
+            d.put("apkBytes", apkFile != null && apkFile.isFile() ? apkFile.length() : 0);
+        } catch (Exception ignored) {}
+        AgentDebugLog.log("MainActivity.installSystemApk", "enter", "H4-H5", d);
+        // #endregion
+        if (installSystemApkViaBundledScript(apkFile)) {
+            AgentDebugLog.log("MainActivity.installSystemApk", "script_ok", "H4", null);
+            return true;
+        }
         String cmd = "mount -o remount,rw /system && cp "
                 + shQuote(apkFile.getAbsolutePath()) + " " + shQuote(SYSTEM_APK_PATH)
                 + " && chmod 644 " + shQuote(SYSTEM_APK_PATH) + " && sync";
-        return runSuCommandSilently(cmd);
+        boolean ok = runSuCommandSilently(cmd);
+        // #region agent log
+        org.json.JSONObject r = new org.json.JSONObject();
+        try { r.put("ok", ok); } catch (Exception ignored) {}
+        AgentDebugLog.log("MainActivity.installSystemApk", "inline_cp", "H4", r);
+        // #endregion
+        return ok;
     }
 
     private boolean installSystemApkViaBundledScript(File apkFile) {
@@ -15609,7 +15632,15 @@ public class MainActivity extends Activity {
     }
 
     private void finishDownloadAndInstall(final File apkFile, final SolarUpdateClient.ReleaseInfo release) {
-        if (isInstalledAsSystemApp()) {
+        // #region agent log
+        org.json.JSONObject d = new org.json.JSONObject();
+        try {
+            d.put("systemReplace", shouldReplaceSystemApk());
+            d.put("sourceDir", getPackageManager().getApplicationInfo(getPackageName(), 0).sourceDir);
+        } catch (Exception ignored) {}
+        AgentDebugLog.log("MainActivity.finishDownloadAndInstall", "enter", "H4", d);
+        // #endregion
+        if (shouldReplaceSystemApk()) {
             beginSystemApkReplaceWithOverlay(apkFile, release);
         } else {
             dismissThemedContextMenu();
@@ -15642,20 +15673,22 @@ public class MainActivity extends Activity {
         final ViewGroup root = (ViewGroup) findViewById(android.R.id.content);
         if (themedContextMenu != null && root != null) {
             themedContextMenu.showInstallStatusOverlay(root,
-                    getString(R.string.update_installing_title),
-                    getString(R.string.update_reboot_eta));
+                    getString(R.string.update_device_restarting), "");
         }
+        // #region agent log
+        AgentDebugLog.log("MainActivity.beginSystemApkReplaceWithOverlay", "overlay_shown", "H5-H6", null);
+        // #endregion
         new Thread(new Runnable() {
             @Override
             public void run() {
-                try {
-                    Thread.sleep(500);
-                } catch (InterruptedException ignored) {}
                 final boolean ok = installSystemApk(apkFile);
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
                         if (ok) {
+                            // #region agent log
+                            AgentDebugLog.log("MainActivity.beginSystemApkReplaceWithOverlay", "reboot", "H5", null);
+                            // #endregion
                             rebootDeviceSilently();
                         } else {
                             dismissThemedContextMenu();
@@ -15760,7 +15793,7 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            boolean systemApp = isInstalledAsSystemApp();
+            boolean systemApp = shouldReplaceSystemApk();
             if (systemApp) {
                 beginSystemApkReplaceWithOverlay(apkFile, release);
                 return;
