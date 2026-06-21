@@ -8,4 +8,5 @@ mount -o remount,rw /system 2>/dev/null || true
 cp "$APK" "$DEST" || exit 1
 chmod 644 "$DEST" || exit 1
 sync
-exit 0
+# Reboot in-shell immediately after replace — Java must not resume once this APK is overwritten.
+reboot

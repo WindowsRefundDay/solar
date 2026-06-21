@@ -453,6 +453,8 @@ public class MainActivity extends Activity {
     private String browserStatusTitle;
     private String settingsSubScreenKey = null;
     private String settingsSubScreenExtra = null;
+    /** Blocks overlay dismiss / screen churn while replacing /system/app APK. */
+    private volatile boolean otaSystemReplaceInProgress = false;
     private List<ThemeDownloader.CatalogEntry> themeGalleryCatalog;
     private int themeGalleryPreviewGen = 0;
     private int unifiedThemesUiGen = 0;
@@ -4557,6 +4559,7 @@ public class MainActivity extends Activity {
     }
 
     private void changeScreen(int state) {
+        if (otaSystemReplaceInProgress) return;
         dismissThemedContextMenu();
         hideFastScrollLetter();
         if (currentScreenState == STATE_SOULSEEK && state != STATE_SOULSEEK && shouldConfirmReachDownloadLeave(state)) {
@@ -6546,11 +6549,7 @@ public class MainActivity extends Activity {
         if (RowKeys.FULL_WIDTH.equals(rowKey)) return stateOnOff(isFullWidthMenus);
         if (RowKeys.AUTO_FETCH.equals(rowKey)) return stateOnOff(isAutoFetchEnabled);
         if (RowKeys.ABOUT.equals(rowKey)) {
-            try {
-                return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
-            } catch (Exception e) {
-                return BuildConfig.VERSION_NAME;
-            }
+            return AppVersion.displayLabel(this);
         }
         if (RowKeys.NOW_PLAYING_ALBUM_BLUR.equals(rowKey)) return stateOnOff(playerAlbumBlurEnabled);
         if (RowKeys.WIDGET_CLOCK.equals(rowKey)) return stateOnOff(isWidgetClockOn);
@@ -6972,6 +6971,7 @@ public class MainActivity extends Activity {
     }
 
     private void dismissThemedContextMenu() {
+        if (otaSystemReplaceInProgress) return;
         flushContextQueueMoveIfDirty();
         cancelPendingContextWifiRefresh();
         contextMenuTierStack.clear();
@@ -9362,6 +9362,7 @@ public class MainActivity extends Activity {
     }
 
     private void handleBackShortPress() {
+        if (otaSystemReplaceInProgress) return;
         if (currentScreenState == STATE_WIFI_KEYBOARD) {
             if (keyboardReturnState == STATE_SETTINGS && keyboardReturnSettingsSubKey != null) {
                 restoreSettingsAfterSoulseekAccount();
@@ -10445,14 +10446,6 @@ public class MainActivity extends Activity {
         return span;
     }
 
-    private String installedVersionName() {
-        try {
-            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
-        } catch (Exception ignored) {
-            return BuildConfig.VERSION_NAME;
-        }
-    }
-
     private void buildAboutUI() {
         setSettingsAboutFullWidth(true);
         setSettingsSubScreen(SettingsScreens.ABOUT);
@@ -10484,8 +10477,7 @@ public class MainActivity extends Activity {
         tvVersion.setFocusable(false);
         tvVersion.setGravity(Gravity.CENTER);
         tvVersion.setSingleLine(true);
-        tvVersion.setText(getString(R.string.about_version,
-                SolarUpdateClient.formatVersionLabel(installedVersionName())));
+        tvVersion.setText(getString(R.string.about_version, AppVersion.displayLabel(this)));
         tvVersion.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
         tvVersion.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
                 getResources().getDimension(R.dimen.y1_menu_text_size) * 1.1f);
@@ -10625,18 +10617,10 @@ public class MainActivity extends Activity {
         });
         containerSettingsItems.addView(btnBack);
 
-        String myVersionName = BuildConfig.VERSION_NAME;
-        int myVersionCode = BuildConfig.VERSION_CODE;
-        try {
-            android.content.pm.PackageInfo pInfo = getPackageManager().getPackageInfo(getPackageName(), 0);
-            myVersionName = pInfo.versionName;
-            myVersionCode = pInfo.versionCode;
-        } catch (Exception ignored) {}
-
-        final int localCode = myVersionCode;
-        final String localName = myVersionName;
+        final int localCode = AppVersion.installedVersionCode(this);
+        final String localName = AppVersion.installedVersionName(this);
         containerSettingsItems.addView(createSettingRow(RowKeys.UPDATE_CURRENT, R.string.update_current_version,
-                SolarUpdateClient.formatVersionLabel(localName)));
+                AppVersion.displayLabel(this)));
 
         final Button loadingRow = createListButton(getString(R.string.update_checking));
         loadingRow.setEnabled(false);
@@ -10739,13 +10723,8 @@ public class MainActivity extends Activity {
             Toast.makeText(this, getString(R.string.update_url_missing), Toast.LENGTH_SHORT).show();
             return;
         }
-        int localCode = BuildConfig.VERSION_CODE;
-        String localName = BuildConfig.VERSION_NAME;
-        try {
-            android.content.pm.PackageInfo pInfo = getPackageManager().getPackageInfo(getPackageName(), 0);
-            localCode = pInfo.versionCode;
-            localName = pInfo.versionName;
-        } catch (Exception ignored) {}
+        int localCode = AppVersion.installedVersionCode(this);
+        String localName = AppVersion.installedVersionName(this);
         if (release.matchesInstalled(localCode, localName)) {
             Toast.makeText(this, getString(R.string.update_already_installed), Toast.LENGTH_SHORT).show();
             return;
@@ -15857,13 +15836,19 @@ public class MainActivity extends Activity {
         return new File(SYSTEM_APK_PATH).exists();
     }
 
+    private boolean systemApkMatchesDownload(File apkFile) {
+        if (apkFile == null || !apkFile.isFile()) return false;
+        File dest = new File(SYSTEM_APK_PATH);
+        return dest.isFile() && dest.length() == apkFile.length();
+    }
+
     private boolean installSystemApk(File apkFile) {
         if (installSystemApkViaBundledScript(apkFile)) {
             return true;
         }
         String cmd = "mount -o remount,rw /system && cp "
                 + shQuote(apkFile.getAbsolutePath()) + " " + shQuote(SYSTEM_APK_PATH)
-                + " && chmod 644 " + shQuote(SYSTEM_APK_PATH) + " && sync";
+                + " && chmod 644 " + shQuote(SYSTEM_APK_PATH) + " && sync && reboot";
         return runSuCommandSilently(cmd);
     }
 
@@ -15911,37 +15896,42 @@ public class MainActivity extends Activity {
             Toast.makeText(this, getString(R.string.toast_install_failed), Toast.LENGTH_SHORT).show();
             return;
         }
-        int localCode = BuildConfig.VERSION_CODE;
-        String localName = BuildConfig.VERSION_NAME;
-        try {
-            android.content.pm.PackageInfo pInfo = getPackageManager().getPackageInfo(getPackageName(), 0);
-            localCode = pInfo.versionCode;
-            localName = pInfo.versionName;
-        } catch (Exception ignored) {}
+        int localCode = AppVersion.installedVersionCode(this);
+        String localName = AppVersion.installedVersionName(this);
         if (release != null && release.matchesInstalled(localCode, localName)) {
             dismissThemedContextMenu();
             Toast.makeText(this, getString(R.string.update_already_installed), Toast.LENGTH_SHORT).show();
             return;
         }
+        otaSystemReplaceInProgress = true;
+        clockHandler.removeCallbacks(clockTask);
+        progressHandler.removeCallbacks(updateProgressTask);
         final ViewGroup root = (ViewGroup) findViewById(android.R.id.content);
         if (themedContextMenu != null && root != null) {
             themedContextMenu.showInstallStatusOverlay(root,
-                    getString(R.string.update_device_restarting), "");
+                    getString(R.string.update_device_restarting),
+                    getString(R.string.update_reboot_eta));
         }
         new Thread(new Runnable() {
             @Override
             public void run() {
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException ignored) {}
                 final boolean ok = installSystemApk(apkFile);
+                final boolean replaced = ok || systemApkMatchesDownload(apkFile);
+                if (replaced) {
+                    runSuCommandSilently("reboot");
+                    return;
+                }
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        if (ok) {
-                            rebootDeviceSilently();
-                        } else {
-                            dismissThemedContextMenu();
-                            Toast.makeText(MainActivity.this, getString(R.string.toast_install_failed),
-                                    Toast.LENGTH_LONG).show();
-                        }
+                        otaSystemReplaceInProgress = false;
+                        clockHandler.post(clockTask);
+                        dismissThemedContextMenu();
+                        Toast.makeText(MainActivity.this, getString(R.string.toast_install_failed),
+                                Toast.LENGTH_LONG).show();
                     }
                 });
             }
@@ -15955,25 +15945,19 @@ public class MainActivity extends Activity {
         if (now - last < 24L * 60 * 60 * 1000) return;
         if (!ConnectivityHelper.isOnline(this)) return;
         prefs.edit().putLong(PREF_UPDATE_NUDGE_TS, now).apply();
+        final int localCode = AppVersion.installedVersionCode(this);
+        final String localName = AppVersion.installedVersionName(this);
+        final boolean nightlyChannel = AppVersion.isNightlyInstall(this);
         new Thread(new Runnable() {
             @Override
             public void run() {
                 try {
                     List<SolarUpdateClient.ReleaseInfo> releases =
                             SolarUpdateClient.fetchUpdates(SolarUpdateClient.DEFAULT_UPDATES_URL);
-                    final SolarUpdateClient.ReleaseInfo latest = BuildConfig.VERSION_NAME != null
-                            && BuildConfig.VERSION_NAME.startsWith("nightly-")
+                    final SolarUpdateClient.ReleaseInfo latest = nightlyChannel
                             ? SolarUpdateClient.latestNightly(releases)
                             : SolarUpdateClient.latestStable(releases);
                     if (latest == null) return;
-                    int localCode = BuildConfig.VERSION_CODE;
-                    String localName = BuildConfig.VERSION_NAME;
-                    try {
-                        android.content.pm.PackageInfo pInfo =
-                                getPackageManager().getPackageInfo(getPackageName(), 0);
-                        localCode = pInfo.versionCode;
-                        localName = pInfo.versionName;
-                    } catch (Exception ignored) {}
                     if (!latest.isNewerThan(localCode, localName)) return;
                     runOnUiThread(new Runnable() {
                         @Override
@@ -16024,13 +16008,8 @@ public class MainActivity extends Activity {
                 Toast.makeText(this, getString(R.string.toast_install_failed), Toast.LENGTH_SHORT).show();
                 return;
             }
-            int localCode = BuildConfig.VERSION_CODE;
-            String localName = BuildConfig.VERSION_NAME;
-            try {
-                android.content.pm.PackageInfo pInfo = getPackageManager().getPackageInfo(getPackageName(), 0);
-                localCode = pInfo.versionCode;
-                localName = pInfo.versionName;
-            } catch (Exception ignored) {}
+            int localCode = AppVersion.installedVersionCode(this);
+            String localName = AppVersion.installedVersionName(this);
             SolarUpdateClient.InstallRelation relation = release != null
                     ? release.compareToInstalled(localCode, localName)
                     : SolarUpdateClient.InstallRelation.UPGRADE;
