@@ -1091,6 +1091,15 @@ public class MainActivity extends Activity {
                 int savedThemeIndex = prefs.getInt("app_theme_index", 0);
                 ThemeManager.setThemeIndex(savedThemeIndex);
             }
+            ThemeManager.ensureActiveThemeOrFallback(this);
+            ThemeManager.ThemeEntry active = ThemeManager.getCurrentTheme();
+            if (savedPath != null && active.folderPath != null
+                    && !savedPath.equals(active.folderPath)) {
+                prefs.edit()
+                        .putString("app_theme_path", active.folderPath)
+                        .putInt("app_theme_index", ThemeManager.getCurrentThemeIndex())
+                        .apply();
+            }
         } catch (Exception e) {}
 
         // (이하 블랙리스트 및 다른 설정 불러오기 코드 유지)
@@ -17022,6 +17031,12 @@ public class MainActivity extends Activity {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             clockHandler.removeCallbacks(backLongPressRunnable);
             backKeyHeld = false;
+            if (currentScreenState == STATE_WIFI_KEYBOARD) {
+                backLongPressHandled = false;
+                clickFeedback();
+                handleBackShortPress();
+                return true;
+            }
             long held = System.currentTimeMillis() - backKeyDownTime;
             if (themedContextMenu != null && themedContextMenu.isShowing()) {
                 if (contextMenuOpenedAtMs > 0 && System.currentTimeMillis() - contextMenuOpenedAtMs < 250) {
@@ -17092,15 +17107,26 @@ public class MainActivity extends Activity {
                     keyboardPrevDelRepeatActive = false;
                     clockHandler.removeCallbacks(keyboardPrevDelRepeatRunnable);
                     clockHandler.removeCallbacks(keyboardDelRepeatRunnable);
+                    long held = keyboardMediaSkipDownAt > 0
+                            ? System.currentTimeMillis() - keyboardMediaSkipDownAt : 0;
+                    if (held < MEDIA_SKIP_LONG_PRESS_MS) {
+                        handleKeyboardMediaDel();
+                    }
+                    keyboardMediaSkipDownAt = 0;
+                } else if (isMediaNextKey(keyCode)) {
+                    long held = keyboardMediaSkipDownAt > 0
+                            ? System.currentTimeMillis() - keyboardMediaSkipDownAt : 0;
+                    if (held < MEDIA_SKIP_LONG_PRESS_MS) {
+                        handleKeyboardMediaSpace();
+                    }
+                    keyboardMediaSkipDownAt = 0;
                 }
-                // Short prev/next are ignored on keyboard — wheel picks [DEL]/[SPC];
-                // hold Prev still repeats delete via keyboardPrevDelRepeatRunnable.
                 return true;
             }
             if (isMediaPlayPauseKey(keyCode)) {
                 if (!keyboardPpLongHandled) {
                     clickFeedback();
-                    handleKeyboardInput();
+                    handleKeyboardEnter();
                 }
                 return true;
             }

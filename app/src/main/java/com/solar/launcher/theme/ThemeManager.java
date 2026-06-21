@@ -101,8 +101,14 @@ public class ThemeManager {
         try {
             byte[] data = readAllFromAsset(ctx.getAssets(), BUNDLED_ASSET_DIR + "/config.json");
             JSONObject json = new JSONObject(new String(data, "UTF-8"));
+            String title = "Aura";
+            JSONObject info = json.optJSONObject("theme_info");
+            if (info != null) {
+                String t = info.optString("title", "").trim();
+                if (!t.isEmpty()) title = t;
+            }
             bundledFallback = new ThemeEntry("asset://" + BUNDLED_ASSET_DIR,
-                    BUILTIN_DEFAULT_FOLDER, "Default", json);
+                    BUILTIN_DEFAULT_FOLDER, title, json);
         } catch (Exception ignored) {}
     }
 
@@ -235,7 +241,6 @@ public class ThemeManager {
                 if (info != null) display = info.optString("title", "");
             }
             if (display.isEmpty()) display = folder.getName();
-            if (BUILTIN_DEFAULT_FOLDER.equalsIgnoreCase(folder.getName())) display = "Default";
             return new ThemeEntry(folder.getAbsolutePath(), folder.getName(), display, json);
         } catch (Exception e) {
             return null;
@@ -261,7 +266,7 @@ public class ThemeManager {
 
     public static void setThemeByFolderPath(String path) {
         if (path == null) return;
-        if ("default".equals(path)) {
+        if ("default".equalsIgnoreCase(path)) {
             path = new File(themesRootPath, BUILTIN_DEFAULT_FOLDER).getAbsolutePath();
         }
         for (int i = 0; i < availableThemes.size(); i++) {
@@ -270,6 +275,31 @@ public class ThemeManager {
                 return;
             }
         }
+    }
+
+    /** When saved or selected theme folder is missing, fall back to bundled Aura. */
+    public static void ensureActiveThemeOrFallback(Context ctx) {
+        if (ctx != null) themesRootPath = resolveThemesRoot(ctx);
+        ThemeEntry cur = getCurrentTheme();
+        if (cur == null) {
+            resetToBuiltinDefault();
+            return;
+        }
+        if (cur.folderPath != null && cur.folderPath.startsWith("asset://")) return;
+        File cfg = new File(cur.folderPath, "config.json");
+        if (!cfg.isFile() || cfg.length() == 0) {
+            resetToBuiltinDefault();
+        }
+    }
+
+    public static void resetToBuiltinDefault() {
+        for (int i = 0; i < availableThemes.size(); i++) {
+            if (isBuiltInDefault(availableThemes.get(i))) {
+                setThemeIndex(i);
+                return;
+            }
+        }
+        setThemeIndex(0);
     }
 
     public static int getCurrentThemeIndex() {
@@ -282,7 +312,7 @@ public class ThemeManager {
             try {
                 JSONObject stub = new JSONObject();
                 stub.put("homePageConfig", new JSONObject());
-                return new ThemeEntry("", BUILTIN_DEFAULT_FOLDER, "Default", stub);
+                return new ThemeEntry("", BUILTIN_DEFAULT_FOLDER, "Aura", stub);
             } catch (Exception e) {
                 throw new IllegalStateException("no theme");
             }

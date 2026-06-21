@@ -257,7 +257,7 @@
     <string name="keyboard_target_wifi">대상: %1$s</string>
     <string name="keyboard_soulseek_username">Soulseek 사용자 이름</string>
     <string name="keyboard_soulseek_password">Soulseek 비밀번호</string>
-    <string name="keyboard_hint">이전 길게: 삭제 · 재생: 확인\n재생 길게: Aa / # · 휠: 선택 · 가운데: 입력</string>
+    <string name="keyboard_hint">이전: 삭제 · 이전 길게: 연속 삭제 · 재생: 확인\n다음: 공백 · 재생 길게: Aa / # · 휠: 선택 · 가운데: 입력 · 뒤로: 취소</string>
     <string name="browser_folders">📁 폴더</string>
     <string name="browser_artists">👤 아티스트</string>
     <string name="browser_albums">💿 앨범</string>
