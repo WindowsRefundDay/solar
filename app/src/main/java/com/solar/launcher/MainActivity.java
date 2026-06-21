@@ -10519,8 +10519,7 @@ public class MainActivity extends Activity {
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
-                            dismissThemedContextMenu();
-                            installApk(updateFile, release);
+                            finishDownloadAndInstall(updateFile, release);
                         }
                     });
                 } catch (Exception e) {
@@ -15600,24 +15599,64 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void showOtaRebootModal() {
-        ViewGroup root = (ViewGroup) findViewById(android.R.id.content);
-        if (root == null) {
-            Toast.makeText(this, getString(R.string.update_install_reboot), Toast.LENGTH_LONG).show();
-            rebootDeviceSilently();
+    private void finishDownloadAndInstall(final File apkFile, final SolarUpdateClient.ReleaseInfo release) {
+        if (isInstalledAsSystemApp()) {
+            beginSystemApkReplaceWithOverlay(apkFile, release);
+        } else {
+            dismissThemedContextMenu();
+            installApk(apkFile, release);
+        }
+    }
+
+    /**
+     * System APK replace via bundled su script — upgrade, downgrade, sidegrade, or channel change.
+     * Keeps app data; shows reboot ETA overlay through install and reboot.
+     */
+    private void beginSystemApkReplaceWithOverlay(final File apkFile, final SolarUpdateClient.ReleaseInfo release) {
+        if (apkFile == null || !apkFile.isFile()) {
+            dismissThemedContextMenu();
+            Toast.makeText(this, getString(R.string.toast_install_failed), Toast.LENGTH_SHORT).show();
             return;
         }
-        String[] labels = new String[] { getString(R.string.common_ok) };
-        themedContextMenu.show(root, getString(R.string.update_installing_title),
-                getString(R.string.update_install_reboot), labels, null, null,
-                new boolean[] { false },
-                new ThemedContextMenu.Listener() {
+        int localCode = BuildConfig.VERSION_CODE;
+        String localName = BuildConfig.VERSION_NAME;
+        try {
+            android.content.pm.PackageInfo pInfo = getPackageManager().getPackageInfo(getPackageName(), 0);
+            localCode = pInfo.versionCode;
+            localName = pInfo.versionName;
+        } catch (Exception ignored) {}
+        if (release != null && release.matchesInstalled(localCode, localName)) {
+            dismissThemedContextMenu();
+            Toast.makeText(this, getString(R.string.update_already_installed), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final ViewGroup root = (ViewGroup) findViewById(android.R.id.content);
+        if (themedContextMenu != null && root != null) {
+            themedContextMenu.showInstallStatusOverlay(root,
+                    getString(R.string.update_installing_title),
+                    getString(R.string.update_reboot_eta));
+        }
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException ignored) {}
+                final boolean ok = installSystemApk(apkFile);
+                runOnUiThread(new Runnable() {
                     @Override
-                    public void onSelected(int index) {
-                        dismissThemedContextMenu();
-                        rebootDeviceSilently();
+                    public void run() {
+                        if (ok) {
+                            rebootDeviceSilently();
+                        } else {
+                            dismissThemedContextMenu();
+                            Toast.makeText(MainActivity.this, getString(R.string.toast_install_failed),
+                                    Toast.LENGTH_LONG).show();
+                        }
                     }
-                }, y1RowHeightPx, screenWidthPx - 20, false, true);
+                });
+            }
+        }, "SolarSystemApkInstall").start();
     }
 
     private void scheduleStartupUpdateNudge() {
@@ -15675,7 +15714,7 @@ public class MainActivity extends Activity {
             public void run() {
                 runSuCommandSilently("reboot");
             }
-        }, 1500);
+        }, 400);
     }
 
     private boolean installViaPackageManager(File apkFile, boolean allowDowngrade) {
@@ -15713,21 +15752,12 @@ public class MainActivity extends Activity {
             }
 
             boolean systemApp = isInstalledAsSystemApp();
-            boolean tryPmFirst = !systemApp;
-            boolean allowDowngrade = relation == SolarUpdateClient.InstallRelation.DOWNGRADE
-                    || relation == SolarUpdateClient.InstallRelation.SIDEGRADE;
-
-            if (tryPmFirst && installViaPackageManager(apkFile, allowDowngrade)) {
-                Toast.makeText(this, getString(R.string.toast_install_ok), Toast.LENGTH_SHORT).show();
+            if (systemApp) {
+                beginSystemApkReplaceWithOverlay(apkFile, release);
                 return;
             }
 
-            if (systemApp && installSystemApk(apkFile)) {
-                showOtaRebootModal();
-                return;
-            }
-
-            if (!systemApp && installViaPackageManager(apkFile, true)) {
+            if (installViaPackageManager(apkFile, true)) {
                 Toast.makeText(this, getString(R.string.toast_install_ok), Toast.LENGTH_SHORT).show();
                 return;
             }

@@ -546,6 +546,7 @@
     <string name="context_find_like_this">Find like this</string>
     <string name="update_installing_title">Installing update</string>
     <string name="update_install_reboot">Installing update… device will reboot.</string>
+    <string name="update_reboot_eta">Restarting to complete update, ETA 3 Minutes</string>
     <string name="update_available_title">Update available</string>
     <string name="update_available_message">Solar %1$s is available.</string>
     <string name="update_install">Install</string>

@@ -2219,6 +2219,16 @@ public final class ThemedContextMenu {
         if (sliderLabel != null && statusText != null) sliderLabel.setText(statusText);
     }
 
+    /** OTA system install — full-screen status, no dismiss, no progress bar. */
+    public void showInstallStatusOverlay(ViewGroup root, String title, String message) {
+        showProgressOverlay(root, title, message, 100);
+        sliderValue = 100;
+        if (sliderBar != null) {
+            sliderBar.setProgress(sliderMax);
+            sliderBar.setVisibility(View.GONE);
+        }
+    }
+
     public void dismiss() {
         if (overlay != null && overlay.getParent() instanceof ViewGroup) {
             ((ViewGroup) overlay.getParent()).removeView(overlay);

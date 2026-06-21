@@ -102,6 +102,18 @@ push_update_repo() {
   git push "https://x-access-token:${PAT}@github.com/${UPDATE_REPO}.git" HEAD:main
 }
 
+reset_catalog() {
+  echo "== Reset OTA catalog in github.com/${UPDATE_REPO} =="
+  clone_update_repo "$WORK/repo"
+  rm -f "$WORK/repo"/solar-*.apk "$WORK/repo"/updates.xml 2>/dev/null || true
+  cat > "$WORK/repo/updates.xml" <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<solar-updates base="${PAGES_BASE}">
+</solar-updates>
+EOF
+  push_update_repo "$WORK/repo" "Reset OTA catalog."
+}
+
 sync_from_releases() {
   echo "== Sync APKs from github.com/${SOURCE_REPO} releases =="
   clone_update_repo "$WORK/repo"
@@ -152,6 +164,7 @@ add_release() {
 
 usage() {
   echo "Usage: $0 sync-from-releases" >&2
+  echo "       $0 reset" >&2
   echo "       $0 add --apk PATH --tag TAG --version-name NAME --version-code N [--nightly]" >&2
   exit 1
 }
@@ -159,6 +172,9 @@ usage() {
 case "${1:-}" in
   sync-from-releases)
     sync_from_releases
+    ;;
+  reset)
+    reset_catalog
     ;;
   add)
     shift
