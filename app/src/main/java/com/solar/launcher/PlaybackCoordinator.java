@@ -211,6 +211,19 @@ public final class PlaybackCoordinator {
         if (activeMode == Mode.NONE) activeMode = Mode.MUSIC;
     }
 
+    /** Insert Reach stream after the current queue item and select it for playback. */
+    public int playReachAfterCurrent(File temp, String meta) {
+        if (temp == null || !temp.isFile()) return -1;
+        int after = queue.isEmpty() ? -1 : queue.index();
+        int insertAt = queue.insertAfter(after, PlayQueue.QueueItem.reach(temp, meta));
+        if (insertAt < 0) return -1;
+        if (!musicOriginal.contains(temp)) musicOriginal.add(temp);
+        activeMode = Mode.MUSIC;
+        musicInitiator = temp;
+        queue.setIndex(insertAt);
+        return insertAt;
+    }
+
     public void removeMusicTrackAt(int index) {
         int idx = 0;
         for (int i = 0; i < queue.items().size(); i++) {
@@ -265,15 +278,7 @@ public final class PlaybackCoordinator {
 
     public void moveQueueItem(int from, int to) {
         if (from < 0 || to < 0 || from >= queue.size() || to >= queue.size() || from == to) return;
-        int np = queue.index();
-        if (from == np) return;
-        if (to == np && (from == np + 1 || from == np - 1)) {
-            queue.swap(from, to);
-        } else if (from == np || to == np) {
-            return;
-        } else {
-            queue.move(from, to);
-        }
+        queue.move(from, to);
         musicOriginal.clear();
         musicOriginal.addAll(queue.musicFiles());
     }

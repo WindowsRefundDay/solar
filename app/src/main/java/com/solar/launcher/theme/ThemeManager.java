@@ -156,8 +156,9 @@ public class ThemeManager {
         if (currentThemeIndex >= availableThemes.size()) currentThemeIndex = 0;
     }
 
-    /** Rescan theme folders without clearing bitmap/font caches (theme picker refresh). */
+    /** Rescan theme folders; clears stale bitmap cache so home icons match the active theme. */
     public static void rescanInstalled(Context ctx) {
+        bitmapCache.clear();
         if (ctx != null) themesRootPath = resolveThemesRoot(ctx);
         String prevFolder = availableThemes.isEmpty() ? BUILTIN_DEFAULT_FOLDER
                 : availableThemes.get(Math.min(currentThemeIndex, availableThemes.size() - 1)).folderName;
@@ -643,6 +644,66 @@ public class ThemeManager {
     public static int contextMenuMutedText(int themeHintColor) {
         int muted = withAlpha(themeHintColor, 0xBB);
         return ensureReadableOnBackground(muted, getContextMenuPanelColor());
+    }
+
+    /** Greyscale / neutral theme colours (black, white, grey) with negligible hue. */
+    public static boolean isAchromaticColor(int argb) {
+        int r = (argb >> 16) & 0xFF;
+        int g = (argb >> 8) & 0xFF;
+        int b = argb & 0xFF;
+        int max = Math.max(r, Math.max(g, b));
+        int min = Math.min(r, Math.min(g, b));
+        return (max - min) <= 24;
+    }
+
+    /**
+     * Context quick menu without row PNG decoration: selected/unselected theme colours
+     * can collapse to the same grey/white on the neutral panel — dim unselected from selected.
+     */
+    public static boolean needsContextMenuUnselectedDimming(int themeNormal, int themeSelected,
+            boolean menuRows) {
+        if (usesThemedSelectionBitmap(menuRows)) return false;
+        int normal = themeNormal | 0xFF000000;
+        int selected = themeSelected | 0xFF000000;
+        if (!isAchromaticColor(normal) || !isAchromaticColor(selected)) return false;
+        return contrastRatio(normal, selected) < 2.0;
+    }
+
+    /** Unselected label/icon colour on the hold-Back context panel. */
+    public static int contextMenuTextNormal(int themeNormal, int themeSelected, int panelBg,
+            boolean menuRows) {
+        int readableNormal = ensureReadableOnBackground(themeNormal, panelBg);
+        if (!needsContextMenuUnselectedDimming(themeNormal, themeSelected, menuRows)) {
+            return readableNormal;
+        }
+        int selectedOnPanel = ensureReadableOnBackground(themeSelected | 0xFF000000, panelBg);
+        for (float mix = 0.45f; mix <= 0.72f; mix += 0.09f) {
+            int dimmed = ensureReadableOnBackground(blendTowardBackground(selectedOnPanel, panelBg, mix),
+                    panelBg);
+            if (contrastRatio(dimmed, selectedOnPanel) >= 1.5) return dimmed;
+        }
+        return readableNormal;
+    }
+
+    public static int contextMenuTextSelected(int themeSelected, boolean menuRows) {
+        return textOnRowSelection(themeSelected, menuRows);
+    }
+
+    private static int blendTowardBackground(int color, int background, float amount) {
+        amount = Math.max(0f, Math.min(1f, amount));
+        int ca = color | 0xFF000000;
+        int ba = background | 0xFF000000;
+        int a = (color >>> 24) & 0xFF;
+        int cr = (ca >> 16) & 0xFF;
+        int cg = (ca >> 8) & 0xFF;
+        int cb = ca & 0xFF;
+        int br = (ba >> 16) & 0xFF;
+        int bg = (ba >> 8) & 0xFF;
+        int bb = ba & 0xFF;
+        int r = (int) (cr + (br - cr) * amount);
+        int g = (int) (cg + (bg - cg) * amount);
+        int b = (int) (cb + (bb - cb) * amount);
+        return (a << 24) | (r << 16) | (g << 8) | b;
     }
 
     public static void applyThemedTextStyle(TextView tv, int fillColor) {
@@ -1572,6 +1633,21 @@ public class ThemeManager {
             int fixed = ensureReadableOnBackground(0xFF555555, panel);
             if (contrastRatio(fixed, panel) < 3.0) throw new AssertionError("context menu fix contrast");
             if ((fixed & 0xFFFFFF) == 0x555555) throw new AssertionError("context menu fix applied");
+            if (!isAchromaticColor(0xFFFFFFFF) || !isAchromaticColor(0xFF888888)) {
+                throw new AssertionError("achromatic detect");
+            }
+            if (isAchromaticColor(0xFFFF0000)) throw new AssertionError("achromatic red");
+            if (!needsContextMenuUnselectedDimming(0xFFFFFFFF, 0xFFFEFEFE, false)) {
+                throw new AssertionError("near-white needs dimming");
+            }
+            if (needsContextMenuUnselectedDimming(0xFFFF0000, 0xFF0000FF, false)) {
+                throw new AssertionError("colour theme skip dimming");
+            }
+            int dim = contextMenuTextNormal(0xFFFFFFFF, 0xFFFFFFFF, panel, false);
+            int selOnPanel = ensureReadableOnBackground(0xFFFFFFFF, panel);
+            if (contrastRatio(dim, selOnPanel) < 1.5) {
+                throw new AssertionError("context menu dim contrast");
+            }
         } catch (AssertionError e) {
             throw e;
         } catch (Exception e) {

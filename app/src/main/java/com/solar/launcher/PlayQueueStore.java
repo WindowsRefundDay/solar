@@ -104,6 +104,33 @@ public final class PlayQueueStore {
         }
     }
 
+    public static int countMissingPaths(Context ctx) {
+        if (ctx == null) return 0;
+        File f = new File(ctx.getFilesDir(), FILE);
+        if (!f.isFile()) return 0;
+        try {
+            StringBuilder sb = new StringBuilder();
+            BufferedReader r = new BufferedReader(new FileReader(f));
+            String line;
+            while ((line = r.readLine()) != null) sb.append(line);
+            r.close();
+            JSONObject root = new JSONObject(sb.toString());
+            JSONArray arr = root.optJSONArray("items");
+            if (arr == null) return 0;
+            int missing = 0;
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.getJSONObject(i);
+                if ("PODCAST_EPISODE".equals(o.optString("kind", ""))) continue;
+                String path = o.optString("path", "");
+                if (path.isEmpty()) continue;
+                if (!new File(path).isFile()) missing++;
+            }
+            return missing;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
     public static void clear(Context ctx) {
         if (ctx == null) return;
         File f = new File(ctx.getFilesDir(), FILE);

@@ -285,6 +285,7 @@
     <string name="library_edit_playlist">재생 목록 편집</string>
     <string name="library_queue_remove">큐에서 제거</string>
     <string name="library_queue_removed">큐에서 제거됨</string>
+    <string name="context_clear_queue">큐 비우기</string>
     <string name="player_brightness_header">화면 밝기</string>
     <string name="player_brightness_hint">휠을 돌려 밝기를 조절하세요.</string>
     <string name="player_storage_header">저장소 정보</string>
@@ -440,6 +441,7 @@
     <string name="podcasts_save_hint">가운데 길게: 라이브러리에 저장</string>
     <string name="podcasts_saved_badge">[저장됨]</string>
     <string name="context_menu_title">옵션</string>
+    <string name="context_back">뒤로</string>
     <string name="context_tier_wifi">Wi-Fi</string>
     <string name="context_wifi_connected">연결됨</string>
     <string name="context_tier_bluetooth">블루투스</string>
@@ -475,6 +477,7 @@
     <string name="context_action_lock_screen">화면 잠금</string>
     <string name="context_action_lock_failed">화면을 잠글 수 없습니다</string>
     <string name="context_quick_volume">볼륨</string>
+    <string name="context_quick_brightness">밝기</string>
     <string name="context_hold_back_hint">뒤로 버튼 길게 눌러 옵션</string>
     <string name="podcasts_saved_on_device">기기에 저장됨</string>
     <string name="podcasts_resume_badge">[이어듣기]</string>

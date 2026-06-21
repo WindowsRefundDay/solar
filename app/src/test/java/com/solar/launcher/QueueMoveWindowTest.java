@@ -24,32 +24,18 @@ public class QueueMoveWindowTest {
     }
 
     @Test
-    public void ribbon_neighborsShowNowPlayingWhenAdjacent() {
-        int np = 5;
-        assertEquals(np, QueueMoveWindow.ribbonBelowIndex(np - 1, 10));
-        assertEquals(np, QueueMoveWindow.ribbonAboveIndex(np + 1));
+    public void nextMoveIndex_oneStepIncludingNowPlaying() {
+        assertEquals(1, QueueMoveWindow.nextMoveIndex(0, 1, 3));
+        assertEquals(3, QueueMoveWindow.nextMoveIndex(2, 1, 6));
+        assertEquals(1, QueueMoveWindow.nextMoveIndex(2, -1, 6));
+        assertEquals(2, QueueMoveWindow.nextMoveIndex(2, 0, 6));
+        assertEquals(2, QueueMoveWindow.nextMoveIndex(2, 1, 3));
     }
 
     @Test
-    public void nextMoveIndex_adjacentNowPlaying_swapsInsteadOfSkipping() {
-        int np = 2;
-        assertEquals(2, QueueMoveWindow.nextMoveIndex(3, -1, np, 6));
-        assertEquals(2, QueueMoveWindow.nextMoveIndex(1, 1, np, 6));
-    }
-
-    @Test
-    public void nextMoveIndex_doesNotSkipWhenNowPlayingNotTarget() {
-        int np = 2;
-        assertEquals(4, QueueMoveWindow.nextMoveIndex(5, -1, np, 6));
-        assertEquals(1, QueueMoveWindow.nextMoveIndex(0, 1, np, 6));
-    }
-
-    @Test
-    public void canMoveTo_allowsAdjacentNowPlayingSwap() {
-        int np = 2;
-        assertTrue(QueueMoveWindow.canMoveTo(3, np, np));
-        assertTrue(QueueMoveWindow.canMoveTo(1, np, np));
-        assertFalse(QueueMoveWindow.canMoveTo(4, np, np));
-        assertFalse(QueueMoveWindow.canMoveTo(np, 3, np));
+    public void canMoveTo_requiresDifferentIndices() {
+        assertTrue(QueueMoveWindow.canMoveTo(0, 1));
+        assertTrue(QueueMoveWindow.canMoveTo(2, 5));
+        assertFalse(QueueMoveWindow.canMoveTo(2, 2));
     }
 }

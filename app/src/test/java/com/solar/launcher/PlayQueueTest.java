@@ -50,16 +50,55 @@ public class PlayQueueTest {
     }
 
     @Test
-    public void swap_withNowPlayingIndexFollowsTrack() {
+    public void move_withNowPlayingIndexFollowsTrack() {
         PlayQueue q = new PlayQueue();
         java.util.List<PlayQueue.QueueItem> items = new ArrayList<PlayQueue.QueueItem>();
-        items.add(PlayQueue.QueueItem.music(new File("/bad.mp3")));
+        items.add(PlayQueue.QueueItem.music(new File("/a.mp3")));
         items.add(PlayQueue.QueueItem.music(new File("/baby.mp3")));
-        items.add(PlayQueue.QueueItem.music(new File("/carib.mp3")));
+        items.add(PlayQueue.QueueItem.music(new File("/c.mp3")));
         q.setAll(items, 1);
-        q.swap(2, 1);
-        if (q.index() != 2) throw new AssertionError("np index follows baby");
-        if (!"/carib.mp3".equals(q.items().get(1).file.getPath())) throw new AssertionError("carib slot");
-        if (!"/baby.mp3".equals(q.items().get(2).file.getPath())) throw new AssertionError("baby slot");
+        q.move(1, 0);
+        if (q.index() != 0) throw new AssertionError("np index follows track");
+        if (!"/baby.mp3".equals(q.items().get(0).file.getPath())) throw new AssertionError("baby slot");
+    }
+
+    @Test
+    public void insertAfter_currentIndex() {
+        PlayQueue q = new PlayQueue();
+        java.util.List<PlayQueue.QueueItem> items = new ArrayList<PlayQueue.QueueItem>();
+        items.add(PlayQueue.QueueItem.music(new File("/a.mp3")));
+        items.add(PlayQueue.QueueItem.music(new File("/b.mp3")));
+        q.setAll(items, 0);
+        int at = q.insertAfter(0, PlayQueue.QueueItem.reach(new File("/r.tmp"), "reach"));
+        if (at != 1) throw new AssertionError("insert at 1");
+        if (q.size() != 3) throw new AssertionError("size");
+        if (!"/r.tmp".equals(q.items().get(1).file.getPath())) throw new AssertionError("reach slot");
+    }
+
+    @Test
+    public void playbackCoordinator_playReachAfterCurrent() throws Exception {
+        PlaybackCoordinator pc = new PlaybackCoordinator();
+        List<File> pl = new ArrayList<File>();
+        pl.add(new File("/a.mp3"));
+        pc.activateMusic(pl, 0, false);
+        File tmp = File.createTempFile("stream", ".tmp");
+        tmp.deleteOnExit();
+        int at = pc.playReachAfterCurrent(tmp, "stream");
+        if (at != 1) throw new AssertionError("after current");
+        if (pc.unifiedQueue().index() != 1) throw new AssertionError("index on stream");
+        if (pc.unifiedQueue().size() != 2) throw new AssertionError("size");
+    }
+
+    @Test
+    public void move_nowPlayingIndexFollowsTrack() {
+        PlayQueue q = new PlayQueue();
+        java.util.List<PlayQueue.QueueItem> items = new ArrayList<PlayQueue.QueueItem>();
+        items.add(PlayQueue.QueueItem.music(new File("/a.mp3")));
+        items.add(PlayQueue.QueueItem.music(new File("/b.mp3")));
+        items.add(PlayQueue.QueueItem.music(new File("/c.mp3")));
+        q.setAll(items, 1);
+        q.move(1, 0);
+        if (q.index() != 0) throw new AssertionError("np index follows moved track");
+        if (!"/b.mp3".equals(q.items().get(0).file.getPath())) throw new AssertionError("b at 0");
     }
 }

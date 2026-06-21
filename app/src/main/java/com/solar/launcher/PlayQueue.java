@@ -98,6 +98,27 @@ public final class PlayQueue {
         items.add(item);
     }
 
+    /** Insert after queue index {@code afterIndex}; use -1 to prepend when non-empty. Returns new index. */
+    public int insertAfter(int afterIndex, QueueItem item) {
+        if (item == null) return -1;
+        if (items.isEmpty()) {
+            items.add(item);
+            index = 0;
+            return 0;
+        }
+        int insertAt;
+        if (afterIndex < 0) {
+            insertAt = 0;
+        } else {
+            int pos = Math.min(afterIndex, items.size() - 1);
+            insertAt = pos + 1;
+        }
+        items.add(insertAt, item);
+        if (index >= insertAt) index++;
+        clampIndex();
+        return insertAt;
+    }
+
     public void appendFiles(List<File> tracks, boolean reachTemp) {
         if (tracks == null) return;
         for (File f : tracks) {

@@ -1,6 +1,8 @@
 package com.solar.launcher;
 
 import android.app.Activity;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.PorterDuff;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
@@ -28,6 +30,7 @@ public final class ThemedContextMenu {
     private static final int TAG_QUEUE_SUB = 0x70ca0011;
     private static final int TAG_QUEUE_GRIP = 0x70ca0012;
     private static final int TAG_QUEUE_PP = 0x70ca0013;
+    private static final int TAG_QUEUE_CONFIRM = 0x70ca0015;
     private static final int TAG_RIBBON_SLOT = 0x70ca0014;
     private static final int TAG_QUEUE_DROP = 0x70ca0014;
 
@@ -72,8 +75,10 @@ public final class ThemedContextMenu {
 
     public interface QuickBarListener {
         void onQuickSelected(int index);
-        /** Wheel left from the first quick toggle — highlight Options title (center opens list). */
-        void onFocusOptionsTitle();
+        /** Wheel left from the first quick toggle — highlight Back chip. */
+        void onFocusBackChip();
+        /** Center on Back — dismiss at root or return from a sub-tier. */
+        void onBackActivated();
     }
 
     private final Activity activity;
@@ -82,12 +87,24 @@ public final class ThemedContextMenu {
     private LinearLayout titleRow;
     private FrameLayout titleChip;
     private TextView titleView;
+    private ImageView titleBackIcon;
     private HorizontalScrollView quickBarScroll;
     private LinearLayout quickBarHost;
     private ScrollView itemsScroll;
     private LinearLayout itemsHost;
+    private LinearLayout sliderRow;
+    private LinearLayout volumeSliderBlock;
+    private LinearLayout brightnessSliderBlock;
     private ProgressBar sliderBar;
     private TextView sliderLabel;
+    private ProgressBar brightnessBar;
+    private TextView brightnessLabel;
+    private int brightnessMax = 255;
+    private int brightnessValue = 255;
+    private int volumeQuickIndex = 6;
+    private int brightnessQuickIndex = 5;
+    private int volumeQuickIconRes = R.drawable.ic_volume_mid;
+    private int brightnessQuickIconRes = R.drawable.ic_brightness_half;
     private String[] labels;
     private boolean[] rowHeaders;
     private int focusIndex;
@@ -119,9 +136,14 @@ public final class ThemedContextMenu {
     private Drawable cachedQueueRowBgFocused;
     private int cachedQueueRowBgWidth;
     private static final int QUEUE_MOVE_RIBBON_ANIM_MS = 130;
+    private static final int QUEUE_MOVE_RIBBON_ENTER_MS = 150;
     private boolean queueMoveRibbonActive = false;
     private boolean queueMoveRibbonAnimating = false;
     private int queueBrowseWindowStart = 0;
+    private int queueConfirmAtIndex = -1;
+    private Runnable queueConfirmClearTask;
+    private static final int QUEUE_CONFIRM_SHOW_MS = 220;
+    private static final int QUEUE_CONFIRM_HOLD_MS = 750;
 
     public ThemedContextMenu(Activity activity) {
         this.activity = activity;
@@ -136,7 +158,12 @@ public final class ThemedContextMenu {
     }
 
     public boolean hasVisibleSlider() {
-        return sliderBar != null && sliderBar.getVisibility() == View.VISIBLE;
+        return isMediaSliderStripVisible();
+    }
+
+    public void setMediaSliderQuickIndices(int volumeIndex, int brightnessIndex) {
+        volumeQuickIndex = volumeIndex;
+        brightnessQuickIndex = brightnessIndex;
     }
 
     /** Quick-bar chip to restore when leaving a tier list upward (e.g. Wi-Fi → index 1). */
@@ -158,8 +185,7 @@ public final class ThemedContextMenu {
         } else {
             collapseOptionsListPanel();
         }
-        if (sliderBar != null) sliderBar.setVisibility(View.GONE);
-        if (sliderLabel != null) sliderLabel.setVisibility(View.GONE);
+        hideMediaSliderStripViews();
         if (quickBarScroll != null) quickBarScroll.setAlpha(1f);
     }
 
@@ -173,13 +199,59 @@ public final class ThemedContextMenu {
         }
     }
 
-    /** Hide contextual action rows; highlight the Options title for center to expand. */
+    private boolean hasBackChip() {
+        return titleView != null;
+    }
+
+    /** Context modal top bar always includes Back (unless dialog-style confirm). */
+    private boolean shouldShowContextBackChip() {
+        return !dialogStyle && !volumeOnlyMode;
+    }
+
+    private void ensureContextTitleBar(boolean hasQuick) {
+        if (panel == null || !shouldShowContextBackChip()) return;
+        float density = activity.getResources().getDisplayMetrics().density;
+        if (titleRow == null) {
+            titleRow = new LinearLayout(activity);
+            titleRow.setOrientation(LinearLayout.HORIZONTAL);
+            titleRow.setGravity(Gravity.CENTER_VERTICAL);
+            populateTitleRow(true, hasQuick, density);
+            LinearLayout.LayoutParams titleRowLp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            titleRowLp.bottomMargin = labels != null && labels.length > 0 ? (int) (4 * density) : 0;
+            panel.addView(titleRow, 0);
+        } else {
+            titleRow.setVisibility(View.VISIBLE);
+            if (!hasBackChip()) {
+                titleRow.removeAllViews();
+                populateTitleRow(true, hasQuick, density);
+            }
+        }
+    }
+
+    private void setContextTitleBarVisible(boolean visible) {
+        if (titleRow == null) return;
+        titleRow.setVisibility(visible ? View.VISIBLE : View.GONE);
+    }
+
+    /** Highlight Back chip without collapsing tier content. */
+    public void focusBackChip() {
+        if (titleView == null) return;
+        focusZone = FocusZone.OPTIONS_TITLE;
+        refreshAll();
+        requestOverlayFocus();
+    }
+
+    /** Collapse contextual action rows and highlight Back. */
     public void focusOptionsTitle() {
-        if (titleView == null || labels == null || labels.length == 0) return;
+        if (titleView == null) return;
+        if (labels == null || labels.length == 0) {
+            focusBackChip();
+            return;
+        }
         optionsListVisible = false;
         collapseOptionsListPanel();
         focusZone = FocusZone.OPTIONS_TITLE;
-        scrollQuickBarToStart();
         refreshAll();
         requestOverlayFocus();
     }
@@ -199,7 +271,7 @@ public final class ThemedContextMenu {
         this.rowHeaders = itemHeaders;
         this.listener = listener;
         this.focusIndex = firstFocusableIndex(0);
-        setPanelTitle(title);
+        if (titleRow != null) setContextTitleBarVisible(true);
         rebuildListRows(itemIconKeys, itemStateTexts);
         optionsListVisible = false;
         collapseOptionsListPanel();
@@ -259,6 +331,20 @@ public final class ThemedContextMenu {
         requestOverlayFocus();
     }
 
+    /** Hide slider and land focus on the volume quick chip. */
+    public void leaveVolumeSliderTier(int quickIndex) {
+        hideSlider();
+        leaveVolumeSliderToQuickBar(quickIndex);
+    }
+
+    public boolean isVolumeSliderVisible() {
+        return isMediaSliderStripVisible();
+    }
+
+    public boolean isMediaSliderStripVisible() {
+        return sliderRow != null && sliderRow.getVisibility() == View.VISIBLE;
+    }
+
     private void refreshTitleRow() {
         if (titleView == null) return;
         boolean titleFocused = focusZone == FocusZone.OPTIONS_TITLE;
@@ -273,11 +359,12 @@ public final class ThemedContextMenu {
         }
         if (titleChip != null) {
             int w = titleChip.getWidth() > 0 ? titleChip.getWidth()
-                    : (panelWidthPx > 0 ? panelWidthPx / 2 : rowHeightPx * 4);
+                    : (int) (rowHeightPx * 2.4f);
             titleChip.setBackground(rowBackground(titleFocused, w, rowHeightPx));
         }
-        if (titleFocused) {
-            scrollQuickBarToStart();
+        if (titleBackIcon != null) {
+            int iconColor = titleFocused ? textSelected() : textNormal();
+            titleBackIcon.setColorFilter(iconColor, PorterDuff.Mode.SRC_IN);
         }
     }
 
@@ -307,35 +394,49 @@ public final class ThemedContextMenu {
     }
 
     /** Title chip + quick-bar row at top of panel. */
-    private void populateTitleRow(String title, boolean hasQuick, float density) {
+    private void populateTitleRow(boolean showBackChip, boolean hasQuick, float density) {
         titleChip = null;
         titleView = null;
+        titleBackIcon = null;
         quickBarScroll = null;
         quickBarHost = null;
-        boolean hasTitle = title != null && title.length() > 0;
-        if (hasTitle) {
+        if (showBackChip) {
             int textPadLeft = (int) activity.getResources().getDimension(R.dimen.y1_menu_text_pad_left);
+            int textPadRight = textPadLeft;
             titleChip = new FrameLayout(activity);
+            LinearLayout titleInner = new LinearLayout(activity);
+            titleInner.setOrientation(LinearLayout.HORIZONTAL);
+            titleInner.setGravity(Gravity.CENTER_VERTICAL);
+            int iconSize = (int) (rowHeightPx * 0.42f);
+            titleBackIcon = new ImageView(activity);
+            titleBackIcon.setImageResource(R.drawable.ic_back);
+            titleBackIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            titleBackIcon.setVisibility(View.VISIBLE);
+            LinearLayout.LayoutParams iconLp = new LinearLayout.LayoutParams(iconSize, iconSize);
+            iconLp.rightMargin = (int) (3 * density);
+            titleInner.addView(titleBackIcon, iconLp);
             titleView = new TextView(activity);
-            titleView.setText(title);
+            titleView.setText(activity.getString(R.string.context_back));
             titleView.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
             titleView.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
                     activity.getResources().getDimension(R.dimen.y1_menu_text_size));
             ThemeManager.applyThemedTextStyle(titleView, textNormal());
             titleView.setSingleLine(true);
-            titleView.setEllipsize(TextUtils.TruncateAt.MARQUEE);
-            titleView.setMarqueeRepeatLimit(-1);
-            titleView.setHorizontallyScrolling(true);
+            titleView.setEllipsize(TextUtils.TruncateAt.END);
             titleView.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-            FrameLayout.LayoutParams titleLp = new FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
-            titleLp.leftMargin = textPadLeft;
-            titleLp.rightMargin = textPadLeft;
-            titleLp.gravity = Gravity.CENTER_VERTICAL;
-            titleChip.addView(titleView, titleLp);
+            LinearLayout.LayoutParams textLp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            textLp.rightMargin = textPadRight;
+            titleInner.addView(titleView, textLp);
+            FrameLayout.LayoutParams innerLp = new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.MATCH_PARENT);
+            innerLp.leftMargin = textPadLeft;
+            innerLp.gravity = Gravity.CENTER_VERTICAL | Gravity.START;
+            titleChip.addView(titleInner, innerLp);
+            titleChip.setMinimumWidth((int) (rowHeightPx * 2.4f));
             LinearLayout.LayoutParams chipLp = new LinearLayout.LayoutParams(
-                    hasQuick ? 0 : LinearLayout.LayoutParams.MATCH_PARENT,
-                    rowHeightPx, hasQuick ? 1f : 0f);
+                    hasQuick ? LinearLayout.LayoutParams.WRAP_CONTENT : LinearLayout.LayoutParams.MATCH_PARENT,
+                    rowHeightPx, 0f);
             if (hasQuick) chipLp.rightMargin = (int) (4 * density);
             titleRow.addView(titleChip, chipLp);
         }
@@ -343,7 +444,7 @@ public final class ThemedContextMenu {
             quickBarScroll = new HorizontalScrollView(activity);
             quickBarScroll.setHorizontalScrollBarEnabled(false);
             quickBarScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
-            quickBarScroll.setFillViewport(!hasTitle);
+            quickBarScroll.setFillViewport(!showBackChip);
             quickBarHost = new LinearLayout(activity);
             quickBarHost.setOrientation(LinearLayout.HORIZONTAL);
             quickBarHost.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
@@ -354,22 +455,89 @@ public final class ThemedContextMenu {
             quickBarScroll.addView(quickBarHost, new HorizontalScrollView.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, rowHeightPx));
             LinearLayout.LayoutParams qLp = new LinearLayout.LayoutParams(
-                    hasTitle ? LinearLayout.LayoutParams.WRAP_CONTENT : LinearLayout.LayoutParams.MATCH_PARENT,
+                    showBackChip ? LinearLayout.LayoutParams.WRAP_CONTENT : LinearLayout.LayoutParams.MATCH_PARENT,
                     rowHeightPx);
             titleRow.addView(quickBarScroll, qLp);
         }
     }
 
-    private void refreshSliderChrome() {
-        if (sliderBar == null || sliderBar.getVisibility() != View.VISIBLE) return;
-        boolean sliderActive = focusZone == FocusZone.SLIDER;
-        if (quickBarScroll != null) {
-            quickBarScroll.setAlpha(sliderActive ? 0.35f : 1f);
+    private void hideMediaSliderStripViews() {
+        if (sliderRow != null) sliderRow.setVisibility(View.GONE);
+    }
+
+    private void addMediaSliderRowToPanel(LinearLayout targetPanel, float density) {
+        int sliderH = (int) (24 * density);
+        sliderRow = new LinearLayout(activity);
+        sliderRow.setOrientation(LinearLayout.VERTICAL);
+        sliderRow.setVisibility(View.GONE);
+
+        volumeSliderBlock = new LinearLayout(activity);
+        volumeSliderBlock.setOrientation(LinearLayout.VERTICAL);
+        sliderLabel = new TextView(activity);
+        sliderLabel.setGravity(Gravity.CENTER);
+        sliderLabel.setSingleLine(true);
+        sliderLabel.setEllipsize(TextUtils.TruncateAt.END);
+        ThemeManager.applyThemedTextStyle(sliderLabel,
+                ThemeManager.ensureReadableOnBackground(ThemeManager.getDialogTextColor(), panelBgColor));
+        volumeSliderBlock.addView(sliderLabel, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        sliderBar = new ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal);
+        sliderBar.setMax(sliderMax);
+        volumeSliderBlock.addView(sliderBar, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, sliderH));
+
+        brightnessSliderBlock = new LinearLayout(activity);
+        brightnessSliderBlock.setOrientation(LinearLayout.VERTICAL);
+        brightnessLabel = new TextView(activity);
+        brightnessLabel.setGravity(Gravity.CENTER);
+        brightnessLabel.setSingleLine(true);
+        brightnessLabel.setEllipsize(TextUtils.TruncateAt.END);
+        ThemeManager.applyThemedTextStyle(brightnessLabel,
+                ThemeManager.ensureReadableOnBackground(ThemeManager.getDialogTextColor(), panelBgColor));
+        brightnessSliderBlock.addView(brightnessLabel, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        brightnessBar = new ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal);
+        brightnessBar.setMax(brightnessMax);
+        brightnessSliderBlock.addView(brightnessBar, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, sliderH));
+
+        sliderRow.addView(volumeSliderBlock, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        sliderRow.addView(brightnessSliderBlock, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        targetPanel.addView(sliderRow, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+    }
+
+    private void syncMediaSliderBlockVisibility() {
+        if (sliderRow == null || sliderRow.getVisibility() != View.VISIBLE) return;
+        boolean volActive = focusZone == FocusZone.SLIDER
+                || (focusZone == FocusZone.QUICK_BAR && quickFocusIndex == volumeQuickIndex);
+        boolean brightActive = focusZone == FocusZone.QUICK_BAR && quickFocusIndex == brightnessQuickIndex;
+        if (volumeSliderBlock != null) {
+            volumeSliderBlock.setVisibility(volActive ? View.VISIBLE : View.GONE);
         }
-        sliderBar.setAlpha(sliderActive ? 1f : 0.45f);
+        if (brightnessSliderBlock != null) {
+            brightnessSliderBlock.setVisibility(brightActive ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    private void refreshSliderChrome() {
+        if (!isMediaSliderStripVisible() || sliderBar == null || brightnessBar == null) return;
+        syncMediaSliderBlockVisibility();
+        boolean volActive = focusZone == FocusZone.SLIDER
+                || (focusZone == FocusZone.QUICK_BAR && quickFocusIndex == volumeQuickIndex);
+        boolean brightActive = focusZone == FocusZone.QUICK_BAR && quickFocusIndex == brightnessQuickIndex;
+        sliderBar.setAlpha(1f);
+        brightnessBar.setAlpha(1f);
         if (sliderLabel != null) {
             ThemeManager.applyThemedTextStyle(sliderLabel,
-                    sliderActive ? textSelected()
+                    volActive ? textSelected()
+                            : ThemeManager.contextMenuMutedText(ThemeManager.getHintTextColor()));
+        }
+        if (brightnessLabel != null) {
+            ThemeManager.applyThemedTextStyle(brightnessLabel,
+                    brightActive ? textSelected()
                             : ThemeManager.contextMenuMutedText(ThemeManager.getHintTextColor()));
         }
     }
@@ -396,7 +564,11 @@ public final class ThemedContextMenu {
     /** Move highlight to the quick toggle that opened this tier — list stays visible. */
     private void focusQuickBarFromListExit() {
         if (quickBarHost == null || quickBarHost.getChildCount() == 0) return;
-        if ((submenuTierOpen || queueMode) && labels != null && labels.length > 0) {
+        if (queueMode) {
+            focusQuickBarLeavingQueueList(quickBarReturnIndex());
+            return;
+        }
+        if (submenuTierOpen && labels != null && labels.length > 0) {
             optionsListVisible = true;
             if (itemsScroll != null) itemsScroll.setVisibility(View.VISIBLE);
             updateListHeightToContent();
@@ -526,25 +698,111 @@ public final class ThemedContextMenu {
         if (!queueMode || itemsHost == null || !isQueueMoveActive()) return;
         if (!queueMoveRibbonActive) {
             enterQueueMoveRibbon();
-            wheelDelta = 0;
+            animateRibbonEnter(queueMoveFrom);
+            return;
         }
         final int moveIdx = queueMoveFrom;
-        final int count = queueRows.length;
-        final int aboveIdx = QueueMoveWindow.ribbonAboveIndex(moveIdx);
-        final int belowIdx = QueueMoveWindow.ribbonBelowIndex(moveIdx, count);
         Runnable bind = new Runnable() {
             @Override
             public void run() {
-                populateRibbonRow(findRibbonSlotRow(QueueMoveWindow.RIBBON_ABOVE), aboveIdx);
-                populateRibbonRow(findRibbonSlotRow(QueueMoveWindow.RIBBON_CENTER), moveIdx);
-                populateRibbonRow(findRibbonSlotRow(QueueMoveWindow.RIBBON_BELOW), belowIdx);
-                if (itemsScroll != null) itemsScroll.scrollTo(0, 0);
+                populateQueueMoveRibbon();
             }
         };
         if (wheelDelta != 0 && !queueMoveRibbonAnimating) {
             animateRibbonStrip(wheelDelta, bind);
         } else {
             bind.run();
+        }
+    }
+
+    /** Fill the 3-slot ribbon for the current mover index. */
+    private void populateQueueMoveRibbon() {
+        if (!queueMode || itemsHost == null || !isQueueMoveActive()) return;
+        final int moveIdx = queueMoveFrom;
+        final int count = queueRows.length;
+        final int aboveIdx = QueueMoveWindow.ribbonAboveIndex(moveIdx);
+        final int belowIdx = QueueMoveWindow.ribbonBelowIndex(moveIdx, count);
+        populateRibbonRow(findRibbonSlotRow(QueueMoveWindow.RIBBON_ABOVE), aboveIdx);
+        populateRibbonRow(findRibbonSlotRow(QueueMoveWindow.RIBBON_CENTER), moveIdx);
+        populateRibbonRow(findRibbonSlotRow(QueueMoveWindow.RIBBON_BELOW), belowIdx);
+        if (itemsScroll != null) itemsScroll.scrollTo(0, 0);
+    }
+
+    /**
+     * Ease into move ribbon from browse scroll position — first/last rows slide to center
+     * instead of snapping like wheel-driven reorder steps.
+     */
+    private void animateRibbonEnter(int moveIdx) {
+        populateQueueMoveRibbon();
+        int browseSlot = queueViewportSlotForIndex(moveIdx, queueRows.length);
+        int slotH = queueRowSlotHeight();
+        float startTy = (browseSlot - QueueMoveWindow.RIBBON_CENTER) * (float) slotH;
+        if (Math.abs(startTy) < 0.5f) {
+            animateRibbonEnterFade();
+            return;
+        }
+        queueMoveRibbonAnimating = true;
+        android.view.animation.DecelerateInterpolator ease =
+                new android.view.animation.DecelerateInterpolator(1.35f);
+        final int[] remaining = new int[] { QueueMoveWindow.VISIBLE_ROWS };
+        for (int slot = QueueMoveWindow.RIBBON_ABOVE; slot <= QueueMoveWindow.RIBBON_BELOW; slot++) {
+            final View row = findRibbonSlotRow(slot);
+            if (row == null) {
+                remaining[0]--;
+                continue;
+            }
+            row.animate().cancel();
+            row.setTranslationY(startTy);
+            row.animate()
+                    .translationY(0f)
+                    .setDuration(QUEUE_MOVE_RIBBON_ENTER_MS)
+                    .setInterpolator(ease)
+                    .setListener(new android.animation.AnimatorListenerAdapter() {
+                        @Override
+                        public void onAnimationEnd(android.animation.Animator animation) {
+                            row.animate().setListener(null);
+                            remaining[0]--;
+                            if (remaining[0] <= 0) {
+                                queueMoveRibbonAnimating = false;
+                            }
+                        }
+                    });
+        }
+        if (remaining[0] <= 0) {
+            queueMoveRibbonAnimating = false;
+        }
+    }
+
+    private void animateRibbonEnterFade() {
+        queueMoveRibbonAnimating = true;
+        final int[] remaining = new int[] { 0 };
+        for (int slot = QueueMoveWindow.RIBBON_ABOVE; slot <= QueueMoveWindow.RIBBON_BELOW; slot++) {
+            final View row = findRibbonSlotRow(slot);
+            if (row == null || row.getVisibility() != View.VISIBLE) continue;
+            remaining[0]++;
+            Object slotTag = row.getTag(TAG_RIBBON_SLOT);
+            int ribbonSlot = slotTag instanceof Integer ? ((Integer) slotTag).intValue()
+                    : QueueMoveWindow.RIBBON_CENTER;
+            final float targetAlpha = ribbonSlot == QueueMoveWindow.RIBBON_CENTER ? 1f : 0.82f;
+            row.animate().cancel();
+            row.setTranslationY(0f);
+            row.setAlpha(0.45f);
+            row.animate()
+                    .alpha(targetAlpha)
+                    .setDuration(QUEUE_MOVE_RIBBON_ENTER_MS)
+                    .setListener(new android.animation.AnimatorListenerAdapter() {
+                        @Override
+                        public void onAnimationEnd(android.animation.Animator animation) {
+                            row.animate().setListener(null);
+                            remaining[0]--;
+                            if (remaining[0] <= 0) {
+                                queueMoveRibbonAnimating = false;
+                            }
+                        }
+                    });
+        }
+        if (remaining[0] <= 0) {
+            queueMoveRibbonAnimating = false;
         }
     }
 
@@ -564,6 +822,8 @@ public final class ThemedContextMenu {
             if (grip != null) grip.setVisibility(View.GONE);
             ImageView pp = (ImageView) row.findViewWithTag(TAG_QUEUE_PP);
             if (pp != null) pp.setVisibility(View.GONE);
+            ImageView confirm = (ImageView) row.findViewWithTag(TAG_QUEUE_CONFIRM);
+            if (confirm != null) confirm.setVisibility(View.GONE);
             return;
         }
         row.setTag(Integer.valueOf(queueIndex));
@@ -687,19 +947,18 @@ public final class ThemedContextMenu {
         panel.setBackground(buildPanelBackground());
 
         boolean hasQuick = quickItems.length > 0 && !dialogStyle;
-        boolean hasTitle = title != null && title.length() > 0;
-        if (hasQuick || hasTitle) {
+        if (!dialogStyle) {
             titleRow = new LinearLayout(activity);
             titleRow.setOrientation(LinearLayout.HORIZONTAL);
             titleRow.setGravity(Gravity.CENTER_VERTICAL);
-            populateTitleRow(title, hasQuick, density);
+            populateTitleRow(true, hasQuick, density);
             LinearLayout.LayoutParams titleRowLp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
             titleRowLp.bottomMargin = labels.length > 0 ? (int) (4 * density) : 0;
             panel.addView(titleRow, titleRowLp);
         }
 
-        if (subtitle != null && subtitle.length() > 0) {
+        if (subtitle != null && subtitle.length() > 0 && dialogStyle) {
             TextView sub = new TextView(activity);
             sub.setText(subtitle);
             sub.setTypeface(ThemeManager.getCustomFont());
@@ -724,18 +983,7 @@ public final class ThemedContextMenu {
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         updateListHeightToContent();
 
-        sliderBar = new ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal);
-        sliderBar.setMax(sliderMax);
-        sliderBar.setVisibility(View.GONE);
-        sliderLabel = new TextView(activity);
-        sliderLabel.setVisibility(View.GONE);
-        sliderLabel.setGravity(Gravity.CENTER);
-        ThemeManager.applyThemedTextStyle(sliderLabel,
-                ThemeManager.ensureReadableOnBackground(ThemeManager.getDialogTextColor(), panelBgColor));
-        panel.addView(sliderLabel, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        panel.addView(sliderBar, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, (int) (24 * density)));
+        addMediaSliderRowToPanel(panel, density);
 
         FrameLayout.LayoutParams panelLp = new FrameLayout.LayoutParams(panelWidthPx,
                 ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -754,6 +1002,7 @@ public final class ThemedContextMenu {
         });
         refreshAll();
         scrollFocusIntoView();
+        syncMediaQuickIconResFromItems();
     }
 
     private void rebuildListRows(String[] itemIconKeys, String[] itemStateTexts) {
@@ -810,7 +1059,7 @@ public final class ThemedContextMenu {
                 focusZone = FocusZone.TIER_CONTENT;
             }
         }
-        setPanelTitle(title);
+        if (titleRow != null) setContextTitleBarVisible(true);
         prepareListPanelVisible();
         rebuildListRows(itemIconKeys, itemStateTexts);
         refreshAll();
@@ -821,10 +1070,43 @@ public final class ThemedContextMenu {
         requestOverlayFocus();
     }
 
+    /** Update state text on existing rows when label order is unchanged — avoids list flicker on Wi-Fi scans. */
+    public boolean refreshListStatesIfSameStructure(String[] itemLabels, String[] itemStateTexts,
+            boolean[] itemHeaders) {
+        if (itemsHost == null || labels == null || itemLabels == null
+                || labels.length != itemLabels.length) {
+            return false;
+        }
+        for (int i = 0; i < labels.length; i++) {
+            if (!labels[i].equals(itemLabels[i])) return false;
+            boolean hdr = isHeaderRow(i);
+            boolean newHdr = itemHeaders != null && i < itemHeaders.length && itemHeaders[i];
+            if (hdr != newHdr) return false;
+        }
+        for (int i = 0; i < itemsHost.getChildCount() && i < labels.length; i++) {
+            if (isHeaderRow(i)) continue;
+            View row = itemsHost.getChildAt(i);
+            if (row == null) continue;
+            TextView state = (TextView) row.findViewWithTag(TAG_STATE);
+            if (state == null) continue;
+            String st = itemStateTexts != null && i < itemStateTexts.length ? itemStateTexts[i] : null;
+            if (st != null && st.length() > 0) {
+                state.setText(st);
+                state.setVisibility(View.VISIBLE);
+            } else {
+                state.setText("");
+                state.setVisibility(View.GONE);
+            }
+        }
+        refreshAll();
+        return true;
+    }
+
     public void replaceQueueContent(String title, QueueRowSpec[] rows, int focusIndex, int moveFrom) {
         queueMode = true;
         submenuTierOpen = true;
         optionsListVisible = true;
+        ensureContextTitleBar(quickItems.length > 0);
         queueRows = rows != null ? rows : new QueueRowSpec[0];
         queueMoveFrom = moveFrom;
         labels = new String[queueRows.length];
@@ -832,7 +1114,6 @@ public final class ThemedContextMenu {
         rowHeaders = null;
         this.focusIndex = Math.max(0, Math.min(focusIndex, Math.max(0, queueRows.length - 1)));
         focusZone = FocusZone.TIER_CONTENT;
-        setPanelTitle(title);
         queueRowHeightPx = rowHeightPx;
         invalidateQueueRowBgCache();
         rebuildQueueList();
@@ -855,6 +1136,37 @@ public final class ThemedContextMenu {
 
     public boolean isQueueMode() {
         return queueMode;
+    }
+
+    /** Update title/subtitle text on visible queue rows without a full rebuild. */
+    public void refreshQueueRowTitles(QueueRowSpec[] rows) {
+        if (!queueMode || rows == null || rows.length != queueRows.length) return;
+        queueRows = rows;
+        if (labels == null || labels.length != rows.length) {
+            labels = new String[rows.length];
+        }
+        int start = 0;
+        int end = queueRows.length;
+        if (useQueueBrowseVirtual()) {
+            start = queueBrowseWindowStart;
+            end = queueBrowseWindowEnd();
+        }
+        for (int i = start; i < end; i++) {
+            labels[i] = rows[i].title;
+            View row = findQueueRowByIndex(i);
+            if (row == null) continue;
+            TextView title = (TextView) row.findViewWithTag(TAG_QUEUE_TITLE);
+            TextView sub = (TextView) row.findViewWithTag(TAG_QUEUE_SUB);
+            if (title != null) title.setText(rows[i].title);
+            if (sub != null) {
+                if (rows[i].subtitle.isEmpty()) {
+                    sub.setVisibility(View.GONE);
+                } else {
+                    sub.setText(rows[i].subtitle);
+                    sub.setVisibility(View.VISIBLE);
+                }
+            }
+        }
     }
 
     /** Update now-playing indicators without rebuilding row views. */
@@ -945,16 +1257,78 @@ public final class ThemedContextMenu {
         }
         if (prevMove < 0 && moveFrom >= 0) {
             updateListHeightToContent();
-            enterQueueMoveRibbon();
             bindQueueMoveRibbon(0);
         } else if (moveFrom >= 0) {
             bindQueueMoveRibbon(0);
         } else if (prevMove >= 0 && moveFrom < 0) {
+            clearQueueConfirm();
             exitQueueMoveRibbon();
             rebuildQueueList();
             updateListHeightToContent();
             scrollQueueViewportForIndex(focusIndex);
         }
+    }
+
+    /** Drop move — restore full list, keep focus, flash checkmark on placed row. */
+    public void finishQueueMove(int placedIndex) {
+        if (!queueMode || itemsHost == null) {
+            queueMoveFrom = -1;
+            return;
+        }
+        clearQueueConfirm();
+        queueMoveFrom = -1;
+        focusIndex = Math.max(0, Math.min(placedIndex, Math.max(0, queueRows.length - 1)));
+        focusZone = FocusZone.TIER_CONTENT;
+        exitQueueMoveRibbon();
+        rebuildQueueList();
+        updateListHeightToContent();
+        scrollQueueViewportForIndex(focusIndex);
+        queueConfirmAtIndex = focusIndex;
+        refreshAll();
+        animateQueueConfirmCheckmark(focusIndex);
+    }
+
+    private void clearQueueConfirm() {
+        queueConfirmAtIndex = -1;
+        if (queueConfirmClearTask != null && itemsHost != null) {
+            itemsHost.removeCallbacks(queueConfirmClearTask);
+            queueConfirmClearTask = null;
+        }
+    }
+
+    private void animateQueueConfirmCheckmark(final int queueIndex) {
+        final View row = findQueueRowByIndex(queueIndex);
+        if (row == null) return;
+        final ImageView confirm = (ImageView) row.findViewWithTag(TAG_QUEUE_CONFIRM);
+        if (confirm == null) return;
+        confirm.animate().cancel();
+        confirm.setAlpha(0f);
+        confirm.setVisibility(View.VISIBLE);
+        confirm.animate()
+                .alpha(1f)
+                .setDuration(QUEUE_CONFIRM_SHOW_MS)
+                .start();
+        queueConfirmClearTask = new Runnable() {
+            @Override
+            public void run() {
+                queueConfirmClearTask = null;
+                queueConfirmAtIndex = -1;
+                confirm.animate()
+                        .alpha(0f)
+                        .setDuration(QUEUE_CONFIRM_SHOW_MS)
+                        .setListener(new android.animation.AnimatorListenerAdapter() {
+                            @Override
+                            public void onAnimationEnd(android.animation.Animator animation) {
+                                confirm.animate().setListener(null);
+                                confirm.setVisibility(View.GONE);
+                                confirm.setAlpha(1f);
+                                refreshQueueRowAt(queueIndex);
+                            }
+                        })
+                        .start();
+            }
+        };
+        itemsHost.postDelayed(queueConfirmClearTask, QUEUE_CONFIRM_HOLD_MS);
     }
 
     public void focusQuickBar(int index) {
@@ -966,7 +1340,27 @@ public final class ThemedContextMenu {
         requestOverlayFocus();
     }
 
-    /** Hide list/queue tier; keep quick toggles visible and focused (no Options rows). */
+    /** Focus the quick chip that opened the current tier (Wi-Fi, BT, queue, …). */
+    public void focusQuickBarAtReturn() {
+        focusQuickBar(quickBarReturnIndex());
+    }
+
+    public int quickBarReturnIndexForNavigation() {
+        return quickBarReturnIndex();
+    }
+
+    /** Queue tier: move focus to a quick chip without collapsing the queue list. */
+    public void focusQuickBarLeavingQueueList(int quickIndex) {
+        ensureContextTitleBar(quickItems.length > 0);
+        if (queueMode) {
+            optionsListVisible = true;
+            if (itemsScroll != null) itemsScroll.setVisibility(View.VISIBLE);
+            updateListHeightToContent();
+        }
+        focusQuickBar(quickIndex);
+    }
+
+    /** Hide list/queue tier; keep Back + quick toggles visible and focused (no Options rows). */
     public void showQuickBarOnly(int quickIndex) {
         queueMode = false;
         queueRows = new QueueRowSpec[0];
@@ -974,9 +1368,11 @@ public final class ThemedContextMenu {
         labels = new String[0];
         rowHeaders = null;
         focusIndex = 0;
+        optionsListVisible = false;
+        boolean hasQuick = quickItems.length > 0;
+        ensureContextTitleBar(hasQuick);
         if (itemsHost != null) itemsHost.removeAllViews();
-        if (sliderBar != null) sliderBar.setVisibility(View.GONE);
-        if (sliderLabel != null) sliderLabel.setVisibility(View.GONE);
+        hideMediaSliderStripViews();
         if (itemsScroll != null) {
             itemsScroll.setVisibility(View.GONE);
             ViewGroup.LayoutParams lp = itemsScroll.getLayoutParams();
@@ -1257,6 +1653,13 @@ public final class ThemedContextMenu {
         int ppSz = (int) (rowHeightPx * 0.42f);
         rightSlot.addView(pp, new android.widget.FrameLayout.LayoutParams(ppSz, ppSz, Gravity.CENTER));
 
+        ImageView confirm = new ImageView(activity);
+        confirm.setTag(TAG_QUEUE_CONFIRM);
+        confirm.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        confirm.setImageResource(R.drawable.ic_check);
+        confirm.setVisibility(View.GONE);
+        rightSlot.addView(confirm, new android.widget.FrameLayout.LayoutParams(ppSz, ppSz, Gravity.CENTER));
+
         row.addView(rightSlot);
         return row;
     }
@@ -1391,25 +1794,28 @@ public final class ThemedContextMenu {
         this.focusIndex = firstFocusableIndex(0);
 
         float density = activity.getResources().getDisplayMetrics().density;
+        int savedVol = sliderValue;
+        int savedVolMax = sliderMax;
         for (int i = panel.getChildCount() - 1; i >= 0; i--) {
-            View child = panel.getChildAt(i);
-            if (child != sliderLabel && child != sliderBar) {
-                panel.removeViewAt(i);
-            }
+            panel.removeViewAt(i);
         }
+        sliderRow = null;
+        volumeSliderBlock = null;
+        brightnessSliderBlock = null;
+        sliderBar = null;
+        sliderLabel = null;
+        brightnessBar = null;
+        brightnessLabel = null;
 
         boolean hasQuick = quickItems.length > 0;
-        boolean hasTitle = title != null && title.length() > 0;
-        if (hasQuick || hasTitle) {
-            titleRow = new LinearLayout(activity);
-            titleRow.setOrientation(LinearLayout.HORIZONTAL);
-            titleRow.setGravity(Gravity.CENTER_VERTICAL);
-            populateTitleRow(title, hasQuick, density);
-            LinearLayout.LayoutParams titleRowLp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            titleRowLp.bottomMargin = labels.length > 0 ? (int) (4 * density) : 0;
-            panel.addView(titleRow, 0, titleRowLp);
-        }
+        titleRow = new LinearLayout(activity);
+        titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
+        populateTitleRow(true, hasQuick, density);
+        LinearLayout.LayoutParams titleRowLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        titleRowLp.bottomMargin = labels.length > 0 ? (int) (4 * density) : 0;
+        panel.addView(titleRow, titleRowLp);
 
         itemsScroll = new ScrollView(activity);
         itemsScroll.setFillViewport(false);
@@ -1421,29 +1827,59 @@ public final class ThemedContextMenu {
         rebuildListRows(itemIconKeys, itemStateTexts);
         itemsScroll.addView(itemsHost, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        int sliderIdx = panel.indexOfChild(sliderLabel);
-        if (sliderIdx < 0) sliderIdx = panel.getChildCount();
-        panel.addView(itemsScroll, sliderIdx, new LinearLayout.LayoutParams(
+        panel.addView(itemsScroll, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        addMediaSliderRowToPanel(panel, density);
+        updateVolumeSlider(savedVol, savedVolMax);
+        updateBrightnessSlider(brightnessValue, 255);
+        if (sliderRow != null) sliderRow.setVisibility(View.VISIBLE);
+        if (sliderLabel != null) {
+            sliderLabel.setText(activity.getString(R.string.context_quick_volume));
+        }
+        if (brightnessLabel != null) {
+            brightnessLabel.setText(activity.getString(R.string.context_quick_brightness));
+        }
         optionsListVisible = false;
         collapseOptionsListPanel();
 
-        if (sliderLabel != null) {
-            sliderLabel.setVisibility(View.VISIBLE);
-            ThemeManager.applyThemedTextStyle(sliderLabel,
-                    ThemeManager.ensureReadableOnBackground(ThemeManager.getDialogTextColor(), panelBgColor));
-        }
-        sliderBar.setVisibility(View.VISIBLE);
         if (quickBarScroll != null) quickBarScroll.setAlpha(1f);
         quickFocusIndex = volumeQuickIndex;
+        quickReturnIndex = volumeQuickIndex;
         focusZone = FocusZone.QUICK_BAR;
         refreshAll();
         scrollQuickFocusIntoView();
+        syncMediaQuickIconResFromItems();
         requestOverlayFocus();
     }
 
     public boolean isVolumeOnlyMode() {
         return volumeOnlyMode;
+    }
+
+    private void syncMediaQuickIconResFromItems() {
+        if (volumeQuickIndex >= 0 && volumeQuickIndex < quickItems.length) {
+            volumeQuickIconRes = quickItems[volumeQuickIndex].iconResId;
+        }
+        if (brightnessQuickIndex >= 0 && brightnessQuickIndex < quickItems.length) {
+            brightnessQuickIconRes = quickItems[brightnessQuickIndex].iconResId;
+        }
+    }
+
+    public static int volumeIconResForLevel(int value, int max) {
+        if (value <= 0) return R.drawable.ic_volume_mute;
+        if (max <= 0) return R.drawable.ic_volume_high;
+        float pct = (float) value / (float) max;
+        if (pct <= 0.33f) return R.drawable.ic_volume_low;
+        if (pct <= 0.66f) return R.drawable.ic_volume_mid;
+        return R.drawable.ic_volume_high;
+    }
+
+    public static int brightnessIconResForLevel(int value, int max) {
+        if (max <= 0) return R.drawable.ic_brightness;
+        float pct = (float) value / (float) max;
+        if (pct <= 0.33f) return R.drawable.ic_brightness_empty;
+        if (pct <= 0.66f) return R.drawable.ic_brightness_half;
+        return R.drawable.ic_brightness;
     }
 
     public void updateVolumeSlider(int value, int max) {
@@ -1453,29 +1889,63 @@ public final class ThemedContextMenu {
             sliderBar.setMax(sliderMax);
             sliderBar.setProgress(sliderValue);
         }
+        int iconRes = volumeIconResForLevel(sliderValue, sliderMax);
+        if (iconRes != volumeQuickIconRes) {
+            volumeQuickIconRes = iconRes;
+            updateQuickChipIconRes(volumeQuickIndex, iconRes);
+        }
+    }
+
+    public void updateBrightnessSlider(int value, int max) {
+        brightnessMax = Math.max(1, max);
+        brightnessValue = Math.max(0, Math.min(value, brightnessMax));
+        if (brightnessBar != null) {
+            brightnessBar.setMax(brightnessMax);
+            brightnessBar.setProgress(brightnessValue);
+        }
+        int iconRes = brightnessIconResForLevel(brightnessValue, brightnessMax);
+        if (iconRes != brightnessQuickIconRes) {
+            brightnessQuickIconRes = iconRes;
+            updateQuickChipIconRes(brightnessQuickIndex, iconRes);
+        }
+    }
+
+    private void updateQuickChipIconRes(int quickIndex, int iconResId) {
+        if (quickBarHost == null || quickIndex < 0 || quickIndex >= quickItems.length) return;
+        QuickItem prior = quickItems[quickIndex];
+        quickItems[quickIndex] = new QuickItem(prior.iconKey, iconResId, prior.label, prior.visible);
+        for (int i = 0; i < quickBarHost.getChildCount(); i++) {
+            View chip = quickBarHost.getChildAt(i);
+            Object tag = chip.getTag();
+            if (!(tag instanceof Integer) || ((Integer) tag) != quickIndex) continue;
+            ImageView icon = (ImageView) chip.findViewWithTag("quick_icon");
+            if (icon != null) icon.setImageResource(iconResId);
+            break;
+        }
+        refreshQuickBar();
     }
 
     public void showSlider(String label, int max, int value) {
-        showSliderWithQuickBarFocus(label, max, value, quickReturnIndex >= 0
-                ? quickReturnIndex : CONTEXT_QUICK_VOLUME_FALLBACK);
+        showMediaSlidersWithQuickBarFocus(quickReturnIndex >= 0
+                ? quickReturnIndex : volumeQuickIndex,
+                label, max, value,
+                activity.getString(R.string.context_quick_brightness), 255, brightnessValue);
     }
 
-    private static final int CONTEXT_QUICK_VOLUME_FALLBACK = 3;
-
-    /** Full context menu with slider visible and a quick-bar item pre-highlighted. */
-    public void showSliderWithQuickBarFocus(String label, int max, int value, int quickIndex) {
+    /** Full context menu with volume + brightness sliders; quick-bar item pre-highlighted. */
+    public void showMediaSlidersWithQuickBarFocus(int quickIndex, String volumeLabel, int volumeMax,
+            int volumeValue, String brightnessLabelText, int brightnessMaxVal, int brightnessValueVal) {
         volumeOnlyMode = false;
-        sliderMax = Math.max(1, max);
-        sliderValue = Math.max(0, Math.min(value, sliderMax));
-        if (sliderBar != null) {
-            sliderBar.setMax(sliderMax);
-            sliderBar.setProgress(sliderValue);
-            sliderBar.setVisibility(View.VISIBLE);
-        }
+        updateVolumeSlider(volumeValue, volumeMax);
+        updateBrightnessSlider(brightnessValueVal, brightnessMaxVal);
         if (sliderLabel != null) {
-            sliderLabel.setText(label != null ? label : "");
-            sliderLabel.setVisibility(View.VISIBLE);
+            sliderLabel.setText(volumeLabel != null ? volumeLabel : "");
         }
+        if (brightnessLabel != null) {
+            brightnessLabel.setText(brightnessLabelText != null ? brightnessLabelText : "");
+        }
+        if (sliderRow != null) sliderRow.setVisibility(View.VISIBLE);
+        syncMediaSliderBlockVisibility();
         optionsListVisible = false;
         collapseOptionsListPanel();
         quickFocusIndex = quickIndex;
@@ -1486,9 +1956,14 @@ public final class ThemedContextMenu {
         requestOverlayFocus();
     }
 
+    /** @deprecated use {@link #showMediaSlidersWithQuickBarFocus} */
+    public void showSliderWithQuickBarFocus(String label, int max, int value, int quickIndex) {
+        showMediaSlidersWithQuickBarFocus(quickIndex, label, max, value,
+                activity.getString(R.string.context_quick_brightness), 255, brightnessValue);
+    }
+
     public void hideSlider() {
-        if (sliderBar != null) sliderBar.setVisibility(View.GONE);
-        if (sliderLabel != null) sliderLabel.setVisibility(View.GONE);
+        hideMediaSliderStripViews();
         if (quickBarScroll != null) quickBarScroll.setAlpha(1f);
         if (focusZone == FocusZone.SLIDER) {
             focusZone = (optionsListVisible || queueMode)
@@ -1499,6 +1974,15 @@ public final class ThemedContextMenu {
             scrollFocusIntoView();
         }
         requestOverlayFocus();
+    }
+
+    public int brightnessSliderValue() {
+        return brightnessValue;
+    }
+
+    public void adjustBrightnessSlider(int delta) {
+        brightnessValue = Math.max(0, Math.min(brightnessMax, brightnessValue + delta));
+        if (brightnessBar != null) brightnessBar.setProgress(brightnessValue);
     }
 
     /** Focus the root Options action list (hides an open volume slider if needed). */
@@ -1587,6 +2071,11 @@ public final class ThemedContextMenu {
         itemsHost = null;
         sliderBar = null;
         sliderLabel = null;
+        sliderRow = null;
+        volumeSliderBlock = null;
+        brightnessSliderBlock = null;
+        brightnessBar = null;
+        brightnessLabel = null;
         labels = null;
         rowHeaders = null;
         listener = null;
@@ -1596,6 +2085,7 @@ public final class ThemedContextMenu {
         queueRows = new QueueRowSpec[0];
         queueMoveFrom = -1;
         exitQueueMoveRibbon();
+        clearQueueConfirm();
         volumeOnlyMode = false;
         optionsListVisible = true;
         submenuTierOpen = false;
@@ -1673,8 +2163,19 @@ public final class ThemedContextMenu {
             return;
         }
         if (focusZone == FocusZone.OPTIONS_TITLE) {
-            if (delta > 0 && labels != null && labels.length > 0) {
-                enterOptionsListFromTitle();
+            if (delta > 0) {
+                if (hasBackChip() && isMediaSliderStripVisible() && !optionsListVisible && !queueMode) {
+                    if (quickBarHost != null && quickBarHost.getChildCount() > 0) {
+                        focusZone = FocusZone.QUICK_BAR;
+                        quickFocusIndex = quickBarReturnIndex();
+                        refreshAll();
+                        scrollQuickFocusIntoView();
+                    }
+                    return;
+                }
+                if (labels != null && labels.length > 0) {
+                    enterOptionsListFromTitle();
+                }
             } else if (delta < 0 && quickBarHost != null && quickBarHost.getChildCount() > 0) {
                 focusZone = FocusZone.QUICK_BAR;
                 quickFocusIndex = quickBarReturnIndex();
@@ -1705,6 +2206,12 @@ public final class ThemedContextMenu {
                 focusQuickBarFromListExit();
                 return;
             }
+            if (delta > 0 && focusIndex == lastFocusableIndex()
+                    && quickBarHost != null && quickBarHost.getChildCount() > 0
+                    && !submenuTierOpen) {
+                focusQuickBarFromListExit();
+                return;
+            }
             focusZone = FocusZone.TIER_CONTENT;
             int next = nextFocusableIndex(focusIndex, delta);
             if (next < 0 || next == focusIndex) return;
@@ -1723,14 +2230,20 @@ public final class ThemedContextMenu {
             if (vis[i] == quickFocusIndex) { pos = i; break; }
         }
         if (delta < 0 && pos == 0) {
-            if (quickListener != null) {
-                quickListener.onFocusOptionsTitle();
-            } else if (titleView != null && labels != null && labels.length > 0) {
+            if (hasBackChip() && quickListener != null) {
+                quickListener.onFocusBackChip();
+                return;
+            }
+            if (titleView != null && labels != null && labels.length > 0) {
                 focusOptionsTitle();
             }
             return;
         }
         int nextPos = pos + delta;
+        if (nextPos >= vis.length && delta > 0 && labels != null && labels.length > 0 && !submenuTierOpen) {
+            enterListFromQuickBar();
+            return;
+        }
         if (nextPos < 0 || nextPos >= vis.length) return;
         quickFocusIndex = vis[nextPos];
         focusZone = FocusZone.QUICK_BAR;
@@ -1740,7 +2253,11 @@ public final class ThemedContextMenu {
 
     public void activateFocused() {
         if (focusZone == FocusZone.OPTIONS_TITLE) {
-            enterOptionsListFromTitle();
+            if (hasBackChip() && quickListener != null) {
+                quickListener.onBackActivated();
+            } else if (labels != null && labels.length > 0) {
+                enterOptionsListFromTitle();
+            }
             return;
         }
         if (focusZone == FocusZone.QUICK_BAR) {
@@ -1783,6 +2300,14 @@ public final class ThemedContextMenu {
         return rowHeaders != null && index >= 0 && index < rowHeaders.length && rowHeaders[index];
     }
 
+    private int lastFocusableIndex() {
+        if (labels == null) return 0;
+        for (int i = labels.length - 1; i >= 0; i--) {
+            if (!isHeaderRow(i)) return i;
+        }
+        return 0;
+    }
+
     private int firstFocusableIndex(int start) {
         if (labels == null) return 0;
         for (int i = start; i < labels.length; i++) {
@@ -1807,11 +2332,6 @@ public final class ThemedContextMenu {
         if (!isHeaderRow(idx)) return idx;
         int next = nextFocusableIndex(idx, 1);
         return next >= 0 ? next : firstFocusableIndex(0);
-    }
-
-    private void setPanelTitle(String title) {
-        if (titleView == null || title == null) return;
-        titleView.setText(title);
     }
 
     private void scrollFocusIntoView() {
@@ -1878,11 +2398,12 @@ public final class ThemedContextMenu {
         ImageView icon = new ImageView(activity);
         icon.setTag("quick_icon");
         icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        int iconRes = iconResForQuickIndex(index, item.iconResId);
         android.graphics.Bitmap bmp = item.iconKey != null ? ThemeManager.getSettingIcon(item.iconKey) : null;
         if (bmp != null) {
             icon.setImageBitmap(bmp);
-        } else if (item.iconResId != 0) {
-            icon.setImageResource(item.iconResId);
+        } else if (iconRes != 0) {
+            icon.setImageResource(iconRes);
         }
         FrameLayout.LayoutParams iconLp = new FrameLayout.LayoutParams(iconSize, iconSize);
         iconLp.gravity = Gravity.CENTER;
@@ -1913,9 +2434,8 @@ public final class ThemedContextMenu {
             }
             ImageView icon = (ImageView) chip.findViewWithTag("quick_icon");
             if (icon != null && icon.getDrawable() != null) {
-                int quickNormal = ThemeManager.getStatusBarTextColor();
+                int quickNormal = textNormal();
                 int quickSelected = textSelected();
-                // Keep quick toggles minimalist: only icon tint changes when unfocused.
                 icon.setColorFilter(focused ? quickSelected : quickNormal, PorterDuff.Mode.SRC_ATOP);
             }
         }
@@ -1931,6 +2451,7 @@ public final class ThemedContextMenu {
             if (!quickItems[i].visible) continue;
             quickBarHost.addView(createQuickChip(quickItems[i], rowHeightPx, i));
         }
+        syncMediaQuickIconResFromItems();
         refreshQuickBar();
     }
 
@@ -1944,12 +2465,48 @@ public final class ThemedContextMenu {
         return g;
     }
 
-    private static android.graphics.Bitmap contextMenuIcon(String iconKey) {
+    private int iconResForQuickIndex(int index, int fallbackResId) {
+        if (index == volumeQuickIndex) return volumeQuickIconRes;
+        if (index == brightnessQuickIndex) return brightnessQuickIconRes;
+        return fallbackResId;
+    }
+
+    private android.graphics.Bitmap resolveContextMenuIcon(String iconKey) {
         if (iconKey == null || iconKey.isEmpty()) return null;
+        if (iconKey.startsWith("wifi.sig.")) {
+            try {
+                int idx = Integer.parseInt(iconKey.substring(9));
+                android.graphics.Bitmap themed = ThemeManager.getWifiIcon(idx);
+                if (themed != null) return themed;
+                int res = R.drawable.ic_wifi_signal_1;
+                if (idx >= 2) res = R.drawable.ic_wifi_signal_3;
+                else if (idx == 1) res = R.drawable.ic_wifi_signal_2;
+                return tintedDrawableBitmap(res);
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        if ("wifi.lock".equals(iconKey)) {
+            android.graphics.Bitmap themed = ThemeManager.getSettingIcon("lock");
+            if (themed != null) return themed;
+            return tintedDrawableBitmap(R.drawable.ic_lock);
+        }
         if (iconKey.startsWith("shuffle") || iconKey.startsWith("repeat")) {
             return ThemeManager.getPlaybackModeIcon(iconKey);
         }
         return ThemeManager.getSettingIcon(iconKey);
+    }
+
+    private android.graphics.Bitmap tintedDrawableBitmap(int resId) {
+        Drawable d = activity.getResources().getDrawable(resId);
+        if (d == null) return null;
+        int size = (int) (rowHeightPx * 0.72f);
+        Bitmap bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        d.setBounds(0, 0, size, size);
+        d.setColorFilter(ThemeManager.getStatusBarTextColor(), PorterDuff.Mode.SRC_IN);
+        d.draw(c);
+        return bmp;
     }
 
     private TextView createHeaderRow(String text) {
@@ -1978,7 +2535,7 @@ public final class ThemedContextMenu {
         int iconSize = (int) (rowHeightPx * 0.72f);
         int iconGap = (int) (4 * density);
 
-        android.graphics.Bitmap iconBmp = contextMenuIcon(iconKey);
+        android.graphics.Bitmap iconBmp = resolveContextMenuIcon(iconKey);
         int iconW = iconBmp != null ? iconSize : 0;
         int labelLeft = textPadLeft + (iconW > 0 ? iconW + iconGap : 0);
 
@@ -2094,13 +2651,15 @@ public final class ThemedContextMenu {
         View row = findQueueRowByIndex(queueIndex);
         if (row == null) return;
         boolean moving = queueMoveFrom >= 0 && queueIndex == queueMoveFrom;
+        boolean confirming = queueConfirmAtIndex >= 0 && queueIndex == queueConfirmAtIndex;
         boolean focused = focusZone == FocusZone.TIER_CONTENT && queueIndex == focusIndex;
-        boolean highlighted = focused || moving;
+        boolean highlighted = focused || moving || confirming;
         int w = panelWidthPx > 0 ? panelWidthPx : row.getWidth();
         row.setBackground(rowBackground(highlighted, w, queueRowHeightPx));
         TextView title = (TextView) row.findViewWithTag(TAG_QUEUE_TITLE);
         TextView grip = (TextView) row.findViewWithTag(TAG_QUEUE_GRIP);
         ImageView pp = (ImageView) row.findViewWithTag(TAG_QUEUE_PP);
+        ImageView confirm = (ImageView) row.findViewWithTag(TAG_QUEUE_CONFIRM);
         int titleColor = highlighted ? textSelected() : textNormal();
         if (title != null) {
             ThemeManager.applyThemedTextStyle(title, titleColor);
@@ -2117,12 +2676,25 @@ public final class ThemedContextMenu {
             grip.setVisibility(moving ? View.VISIBLE : View.GONE);
             ThemeManager.applyThemedTextStyle(grip, textSelected());
         }
-        if (pp != null && queueRows[queueIndex].nowPlaying) {
-            pp.setImageResource(queuePlaybackStateIcon(queueRows[queueIndex].playing));
-            pp.setColorFilter(textNormal(), PorterDuff.Mode.SRC_ATOP);
-            pp.setVisibility(View.VISIBLE);
-        } else if (pp != null) {
-            pp.setVisibility(View.GONE);
+        if (confirm != null) {
+            if (!confirming) {
+                confirm.setVisibility(View.GONE);
+                confirm.setAlpha(1f);
+            }
+            if (confirm.getVisibility() == View.VISIBLE) {
+                confirm.setColorFilter(textSelected(), PorterDuff.Mode.SRC_ATOP);
+            }
+        }
+        if (pp != null) {
+            if (moving || confirming) {
+                pp.setVisibility(View.GONE);
+            } else if (queueRows[queueIndex].nowPlaying) {
+                pp.setImageResource(queuePlaybackStateIcon(queueRows[queueIndex].playing));
+                pp.setColorFilter(textNormal(), PorterDuff.Mode.SRC_ATOP);
+                pp.setVisibility(View.VISIBLE);
+            } else {
+                pp.setVisibility(View.GONE);
+            }
         }
         ensureQueueDropLine((FrameLayout) row, moving);
     }
@@ -2193,14 +2765,16 @@ public final class ThemedContextMenu {
     }
 
     private int textNormal() {
-        int c = menuRows ? ThemeManager.getSettingMenuTextColorNormal()
+        int themeNormal = menuRows ? ThemeManager.getSettingMenuTextColorNormal()
                 : ThemeManager.getItemTextColorNormal();
-        return ThemeManager.ensureReadableOnBackground(c, panelBgColor);
+        int themeSelected = menuRows ? ThemeManager.getSettingMenuTextColorSelected()
+                : ThemeManager.getItemTextColorSelected();
+        return ThemeManager.contextMenuTextNormal(themeNormal, themeSelected, panelBgColor, menuRows);
     }
 
     private int textSelected() {
-        int c = menuRows ? ThemeManager.getSettingMenuTextColorSelected()
+        int themeSelected = menuRows ? ThemeManager.getSettingMenuTextColorSelected()
                 : ThemeManager.getItemTextColorSelected();
-        return ThemeManager.textOnRowSelection(c, menuRows);
+        return ThemeManager.contextMenuTextSelected(themeSelected, menuRows);
     }
 }
