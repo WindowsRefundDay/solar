@@ -49,7 +49,7 @@ public final class RowKeys {
     public static final String SOULSEEK_CONNECTION = "soulseek.connection";
     public static final String SOULSEEK_ABOUT = "soulseek.about";
     public static final String SOULSEEK_REGENERATE = "soulseek.regenerate";
-    public static final String SOULSEEK_HIDE_FLAC = "soulseek.hide_flac";
+    public static final String SOULSEEK_HIDE_HIGH_BITRATE = "soulseek.hide_high_bitrate";
     public static final String SOULSEEK_SHARING = "soulseek.sharing";
     public static final String WIDGET_CLOCK = "widget.clock";
     public static final String WIDGET_BATTERY = "widget.battery";
@@ -129,7 +129,7 @@ public final class RowKeys {
         if (SOULSEEK_CONNECTION.equals(rowKey)) return R.string.soulseek_menu_connection;
         if (SOULSEEK_ABOUT.equals(rowKey)) return R.string.soulseek_menu_about;
         if (SOULSEEK_REGENERATE.equals(rowKey)) return R.string.soulseek_regenerate_account;
-        if (SOULSEEK_HIDE_FLAC.equals(rowKey)) return R.string.soulseek_hide_flac;
+        if (SOULSEEK_HIDE_HIGH_BITRATE.equals(rowKey)) return R.string.soulseek_hide_high_bitrate;
         if (SOULSEEK_SHARING.equals(rowKey)) return R.string.soulseek_share_library;
         if (WIDGET_CLOCK.equals(rowKey)) return R.string.widget_clock;
         if (WIDGET_BATTERY.equals(rowKey)) return R.string.widget_battery;

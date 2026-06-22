@@ -8,11 +8,13 @@ import org.json.JSONObject;
 import java.io.File;
 import java.io.FileWriter;
 
-/** Debug-mode NDJSON logger — session 384d9d; pull via adb from /storage/sdcard0/. */
+/** Debug-mode NDJSON logger — session bd1c34; pull via adb from /storage/sdcard0/. */
 final class DebugAgentLog {
     private static final String TAG = "SolarNetDbg";
-    private static final String FILE = "debug-384d9d.log";
-    private static final String SESSION = "384d9d";
+    private static final String FILE = "debug-bd1c34.log";
+    private static final String SESSION = "bd1c34";
+    private static final String WORKSPACE_LOG =
+            "/home/deck/Documents/Slide/s/.cursor/debug-bd1c34.log";
 
     private DebugAgentLog() {}
 
@@ -42,6 +44,12 @@ final class DebugAgentLog {
                 w.write('\n');
                 w.close();
             }
+            try {
+                FileWriter w = new FileWriter(WORKSPACE_LOG, true);
+                w.write(line);
+                w.write('\n');
+                w.close();
+            } catch (Exception ignored3) {}
         } catch (Exception ignored) {}
     }
 }

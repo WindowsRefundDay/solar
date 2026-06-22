@@ -6,6 +6,8 @@
     <string name="common_back_short">〈 뒤로</string>
     <string name="common_on">켜짐</string>
     <string name="common_off">꺼짐</string>
+    <string name="home_screen_label_on">✔ %1$s</string>
+    <string name="home_screen_label_off">✗ %1$s</string>
     <string name="common_one">한 곡</string>
     <string name="common_all">전체</string>
     <string name="common_wait">대기…</string>
@@ -415,7 +417,7 @@
     <string name="soulseek_receiving">파일 수신 중…</string>
     <string name="soulseek_account_hint">첫 로그인 시 계정이 생성됩니다. 30일 이상 미사용 시 회수될 수 있습니다.</string>
     <string name="soulseek_regenerate_account">자동 계정 재생성</string>
-    <string name="soulseek_hide_flac">FLAC 결과 숨기기</string>
+    <string name="soulseek_hide_high_bitrate">320 kbps 초과 결과 숨기기</string>
     <string name="soulseek_share_library">라이브러리 공유</string>
     <string name="soulseek_sharing_disabled">공유: 꺼짐 (설정에서 비활성화)</string>
     <string name="soulseek_invalid_username">사용자 이름: 영문, 숫자, _ - 만 (최대 20자)</string>

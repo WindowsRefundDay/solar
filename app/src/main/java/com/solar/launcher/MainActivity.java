@@ -437,7 +437,7 @@ public class MainActivity extends Activity {
     private long podcastDownloadStallCheckBytes = 0;
     private boolean podcastRecoveryInFlight = false;
     private boolean soulseekAutoDownloadPending = false;
-    private boolean soulseekHideFlac = true;
+    private boolean soulseekHideHighBitrate = true;
     private boolean soulseekSharingEnabled = true;
     private int soulseekListenPort = 0;
     private int keyboardPurpose = KEYBOARD_WIFI;
@@ -1551,7 +1551,13 @@ public class MainActivity extends Activity {
         try { statusBarShowsTitle = prefs.getBoolean("status_bar_title", false); } catch (Exception e) {}
         try { statusBarMatchFont = prefs.getBoolean("status_bar_match_font", true); } catch (Exception e) {}
         ThemeManager.setStatusBarMatchItemText(statusBarMatchFont);
-        try { soulseekHideFlac = prefs.getBoolean(SoulseekAccount.PREF_HIDE_FLAC, true); } catch (Exception e) {}
+        try {
+            if (prefs.contains(SoulseekAccount.PREF_HIDE_HIGH_BITRATE)) {
+                soulseekHideHighBitrate = prefs.getBoolean(SoulseekAccount.PREF_HIDE_HIGH_BITRATE, true);
+            } else {
+                soulseekHideHighBitrate = prefs.getBoolean(SoulseekAccount.PREF_HIDE_FLAC, true);
+            }
+        } catch (Exception e) {}
         try {
             soulseekSharingEnabled = prefs.getBoolean(SoulseekAccount.PREF_SHARING_ENABLED, true);
         } catch (Exception e) {}
@@ -4949,12 +4955,29 @@ public class MainActivity extends Activity {
             return true;
         }
         // ponytail: Y1 wheel OK is often KEYCODE_MEDIA_PLAY_PAUSE — treat as center everywhere
+        // except keyboard: Play/Pause short=OK, hold=charset (onKeyDown/onKeyUp)
         if (isContextMenuOkKey(event.getKeyCode())) {
-            if (isWakingKeyEvent(event)) return true;
-            boolean fromMenu = themedContextMenu != null && themedContextMenu.isShowing();
-            if (event.getAction() == KeyEvent.ACTION_DOWN) return trackCenterKeyDown(event, fromMenu);
-            if (event.getAction() == KeyEvent.ACTION_UP) return handleCenterKeyUp(event, fromMenu);
-            return true;
+            boolean keyboardPlayPause = currentScreenState == STATE_WIFI_KEYBOARD
+                    && isMediaPlayPauseKey(event.getKeyCode());
+            // #region agent log
+            if (keyboardPlayPause) {
+                try {
+                    org.json.JSONObject d = new org.json.JSONObject();
+                    d.put("action", event.getAction());
+                    d.put("keyCode", event.getKeyCode());
+                    d.put("routing", "keyboard-pp-path");
+                    DebugAgentLog.log(this, "MainActivity.dispatchKeyEvent",
+                            "keyboard pp bypass center routing", "H1", d);
+                } catch (Exception ignored) {}
+            }
+            // #endregion
+            if (!keyboardPlayPause) {
+                if (isWakingKeyEvent(event)) return true;
+                boolean fromMenu = themedContextMenu != null && themedContextMenu.isShowing();
+                if (event.getAction() == KeyEvent.ACTION_DOWN) return trackCenterKeyDown(event, fromMenu);
+                if (event.getAction() == KeyEvent.ACTION_UP) return handleCenterKeyUp(event, fromMenu);
+                return true;
+            }
         }
         if (themedContextMenu != null && themedContextMenu.isShowing()) {
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
@@ -5264,6 +5287,15 @@ public class MainActivity extends Activity {
     }
 
     private void handleKeyboardPlayPauseLongPress() {
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("indexBefore", keyboardIndex);
+            d.put("ppLongDoCase", keyboardPpLongDoCase);
+            DebugAgentLog.log(this, "MainActivity.handleKeyboardPlayPauseLongPress",
+                    "charset switch long press", "H2", d);
+        } catch (Exception ignored) {}
+        // #endregion
         clickFeedback();
         if (keyboardPpLongDoCase) {
             int flipped = keyboardFlipCaseIndex(keyboardIndex);
@@ -5877,6 +5909,15 @@ public class MainActivity extends Activity {
     }
 
     private String rowLabel(String rowKey) {
+        if (rowKey != null && rowKey.startsWith("home.shortcut.")
+                && SettingsScreens.HOME.equals(settingsSubScreenKey)) {
+            String id = rowKey.substring("home.shortcut.".length());
+            HomeMenuConfig.Entry e = HomeMenuConfig.find(id);
+            if (e != null) return homeShortcutEditorLabel(e);
+        }
+        if (RowKeys.HOME_MORE.equals(rowKey) && SettingsScreens.HOME.equals(settingsSubScreenKey)) {
+            return homeEditorToggleLabel(R.string.home_screen_more, HomeMenuConfig.isMoreEnabled(prefs));
+        }
         int res = RowKeys.labelResId(rowKey);
         return res != 0 ? getString(res) : rowKey;
     }
@@ -5889,7 +5930,11 @@ public class MainActivity extends Activity {
 
     /** Y1 settings list: title only on row; state/icon live in the right preview pane. */
     private LinearLayout createSettingsRow(String rowKey, int labelResId, boolean submenu) {
-        final String title = getString(labelResId);
+        return createSettingsRow(rowKey, getString(labelResId), submenu, true);
+    }
+
+    private LinearLayout createSettingsRow(String rowKey, CharSequence title, boolean submenu,
+            boolean showInlineState) {
         final LinearLayout layout = new LinearLayout(this);
         layout.setTag(rowKey);
         layout.setSoundEffectsEnabled(false);
@@ -5915,7 +5960,7 @@ public class MainActivity extends Activity {
 
         final TextView tvRight = new TextView(this);
         tvRight.setFocusable(false);
-        if (isFullWidthMenus && !submenu) {
+        if (isFullWidthMenus && !submenu && showInlineState) {
             tvRight.setTag("inline_state");
             tvRight.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
             tvRight.setText(resolveSettingStateText(rowKey));
@@ -6674,7 +6719,7 @@ public class MainActivity extends Activity {
             HomeMenuConfig.Entry e = HomeMenuConfig.find(id);
             if (e == null) return "";
             if (SettingsScreens.HOME.equals(settingsSubScreenKey)) {
-                return homeShortcutEditorState(id);
+                return "";
             }
             if (HomeMenuConfig.ID_GET_THEMES.equals(id) || HomeMenuConfig.ID_THEMES.equals(id)) {
                 return getString(R.string.home_screen_preview_themes);
@@ -6687,6 +6732,7 @@ public class MainActivity extends Activity {
             return stateOnOff(HomeMenuConfig.isShortcutEnabled(prefs, id));
         }
         if (RowKeys.HOME_MORE.equals(rowKey)) {
+            if (SettingsScreens.HOME.equals(settingsSubScreenKey)) return "";
             return stateOnOff(HomeMenuConfig.isMoreEnabled(prefs));
         }
         if (RowKeys.HOME_MANAGE_MORE.equals(rowKey)) return "";
@@ -6698,7 +6744,7 @@ public class MainActivity extends Activity {
             if (RowKeys.SOULSEEK_CONNECTION.equals(rowKey)) return soulseekSharingStatusLabel();
             if (RowKeys.SOULSEEK_ABOUT.equals(rowKey)) return getString(R.string.soulseek_preview_about);
             if (RowKeys.SOULSEEK_REGENERATE.equals(rowKey)) return getString(R.string.soulseek_preview_regenerate);
-            if (RowKeys.SOULSEEK_HIDE_FLAC.equals(rowKey)) return stateOnOff(soulseekHideFlac);
+            if (RowKeys.SOULSEEK_HIDE_HIGH_BITRATE.equals(rowKey)) return stateOnOff(soulseekHideHighBitrate);
             if (RowKeys.SOULSEEK_SHARING.equals(rowKey)) return stateOnOff(soulseekSharingEnabled);
         }
         if (RowKeys.SOULSEEK_ACCOUNT.equals(rowKey) && SettingsScreens.isSoulseek(settingsSubScreenKey)) {
@@ -7133,6 +7179,17 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
         // #endregion
         if (heldMs >= CENTER_SLEEP_HOLD_MS && !suppressCenterSleepForReorder(heldMs)) {
+            // #region agent log
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("heldMs", heldMs);
+                d.put("screen", currentScreenState);
+                d.put("keyCode", event.getKeyCode());
+                d.put("wifiKeyboard", currentScreenState == STATE_WIFI_KEYBOARD);
+                DebugAgentLog.log(this, "MainActivity.handleCenterKeyUp",
+                        "center hold triggered screen sleep", "H1", d);
+            } catch (Exception ignored) {}
+            // #endregion
             performScreenSleep(false);
             return true;
         }
@@ -11522,18 +11579,18 @@ public class MainActivity extends Activity {
         });
         containerSettingsItems.addView(btnSharing);
 
-        LinearLayout btnHideFlac = createSettingsRow(RowKeys.SOULSEEK_HIDE_FLAC,
-                R.string.soulseek_hide_flac, false);
-        btnHideFlac.setOnClickListener(new View.OnClickListener() {
+        LinearLayout btnHideHighBitrate = createSettingsRow(RowKeys.SOULSEEK_HIDE_HIGH_BITRATE,
+                R.string.soulseek_hide_high_bitrate, false);
+        btnHideHighBitrate.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 clickFeedback();
-                soulseekHideFlac = !soulseekHideFlac;
-                prefs.edit().putBoolean(SoulseekAccount.PREF_HIDE_FLAC, soulseekHideFlac).commit();
-                refreshSettingsPreview(RowKeys.SOULSEEK_HIDE_FLAC);
+                soulseekHideHighBitrate = !soulseekHideHighBitrate;
+                prefs.edit().putBoolean(SoulseekAccount.PREF_HIDE_HIGH_BITRATE, soulseekHideHighBitrate).commit();
+                refreshSettingsPreview(RowKeys.SOULSEEK_HIDE_HIGH_BITRATE);
             }
         });
-        containerSettingsItems.addView(btnHideFlac);
+        containerSettingsItems.addView(btnHideHighBitrate);
 
         Button btnSoulseekRegen = createListButton(getString(R.string.soulseek_regenerate_account));
         btnSoulseekRegen.setOnClickListener(new View.OnClickListener() {
@@ -12023,8 +12080,14 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    private String homeShortcutEditorState(String id) {
-        return stateOnOff(HomeMenuConfig.isShortcutEnabled(prefs, id));
+    private String homeEditorToggleLabel(int labelResId, boolean enabled) {
+        String name = getString(labelResId);
+        return getString(enabled ? R.string.home_screen_label_on : R.string.home_screen_label_off, name);
+    }
+
+    private String homeShortcutEditorLabel(HomeMenuConfig.Entry entry) {
+        boolean shown = entry.required || HomeMenuConfig.isShortcutEnabled(prefs, entry.id);
+        return homeEditorToggleLabel(entry.labelResId, shown);
     }
 
     private void onHomeShortcutEditorClick(final HomeMenuConfig.Entry entry) {
@@ -12064,7 +12127,8 @@ public class MainActivity extends Activity {
         createCategoryHeader(getString(R.string.home_screen_shortcuts));
 
         for (final HomeMenuConfig.Entry entry : HomeMenuConfig.loadEditorCatalogEntries()) {
-            final LinearLayout row = createSettingsRow(RowKeys.homeShortcut(entry.id), entry.labelResId, false);
+            final LinearLayout row = createSettingsRow(
+                    RowKeys.homeShortcut(entry.id), homeShortcutEditorLabel(entry), false, false);
             if (!entry.required) {
                 row.setOnClickListener(new View.OnClickListener() {
                     @Override
@@ -12079,7 +12143,9 @@ public class MainActivity extends Activity {
 
         createCategoryHeader(getString(R.string.home_screen_options));
 
-        LinearLayout btnMoreTile = createSettingsRow(RowKeys.HOME_MORE, R.string.home_screen_more, false);
+        LinearLayout btnMoreTile = createSettingsRow(RowKeys.HOME_MORE,
+                homeEditorToggleLabel(R.string.home_screen_more, HomeMenuConfig.isMoreEnabled(prefs)),
+                false, false);
         btnMoreTile.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -14353,6 +14419,20 @@ public class MainActivity extends Activity {
         boolean wifi = hasInternetConnection();
         soulseekSharePolicy.setUserEnabled(soulseekSharingEnabled);
         soulseekSharePolicy.update(soulseekCharging, wifi, reachUi);
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("charging", soulseekCharging);
+            d.put("wifi", wifi);
+            d.put("reachUi", reachUi);
+            d.put("sharingEnabled", soulseekSharingEnabled);
+            d.put("policyState", soulseekSharePolicy.state().name());
+            d.put("announce", soulseekSharePolicy.announceShares());
+            d.put("indexedFiles", soulseekShareIndex.fileCount());
+            DebugAgentLog.log(this, "MainActivity.updateSoulseekSharePolicy",
+                    "policy tick", "H1", d);
+        } catch (Exception ignored) {}
+        // #endregion
         if (!wifi) {
             if (soulseekClient != null && !hasActiveReachDownload() && !soulseekSearchInProgress) {
                 soulseekClient.pauseWhenIdle();
@@ -14389,6 +14469,18 @@ public class MainActivity extends Activity {
                     try {
                         soulseekShareIndex.scan(account.username, rootFolder, PodcastLibrary.ROOT);
                         SoulseekClient c = soulseekClient;
+                        // #region agent log
+                        try {
+                            org.json.JSONObject d = new org.json.JSONObject();
+                            d.put("files", soulseekShareIndex.fileCount());
+                            d.put("dirs", soulseekShareIndex.dirCount());
+                            d.put("musicRoot", rootFolder != null ? rootFolder.getAbsolutePath() : "null");
+                            d.put("musicExists", rootFolder != null && rootFolder.isDirectory());
+                            d.put("user", account.username);
+                            DebugAgentLog.log(MainActivity.this, "MainActivity.updateSoulseekSharePolicy",
+                                    "share scan done", "H2", d);
+                        } catch (Exception ignored) {}
+                        // #endregion
                         if (c != null) {
                             c.setShareIndex(soulseekShareIndex);
                             c.refreshShareAnnouncement();
@@ -14493,7 +14585,7 @@ public class MainActivity extends Activity {
         @Override
         public void onSearchResult(final SoulseekClient.Result result) {
             if (soulseekClient != null && soulseekClient.isPeerDenied(result.username)) return;
-            if (soulseekHideFlac && SoulseekClient.Result.isFlacFile(result.filename)) return;
+            if (soulseekHideHighBitrate && result.isOverBitrateThreshold()) return;
             synchronized (soulseekPendingUi) {
                 soulseekPendingUi.add(result);
                 if (!soulseekUiFlushScheduled) {
@@ -16257,7 +16349,7 @@ public class MainActivity extends Activity {
     private boolean soulseekResultAllowed(SoulseekClient.Result r) {
         if (r == null) return false;
         if (soulseekClient != null && soulseekClient.isPeerDenied(r.username)) return false;
-        if (soulseekHideFlac && SoulseekClient.Result.isFlacFile(r.filename)) return false;
+        if (soulseekHideHighBitrate && r.isOverBitrateThreshold()) return false;
         return true;
     }
 
@@ -18280,6 +18372,17 @@ public class MainActivity extends Activity {
                 return true;
             }
             if (isMediaPlayPauseKey(keyCode)) {
+                // #region agent log
+                if (event.getRepeatCount() == 0) {
+                    try {
+                        org.json.JSONObject d = new org.json.JSONObject();
+                        d.put("keyCode", keyCode);
+                        d.put("repeat", event.getRepeatCount());
+                        DebugAgentLog.log(this, "MainActivity.onKeyDown",
+                                "keyboard pp down", "H1", d);
+                    } catch (Exception ignored) {}
+                }
+                // #endregion
                 if (event.getRepeatCount() == 0) {
                     keyboardPpDownAt = System.currentTimeMillis();
                     keyboardPpLongHandled = false;
@@ -18656,10 +18759,22 @@ public class MainActivity extends Activity {
                 return true;
             }
             if (isMediaPlayPauseKey(keyCode)) {
+                // #region agent log
+                try {
+                    org.json.JSONObject d = new org.json.JSONObject();
+                    d.put("keyCode", keyCode);
+                    d.put("longHandled", keyboardPpLongHandled);
+                    d.put("heldMs", keyboardPpDownAt > 0
+                            ? System.currentTimeMillis() - keyboardPpDownAt : 0);
+                    DebugAgentLog.log(this, "MainActivity.onKeyUp",
+                            "keyboard pp up", "H3", d);
+                } catch (Exception ignored) {}
+                // #endregion
                 if (!keyboardPpLongHandled) {
                     clickFeedback();
                     handleKeyboardEnter();
                 }
+                keyboardPpDownAt = 0;
                 return true;
             }
         }

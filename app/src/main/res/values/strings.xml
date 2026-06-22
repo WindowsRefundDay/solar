@@ -8,6 +8,8 @@
     <string name="common_back_short">〈 BACK</string>
     <string name="common_on">On</string>
     <string name="common_off">Off</string>
+    <string name="home_screen_label_on">✔ %1$s</string>
+    <string name="home_screen_label_off">✗ %1$s</string>
     <string name="common_one">ONE</string>
     <string name="common_all">ALL</string>
     <string name="common_wait">Wait…</string>
@@ -457,7 +459,7 @@
     <string name="soulseek_receiving">Receiving file…</string>
     <string name="soulseek_account_hint">Account is created on first login. Inactive 30+ days may be recycled.</string>
     <string name="soulseek_regenerate_account">Regenerate auto account</string>
-    <string name="soulseek_hide_flac">Hide FLAC results</string>
+    <string name="soulseek_hide_high_bitrate">Hide results over 320 kbps</string>
     <string name="soulseek_share_library">Share library</string>
     <string name="soulseek_sharing_disabled">Sharing: off (disabled in Settings)</string>
     <string name="soulseek_invalid_username">Username: letters, digits, _ - only (max 20)</string>

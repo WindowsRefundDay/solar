@@ -132,9 +132,22 @@ public final class SoulseekClient extends Thread {
       return 0;
     }
 
-    public static boolean isFlacFile(String filename) {
-      if (filename == null) return false;
-      return filename.toLowerCase(Locale.US).endsWith(".flac");
+    public static final int HIGH_BITRATE_THRESHOLD_KBPS = 320;
+
+    /** True when this result should be hidden by the Reach high-bitrate filter. */
+    public boolean isOverBitrateThreshold() {
+      return effectiveBitrateKbps() > HIGH_BITRATE_THRESHOLD_KBPS;
+    }
+
+    int effectiveBitrateKbps() {
+      if (bitrate > 0) return bitrate;
+      if (duration > 0 && size > 0) {
+        long kbps = (size * 8L) / (duration * 1000L);
+        if (kbps > 0 && kbps <= Integer.MAX_VALUE) return (int) kbps;
+      }
+      String ext = extension(filename);
+      if ("flac".equals(ext) || "wav".equals(ext) || "ape".equals(ext)) return 9999;
+      return 0;
     }
 
     private static String extension(String filename) {
@@ -1425,7 +1438,16 @@ public final class SoulseekClient extends Thread {
   }
 
   private void replySharesList(Socket peer) throws Exception {
-    byte[] raw = sharePolicy.announceShares() && shareIndex.fileCount() > 0
+    boolean announce = sharePolicy.announceShares();
+    int files = shareIndex.fileCount();
+    int dirs = shareIndex.dirCount();
+    // #region agent log
+    try {
+      agentLog("SoulseekClient.replySharesList", "shares request", "H4",
+          new JSONObject().put("announce", announce).put("files", files).put("dirs", dirs));
+    } catch (Exception ignored) {}
+    // #endregion
+    byte[] raw = announce && files > 0
         ? shareIndex.buildShareListUncompressed()
         : SoulseekShareIndex.empty().buildShareListUncompressed();
     byte[] body = SoulseekShareIndex.zlibCompress(raw);
