@@ -4948,36 +4948,28 @@ public class MainActivity extends Activity {
     public boolean dispatchKeyEvent(KeyEvent event) {
         // ponytail: Y1 wheel OK is often KEYCODE_MEDIA_PLAY_PAUSE — treat as center while context menu is open
         if (themedContextMenu != null && themedContextMenu.isShowing()
-                && isContextMenuOkKey(event.getKeyCode())) {
+                && isCenterKey(event.getKeyCode())) {
             if (isWakingKeyEvent(event)) return true;
             if (event.getAction() == KeyEvent.ACTION_DOWN) return trackCenterKeyDown(event, true);
             if (event.getAction() == KeyEvent.ACTION_UP) return handleCenterKeyUp(event, true);
             return true;
         }
-        // ponytail: Y1 wheel OK is often KEYCODE_MEDIA_PLAY_PAUSE — treat as center everywhere
-        // except keyboard: Play/Pause short=OK, hold=charset (onKeyDown/onKeyUp)
-        if (isContextMenuOkKey(event.getKeyCode())) {
-            boolean keyboardPlayPause = currentScreenState == STATE_WIFI_KEYBOARD
-                    && isMediaPlayPauseKey(event.getKeyCode());
-            // #region agent log
-            if (keyboardPlayPause) {
-                try {
-                    org.json.JSONObject d = new org.json.JSONObject();
-                    d.put("action", event.getAction());
-                    d.put("keyCode", event.getKeyCode());
-                    d.put("routing", "keyboard-pp-path");
-                    DebugAgentLog.log(this, "MainActivity.dispatchKeyEvent",
-                            "keyboard pp bypass center routing", "H1", d);
-                } catch (Exception ignored) {}
+        // Center/OK activates focus; Play/Pause is transport (except keyboard — charset/OK there).
+        if (isCenterKey(event.getKeyCode())) {
+            if (isWakingKeyEvent(event)) return true;
+            boolean fromMenu = themedContextMenu != null && themedContextMenu.isShowing();
+            if (event.getAction() == KeyEvent.ACTION_DOWN) return trackCenterKeyDown(event, fromMenu);
+            if (event.getAction() == KeyEvent.ACTION_UP) return handleCenterKeyUp(event, fromMenu);
+            return true;
+        }
+        if (currentScreenState == STATE_WIFI_KEYBOARD && isMediaPlayPauseKey(event.getKeyCode())) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                return onKeyDown(event.getKeyCode(), event);
             }
-            // #endregion
-            if (!keyboardPlayPause) {
-                if (isWakingKeyEvent(event)) return true;
-                boolean fromMenu = themedContextMenu != null && themedContextMenu.isShowing();
-                if (event.getAction() == KeyEvent.ACTION_DOWN) return trackCenterKeyDown(event, fromMenu);
-                if (event.getAction() == KeyEvent.ACTION_UP) return handleCenterKeyUp(event, fromMenu);
-                return true;
+            if (event.getAction() == KeyEvent.ACTION_UP) {
+                return onKeyUp(event.getKeyCode(), event);
             }
+            return true;
         }
         if (themedContextMenu != null && themedContextMenu.isShowing()) {
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
@@ -4993,12 +4985,6 @@ public class MainActivity extends Activity {
 
     private static boolean isCenterKey(int keyCode) {
         return keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER;
-    }
-
-    /** Y1 OK / play-pause hardware key — activates context-menu focus while hold-Back menu is open. */
-    private static boolean isContextMenuOkKey(int keyCode) {
-        return isCenterKey(keyCode) || keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || keyCode == 85
-                || keyCode == KeyEvent.KEYCODE_MEDIA_STOP || keyCode == 86;
     }
 
     private boolean isWakingKeyEvent(KeyEvent event) {
@@ -7194,22 +7180,6 @@ public class MainActivity extends Activity {
             return true;
         }
         if (currentScreenState == STATE_PLAYER) {
-            if (isMediaPlayPauseKey(event.getKeyCode())) {
-                boolean wasScrubbing = playerScrubCursorActive;
-                if (wasScrubbing) cancelPlayerScrubCursor();
-                playOrPauseMusic();
-                clickFeedback();
-                // #region agent log
-                try {
-                    org.json.JSONObject d = new org.json.JSONObject();
-                    d.put("keyCode", event.getKeyCode());
-                    d.put("scrubWasActive", wasScrubbing);
-                    DebugAgentLog.log(this, "MainActivity.handleCenterKeyUp",
-                            "player play/pause", "H-PP", d);
-                } catch (Exception ignored) {}
-                // #endregion
-                return true;
-            }
             if (isCenterKey(event.getKeyCode())) {
                 if (playerScrubCursorActive) {
                     commitPlayerScrubCursor();
@@ -18300,6 +18270,9 @@ public class MainActivity extends Activity {
         }
         if (handleContextMenuMediaKeyDown(keyCode, event)) {
             return true;
+        }
+        if (isMediaPlayPauseKey(keyCode)) {
+            return false;
         }
         return true;
     }

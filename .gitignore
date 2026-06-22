@@ -40,5 +40,6 @@ Screenshot_*.png
 # ROM build outputs (local)
 /rom.zip
 /rom_type_b.zip
+/rom_y2.zip
 /dist/
 /release.json

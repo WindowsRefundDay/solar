@@ -1,6 +1,6 @@
-# Solar ROM builder (Innioasis Y1)
+# Solar ROM builder (Innioasis Y1 + Y2)
 
-Builds flashable **type A** and **type B** firmware images from the [Rockbox-Y1](https://github.com/rockbox-y1/rockbox) stock bases, with **Solar** (`com.solar.launcher`) as the system launcher.
+Builds flashable **Y1 type A**, **Y1 type B**, and **Y2 ATA** firmware images from stock bases, with **Solar** (`com.solar.launcher`) as the system launcher.
 
 Release source: [github.com/thatwitchgirl/solar](https://github.com/thatwitchgirl/solar)
 
@@ -19,6 +19,7 @@ Day-to-day development targets **`nightly`**. Merge to **`main`** when cutting a
 ./scripts/build.sh                    # signed app-release.apk
 ./solar-rom/scripts/build-rom.sh a --apk app/build/outputs/apk/release/app-release.apk rom.zip
 ./solar-rom/scripts/build-rom.sh b --apk app/build/outputs/apk/release/app-release.apk rom_type_b.zip
+./solar-rom/scripts/build-rom.sh y2 --apk app/build/outputs/apk/release/app-release.apk rom_y2.zip
 ```
 
 Requires `curl`, `unzip`, `zip`, `openssl`, `sudo`, and loop-mount support for ext4 (`e2fsprogs`).
@@ -48,6 +49,6 @@ Override release repo for ROM downloads: `SOLAR_GITHUB_REPO=thatwitchgirl/solar`
 
 ## CI
 
-`.github/workflows/build-release.yml` runs on pushes to **`main`** and **`nightly`**: signs the release APK (platform keys in repo secrets), builds both ROM zips, and publishes a GitHub release.
+`.github/workflows/build-release.yml` runs on pushes to **`main`** and **`nightly`**: signs the release APK, builds all three ROM zips (`rom.zip`, `rom_type_b.zip`, `rom_y2.zip`), and publishes a GitHub release.
 
 Required secrets: `SOLAR_PLATFORM_KEY_PK8_B64`, `SOLAR_PLATFORM_KEY_PEM_B64` (base64-encoded AOSP test platform key material).
