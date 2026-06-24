@@ -25923,13 +25923,46 @@ public class MainActivity extends Activity {
         return Y1InputKeys.isPlayPauseKey(keyCode);
     }
 
-    /** Prev/next/play-pause while context menu is open; wheel volume stays on volume tier only. */
+    /**
+     * Side track keys while context menu is open — navigate the modal, never skip tracks.
+     * ponytail: 88/87 replaced wheel-as-skip after Y1-Rockbox.kl; must drive quick-bar / dialog focus.
+     */
     private boolean handleContextMenuMediaKeyDown(int keyCode, KeyEvent event) {
         if (isMediaPlayPauseKey(keyCode)) {
             return false;
         }
         if (isMediaSkipKey(keyCode)) {
-            return handleMediaSkipKeyDown(keyCode, event);
+            return routeContextMenuDirectionalKey(isMediaNextKey(keyCode) ? 1 : -1, isMediaNextKey(keyCode));
+        }
+        return false;
+    }
+
+    /** Route track prev/next (or vertical wheel delta) within an open context / confirm modal. */
+    private boolean routeContextMenuDirectionalKey(int verticalDelta, boolean horizontalNext) {
+        if (themedContextMenu == null || !themedContextMenu.isShowing()) return false;
+        ThemedContextMenu.FocusZone zone = themedContextMenu.focusZone();
+        if (themedContextMenu.isDialogStyle()) {
+            themedContextMenu.moveFocus(verticalDelta);
+            syncContextVolumeSliderWithFocus();
+            if (contextMenuInQueueTier) contextQueueFocusIndex = themedContextMenu.focusIndex();
+            clickFeedback();
+            return true;
+        }
+        if (zone == ThemedContextMenu.FocusZone.QUICK_BAR) {
+            int hKey = horizontalNext ? KeyEvent.KEYCODE_DPAD_RIGHT : KeyEvent.KEYCODE_DPAD_LEFT;
+            if (themedContextMenu.handleKeyHorizontal(hKey)) {
+                syncContextVolumeSliderWithFocus();
+                clickFeedback();
+                return true;
+            }
+        }
+        if (zone == ThemedContextMenu.FocusZone.TIER_CONTENT
+                || zone == ThemedContextMenu.FocusZone.OPTIONS_TITLE) {
+            themedContextMenu.moveFocus(verticalDelta);
+            syncContextVolumeSliderWithFocus();
+            if (contextMenuInQueueTier) contextQueueFocusIndex = themedContextMenu.focusIndex();
+            clickFeedback();
+            return true;
         }
         return false;
     }
@@ -26301,14 +26334,22 @@ public class MainActivity extends Activity {
             }
         }
         if (Y1InputKeys.isWheelUp(keyCode)) {
-            themedContextMenu.moveFocus(-1);
+            if (themedContextMenu.focusZone() == ThemedContextMenu.FocusZone.QUICK_BAR) {
+                themedContextMenu.moveQuickBarFocus(-1);
+            } else {
+                themedContextMenu.moveFocus(-1);
+            }
             syncContextVolumeSliderWithFocus();
             if (contextMenuInQueueTier) contextQueueFocusIndex = themedContextMenu.focusIndex();
             clickFeedback();
             return true;
         }
         if (Y1InputKeys.isWheelDown(keyCode)) {
-            themedContextMenu.moveFocus(1);
+            if (themedContextMenu.focusZone() == ThemedContextMenu.FocusZone.QUICK_BAR) {
+                themedContextMenu.moveQuickBarFocus(1);
+            } else {
+                themedContextMenu.moveFocus(1);
+            }
             syncContextVolumeSliderWithFocus();
             if (contextMenuInQueueTier) contextQueueFocusIndex = themedContextMenu.focusIndex();
             clickFeedback();

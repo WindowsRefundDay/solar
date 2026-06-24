@@ -2906,10 +2906,7 @@ public final class ThemedContextMenu {
             return;
         }
         if (focusZone == FocusZone.QUICK_BAR) {
-            if (delta > 0 && labels != null && labels.length > 0) {
-                enterListFromQuickBar();
-                return;
-            }
+            // ponytail: only enter the list from the last visible quick chip (moveQuickFocus), not on every wheel tick.
             moveQuickFocus(delta);
             return;
         }
@@ -2954,6 +2951,11 @@ public final class ThemedContextMenu {
             }
             scrollFocusIntoView();
         }
+    }
+
+    /** Wheel / track keys on the horizontal quick-bar row (Wi‑Fi, BT, queue, …). */
+    public void moveQuickBarFocus(int delta) {
+        moveQuickFocus(delta);
     }
 
     private void moveQuickFocus(int delta) {

@@ -42,14 +42,16 @@ public final class Y1InputKeys {
         return keyCode == KEY_WHEEL_DOWN || keyCode == 127;
     }
 
-    /** Side previous-track — Y1-Rockbox.kl 165→88 only. */
+    /** Side previous — Y1-Rockbox.kl scancode 165 → DPAD_LEFT (21); Rockbox-y1 transport key. */
     public static boolean isTrackPreviousKey(int keyCode) {
-        return keyCode == KEY_TRACK_PREV || keyCode == 88;
+        return keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == 21
+                || keyCode == KEY_TRACK_PREV || keyCode == 88;
     }
 
-    /** Side next-track — Y1-Rockbox.kl 163→87 only. */
+    /** Side next — Y1-Rockbox.kl scancode 163 → DPAD_RIGHT (22); Rockbox-y1 transport key. */
     public static boolean isTrackNextKey(int keyCode) {
-        return keyCode == KEY_TRACK_NEXT || keyCode == 87;
+        return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == 22
+                || keyCode == KEY_TRACK_NEXT || keyCode == 87;
     }
 
     public static boolean isWheelKey(int keyCode) {
@@ -77,7 +79,7 @@ public final class Y1InputKeys {
         if (wheelMenuDelta(127) != 1) throw new AssertionError("wheel MEDIA_PAUSE");
         if (wheelMenuDelta(88) != 0) throw new AssertionError("track prev not wheel");
         if (wheelMenuDelta(87) != 0) throw new AssertionError("track next not wheel");
-        if (!isTrackPreviousKey(88)) throw new AssertionError("track prev");
-        if (!isTrackNextKey(87)) throw new AssertionError("track next");
+        if (!isTrackPreviousKey(21)) throw new AssertionError("track prev dpad");
+        if (!isTrackNextKey(22)) throw new AssertionError("track next dpad");
     }
 }

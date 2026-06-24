@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# Solar Y1 launcher switch — no reboot, no keylayout swap (unified Rockbox.kl).
+# Solar Y1 launcher switch — no full restart, no keylayout swap (unified Rockbox.kl).
 # Rockbox APK calls bare script → Solar. Solar calls with --rockbox → Rockbox.
 
 SOLAR_PKG="com.solar.launcher"

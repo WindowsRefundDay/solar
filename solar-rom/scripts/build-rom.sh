@@ -313,10 +313,21 @@ audit_rom_contents() {
         errors=$((errors + 1))
     fi
 
+    # ponytail: codec plugins ship inside org.rockbox.apk (lib/armeabi/*.so) — must survive ROM build.
+    if [ -f "$sys_mount/app/org.rockbox.apk" ]; then
+        rb_so_count=$(unzip -l "$sys_mount/app/org.rockbox.apk" 2>/dev/null \
+            | grep -c 'lib/armeabi/.*\.so' || true)
+        if [ "${rb_so_count:-0}" -lt 35 ]; then
+            echo "audit fail: org.rockbox.apk has ${rb_so_count:-0} native libs (expected >=35 from rockbox-y1 base)" >&2
+            errors=$((errors + 1))
+        fi
+    fi
+
     if [ ! -f "$sys_mount/etc/solar/switch-to-stock.sh" ]; then
         echo "audit fail: /system/etc/solar/switch-to-stock.sh missing" >&2
         errors=$((errors + 1))
-    elif grep -qi reboot "$sys_mount/etc/solar/switch-to-stock.sh" 2>/dev/null; then
+    elif grep -qiE '(^|[[:space:]]|/)reboot\b|reboot -p|/system/bin/reboot' \
+            "$sys_mount/etc/solar/switch-to-stock.sh" 2>/dev/null; then
         echo "audit fail: switch-to-stock.sh must not reboot (unified keymap)" >&2
         errors=$((errors + 1))
     fi
@@ -376,7 +387,8 @@ audit_rom_contents() {
     elif ! cmp -s "$user_mount/data/switch-to-stock.sh" "$sys_mount/etc/solar/switch-to-stock.sh"; then
         echo "audit fail: userdata switch-to-stock.sh must match /system/etc/solar copy" >&2
         errors=$((errors + 1))
-    elif grep -qi reboot "$user_mount/data/switch-to-stock.sh" 2>/dev/null; then
+    elif grep -qiE '(^|[[:space:]]|/)reboot\b|reboot -p|/system/bin/reboot' \
+            "$user_mount/data/switch-to-stock.sh" 2>/dev/null; then
         echo "audit fail: userdata switch-to-stock.sh must not reboot" >&2
         errors=$((errors + 1))
     fi
@@ -484,7 +496,7 @@ sudo chmod 755 "$MOUNT_SYS/etc/init.d/99Y1ButtonScript"
 sudo chown root:root "$MOUNT_SYS/etc/init.d/99Y1ButtonScript"
 
 [ -f "$SCRIPT_DIR/Y1-Rockbox.kl" ] || die "missing $SCRIPT_DIR/Y1-Rockbox.kl"
-# ponytail: one unified map for Solar + Rockbox-y1 — wheel 105/106→126/127, side 165/163→88/87.
+# ponytail: one unified map for Solar + Rockbox-y1 — wheel 105/106→126/127; side 165/163 stay 21/22.
 for _kl in Stock.kl Rockbox.kl Y1-Rockbox.kl Generic.kl; do
     sudo cp "$SCRIPT_DIR/Y1-Rockbox.kl" "$MOUNT_SYS/usr/keylayout/$_kl"
 done
