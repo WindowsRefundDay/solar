@@ -332,6 +332,19 @@ audit_rom_contents() {
         errors=$((errors + 1))
     fi
 
+    if [ ! -f "$sys_mount/etc/solar/sync-rockbox-libs.sh" ]; then
+        echo "audit fail: /system/etc/solar/sync-rockbox-libs.sh missing (Rockbox codec sync)" >&2
+        errors=$((errors + 1))
+    fi
+
+    if [ ! -f "$sys_mount/etc/solar/sync-y1-keymap.sh" ]; then
+        echo "audit fail: /system/etc/solar/sync-y1-keymap.sh missing (unified keymap sync)" >&2
+        errors=$((errors + 1))
+    elif [ ! -f "$sys_mount/etc/solar/Y1-Rockbox.kl" ]; then
+        echo "audit fail: /system/etc/solar/Y1-Rockbox.kl missing" >&2
+        errors=$((errors + 1))
+    fi
+
     if [ ! -f "$sys_mount/etc/init.d/99Y1ButtonScript" ]; then
         echo "audit fail: 99Y1ButtonScript missing (Back+Play Rockbox gesture)" >&2
         errors=$((errors + 1))
@@ -488,15 +501,22 @@ echo "==> Install launcher switch scripts + unified Rockbox keymap"
 sudo mkdir -p "$MOUNT_SYS/etc/solar"
 sudo cp "$SCRIPT_DIR/switch-to-stock.sh" "$MOUNT_SYS/etc/solar/switch-to-stock.sh"
 sudo cp "$SCRIPT_DIR/switch-to-rockbox.sh" "$MOUNT_SYS/etc/solar/switch-to-rockbox.sh"
-sudo chmod 755 "$MOUNT_SYS/etc/solar/switch-to-stock.sh" "$MOUNT_SYS/etc/solar/switch-to-rockbox.sh"
-sudo chown root:root "$MOUNT_SYS/etc/solar/switch-to-stock.sh" "$MOUNT_SYS/etc/solar/switch-to-rockbox.sh"
+sudo cp "$SCRIPT_DIR/sync-rockbox-libs.sh" "$MOUNT_SYS/etc/solar/sync-rockbox-libs.sh"
+sudo cp "$SCRIPT_DIR/sync-y1-keymap.sh" "$MOUNT_SYS/etc/solar/sync-y1-keymap.sh"
+sudo cp "$SCRIPT_DIR/Y1-Rockbox.kl" "$MOUNT_SYS/etc/solar/Y1-Rockbox.kl"
+sudo chmod 755 "$MOUNT_SYS/etc/solar/switch-to-stock.sh" "$MOUNT_SYS/etc/solar/switch-to-rockbox.sh" \
+    "$MOUNT_SYS/etc/solar/sync-rockbox-libs.sh" "$MOUNT_SYS/etc/solar/sync-y1-keymap.sh"
+sudo chmod 644 "$MOUNT_SYS/etc/solar/Y1-Rockbox.kl"
+sudo chown root:root "$MOUNT_SYS/etc/solar/switch-to-stock.sh" "$MOUNT_SYS/etc/solar/switch-to-rockbox.sh" \
+    "$MOUNT_SYS/etc/solar/sync-rockbox-libs.sh" "$MOUNT_SYS/etc/solar/sync-y1-keymap.sh" \
+    "$MOUNT_SYS/etc/solar/Y1-Rockbox.kl"
 
 sudo cp "$REPO_ROOT/solar-rom/system/99Y1ButtonScript" "$MOUNT_SYS/etc/init.d/99Y1ButtonScript"
 sudo chmod 755 "$MOUNT_SYS/etc/init.d/99Y1ButtonScript"
 sudo chown root:root "$MOUNT_SYS/etc/init.d/99Y1ButtonScript"
 
 [ -f "$SCRIPT_DIR/Y1-Rockbox.kl" ] || die "missing $SCRIPT_DIR/Y1-Rockbox.kl"
-# ponytail: one unified map for Solar + Rockbox-y1 — wheel 105/106→126/127; side 165/163 stay 21/22.
+# ponytail: one unified map for Solar + Rockbox-y1 — wheel 105/106→126/127, side 165/163→88/87.
 for _kl in Stock.kl Rockbox.kl Y1-Rockbox.kl Generic.kl; do
     sudo cp "$SCRIPT_DIR/Y1-Rockbox.kl" "$MOUNT_SYS/usr/keylayout/$_kl"
 done

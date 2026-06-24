@@ -16,3 +16,5 @@ ROM build keeps `org.rockbox.apk` + `librockbox.so` from the rockbox-y1 base ima
 (codec `.so` files live inside the APK under `lib/armeabi/`). Audit requires ≥35 native libs.
 
 Test without reflash: `solar-rom/scripts/push-y1-keymap.sh`
+
+**Codec lib sync:** `sync-rockbox-libs.sh` re-extracts `lib/armeabi/*.so` from `org.rockbox.apk` into `/data/data/org.rockbox/lib/` when stale. Solar runs this on boot and before every Switch to Rockbox (`RockboxLibSync.java`). See `.cursor/rules/rockbox-y1-coexistence.mdc`.

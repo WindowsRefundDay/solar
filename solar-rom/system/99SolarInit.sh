@@ -25,6 +25,12 @@ if [ -f /system/etc/solar/switch-to-rockbox.sh ]; then
     cp /system/etc/solar/switch-to-rockbox.sh /data/data/
     chmod 755 /data/data/switch-to-rockbox.sh
 fi
+if [ -f /system/etc/solar/sync-rockbox-libs.sh ]; then
+    sh /system/etc/solar/sync-rockbox-libs.sh
+fi
+if [ -f /system/etc/solar/sync-y1-keymap.sh ]; then
+    sh /system/etc/solar/sync-y1-keymap.sh
+fi
 
 if [ ! -f /system/lib/libconscrypt_jni.so ]; then
     log -p w -t SolarInit "missing /system/lib/libconscrypt_jni.so — OkHttp/Reach TLS needs clean_install or Solar ROM"

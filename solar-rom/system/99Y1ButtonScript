@@ -1,7 +1,7 @@
 #!/system/bin/sh
 # Solar Y1 button script (patched from rockbox-y1).
 # 1. Restart Rockbox when prev+next held 10s while Rockbox is running.
-# 2. Switch to Rockbox when Back+Play held 10s while Solar is active (no reboot, no .kl swap).
+# 2. Back+Play held 10s toggles Solar ↔ Rockbox (no reboot, unified keymap).
 
 BOOT_COMPLETED=0
 while [ "$BOOT_COMPLETED" -ne 1 ]; do
@@ -42,16 +42,20 @@ press_start_sec=0
 press_start_sec_dual_boot=0
 
 package_rb="org.rockbox"
+package_solar="com.solar.launcher"
 
 restart_rockbox() {
     am force-stop org.rockbox
     am start -n org.rockbox/.RockboxActivity
 }
 
-dual_boot() {
-    # Switch to Rockbox without reboot (unified Rockbox.kl — no keylayout copy).
-    if pm list packages -d | grep -q "$package_rb"; then
-        echo "Package $package_rb is disabled — switching to Rockbox."
+# Back+Play 10s: switch to the other launcher (whichever is currently disabled).
+launcher_handoff() {
+    if pm list packages -d | grep -q "$package_solar"; then
+        echo "Solar disabled — switching to Solar."
+        sh /data/data/switch-to-stock.sh
+    elif pm list packages -d | grep -q "$package_rb"; then
+        echo "Rockbox disabled — switching to Rockbox."
         sh /data/data/switch-to-stock.sh --rockbox
     fi
 }
@@ -124,7 +128,7 @@ while true; do
                 if [ "$menu_down" -eq 0 ] || [ "$play_down" -eq 0 ]; then
                     hold_time=$((sec - press_start_sec_dual_boot))
                     if [ "$hold_time" -ge "$MAX_HOLD_DUAL_BOOT" ]; then
-                        dual_boot
+                        launcher_handoff
                     fi
                     press_start_sec_dual_boot=0
                 fi

@@ -52,8 +52,11 @@ public final class LauncherSwitch {
         }
     }
 
-    /** Switch to Rockbox (pm enable + am start + pm disable Solar). Requires root. */
-    public static boolean switchToRockbox() {
+    /** Switch to Rockbox — sync keymap/codecs, enable Rockbox, start it, then disable Solar. */
+    public static boolean switchToRockbox(Context context) {
+        if (context != null) {
+            RockboxCoexistence.prepareForRockboxSwitch(context);
+        }
         return runSu(SWITCH_TO_ROCKBOX);
     }
 
