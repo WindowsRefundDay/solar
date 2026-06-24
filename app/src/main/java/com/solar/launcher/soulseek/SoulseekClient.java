@@ -4,6 +4,8 @@ import android.content.Context;
 import android.net.wifi.WifiManager;
 import android.os.PowerManager;
 
+import com.solar.launcher.ReachPeerConnectivity;
+
 import org.json.JSONObject;
 
 import java.io.BufferedOutputStream;
@@ -38,14 +40,16 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class SoulseekClient extends Thread {
   private static final int PEER_READ_TIMEOUT_MS = 30000;
   private static final int PEER_CONNECT_MS = 10000;
-  private static final int SEARCH_COLLECT_MS = 10000;
+  private static final int SEARCH_COLLECT_MS = 13000;
   private static final int FALLBACK_COLLECT_MS = 6000;
   private static final int FALLBACK_MIN_RESULTS = 8;
   private static final int DOWNLOAD_TRANSFER_TIMEOUT_MS = 300000;
   private static final int DOWNLOAD_PEER_WAIT_MS = 45000;
   private static final int DOWNLOAD_FILE_CONNECT_MS = 45000;
   private static final int OUTBOUND_FILE_WAIT_MS = 12000;
-  private static final int NATPMP_RENEW_MS = 20 * 60 * 1000;
+  private static final int NATPMP_RENEW_MS = 30 * 60 * 1000;
+  private static final int NATPMP_RETRY_MS = 12_000;
+  private static final int NATPMP_RETRY_MAX = 8;
   private static final int MAX_SEARCH_RESULTS = 150;
   private static final int MAX_SEARCH_NOTIFY = 80;
   public static final int REACH_EARLY_PLAY_PERCENT = 20;
@@ -62,10 +66,11 @@ public final class SoulseekClient extends Thread {
     public final boolean livePeer;
     public final boolean freeSlot;
     public final int speed;
+    public final int queueLength;
     public final int qualityScore;
 
     public Result(String username, String filename, long size, int bitrate, int duration,
-                  boolean livePeer, boolean freeSlot, int speed) {
+                  boolean livePeer, boolean freeSlot, int speed, int queueLength) {
       this.username = username;
       this.filename = filename;
       this.size = size;
@@ -74,7 +79,9 @@ public final class SoulseekClient extends Thread {
       this.livePeer = livePeer;
       this.freeSlot = freeSlot;
       this.speed = speed;
-      this.qualityScore = computeQualityScore(filename, size, livePeer, freeSlot, speed);
+      this.queueLength = queueLength;
+      this.qualityScore = computeQualityScore(filename, size, duration, livePeer, freeSlot, speed,
+              queueLength, null);
     }
 
     public String title() {
@@ -88,24 +95,55 @@ public final class SoulseekClient extends Thread {
       return "[*  ]";
     }
 
-    /**
-     * Nicotine+-style download reliability rank (integer sort key).
-     * ponytail: free slot dominates, then upload speed (wire attr 6), then live peer.
-     */
-    static int computeQualityScore(String filename, long size, boolean livePeer, boolean freeSlot, int speed) {
-      int score = freeSlot ? 2_000_000 : -500_000;
+    /** Weighted rank: free slot 40%, upload speed 30%, queue pressure 30%. */
+    static int computeQualityScore(String filename, long size, int duration, boolean livePeer,
+                                   boolean freeSlot, int speed, int queueLength, String query) {
+      int score = freeSlot ? 400_000 : 0;
       if (speed > 0) {
-        int speedPts = speed / 1024;
-        if (speedPts > 800_000) speedPts = 800_000;
-        score += speedPts;
-      } else if (!freeSlot) {
-        score -= 50_000;
+        long speedPts = (speed / 1024L) * 300_000L / 800_000L;
+        score += (int) Math.min(300_000, speedPts);
       }
-      if (livePeer) score += 100_000;
+      int queuePts = 300_000;
+      if (queueLength > 0) {
+        queuePts = Math.max(0, 300_000 - Math.min(queueLength, 50) * 300_000 / 50);
+      } else if (!freeSlot && speed <= 0) {
+        queuePts = 50_000;
+      }
+      score += queuePts;
+      score += filenameRelevance(filename, query);
       score += formatBonus(filename);
-      if (size > 0 && size <= 4L * 1024 * 1024) score += 2_000;
-      else if (size > 20L * 1024 * 1024) score -= 5_000;
+      score += sizeDurationSanity(size, duration);
+      if (livePeer) score += 50_000;
       return score;
+    }
+
+    static int rankedScore(Result r, String query, Set<String> historyPeers) {
+      int score = computeQualityScore(r.filename, r.size, r.duration, r.livePeer, r.freeSlot,
+              r.speed, r.queueLength, query);
+      if (historyPeers != null && r.username != null) {
+        if (historyPeers.contains(r.username.toLowerCase(Locale.US))) score += 150_000;
+      }
+      return score;
+    }
+
+    static int filenameRelevance(String filename, String query) {
+      if (query == null || query.trim().isEmpty() || filename == null) return 0;
+      String path = filename.toLowerCase(Locale.US);
+      String[] tokens = query.toLowerCase(Locale.US).trim().split("\\s+");
+      if (tokens.length == 0) return 0;
+      int hits = 0;
+      for (String token : tokens) {
+        if (token.length() >= 2 && path.contains(token)) hits++;
+      }
+      return hits * 50_000;
+    }
+
+    static int sizeDurationSanity(long size, int duration) {
+      if (size <= 0 || duration <= 0) return 0;
+      long kbps = (size * 8L) / (duration * 1000L);
+      if (kbps >= 32 && kbps <= 400) return 5_000;
+      if (kbps > 2000 || kbps < 16) return -10_000;
+      return 0;
     }
 
     /** No free slot, unknown speed, not live — likely queued or stale distributed hit. */
@@ -115,15 +153,22 @@ public final class SoulseekClient extends Thread {
 
     /** Negative if {@code a} should rank above {@code b} (more likely to download). */
     public static int compareByDownloadReliability(Result a, Result b) {
+      return compareByDownloadReliability(a, b, null, null);
+    }
+
+    public static int compareByDownloadReliability(Result a, Result b, String query,
+                                                   Set<String> historyPeers) {
       boolean slowA = a.isLikelySlowDownload();
       boolean slowB = b.isLikelySlowDownload();
       if (slowA != slowB) return slowA ? 1 : -1;
+      int scoreA = rankedScore(a, query, historyPeers);
+      int scoreB = rankedScore(b, query, historyPeers);
+      if (scoreA != scoreB) return scoreB - scoreA;
       if (a.freeSlot != b.freeSlot) return a.freeSlot ? -1 : 1;
+      if (a.queueLength != b.queueLength) return Integer.compare(a.queueLength, b.queueLength);
       if (a.speed != b.speed) return Integer.compare(b.speed, a.speed);
       if (a.livePeer != b.livePeer) return a.livePeer ? -1 : 1;
-      int fmt = Integer.compare(formatBonus(b.filename), formatBonus(a.filename));
-      if (fmt != 0) return fmt;
-      return Integer.compare(b.qualityScore, a.qualityScore);
+      return Integer.compare(formatBonus(b.filename), formatBonus(a.filename));
     }
 
     static int formatBonus(String filename) {
@@ -193,8 +238,39 @@ public final class SoulseekClient extends Thread {
     void onError(String message);
   }
 
+  public interface SocialListener {
+    void onPrivateMessage(int messageId, int timestamp, String fromUser, String text);
+    void onUserStatusUpdate(String username, int status, boolean privileged);
+    void onRoomList(List<SoulseekWire.RoomEntry> rooms);
+    void onRoomMessage(String room, String sender, String text, int timestamp);
+    void onRoomJoined(String room);
+    void onRoomLeft(String room);
+    void onRoomUserJoined(String room, String username);
+    void onRoomUserLeft(String room, String username);
+    void onRoomTickers(String room, List<SoulseekWire.RoomTickerEntry> tickers);
+    void onRoomTickerAdded(String room, String username, String text);
+    void onRoomTickerRemoved(String room, String username);
+  }
+
+  public interface PeerOperation {
+    void run(Socket peer) throws Exception;
+    void onError(String reason);
+  }
+
+  public interface UserInterestsCallback {
+    void onInterests(String username, java.util.List<String> likes, java.util.List<String> dislikes);
+    void onError(String reason);
+  }
+
+  public interface InterestUsersCallback {
+    void onUsers(java.util.List<String> users);
+    void onError(String reason);
+  }
+
   private final String username;
   private final String password;
+  private final String clientDescription;
+  private final String userBio;
   private final File downloadDir;
   private final Context appContext;
   private final Listener listener;
@@ -220,6 +296,7 @@ public final class SoulseekClient extends Thread {
   private volatile boolean xferInProgress;
   private volatile SoulseekNatpmp.Result lastNatpmp;
   private volatile Thread natpmpRenewThread;
+  private volatile Thread natpmpRetryThread;
   private volatile int distribSearchIgnored;
   private final Object serverLock = new Object();
 
@@ -240,13 +317,63 @@ public final class SoulseekClient extends Thread {
   private final AtomicInteger incomingPeerHandlers = new AtomicInteger();
   private static final int MAX_PIERCE = 8;
   private static final int MAX_INCOMING_PEERS = 12;
+  private static final int MAX_UPLOAD_SLOTS = 20;
   private final Set<String> deniedPeers = Collections.synchronizedSet(new HashSet<String>());
   private volatile SoulseekShareIndex shareIndex = SoulseekShareIndex.empty();
   private volatile SoulseekSharePolicy sharePolicy = new SoulseekSharePolicy();
   private final Object uploadLock = new Object();
-  private volatile boolean uploadInProgress;
+  private int activeUploads = 0;
+  private final java.util.LinkedList<QueuedUpload> uploadQueue = new java.util.LinkedList<QueuedUpload>();
   private volatile Thread shareAnnounceThread;
   private volatile boolean shareAnnounceCoalesce;
+  private volatile long lastShareAnnounceMs;
+  private volatile int lastAnnouncedDirs = -1;
+  private volatile int lastAnnouncedFiles = -1;
+  private static final long SHARE_ANNOUNCE_MIN_INTERVAL_MS = 30_000;
+  private volatile SocialListener socialListener;
+  private final Set<String> joinedRooms = Collections.synchronizedSet(new HashSet<String>());
+  private volatile String pendingJoinRoom;
+  private volatile SoulseekUserDirectory.Callback pendingUserWatch;
+  private volatile String pendingWatchUser;
+  private volatile boolean messagingEnabled;
+  private final java.util.HashMap<String, UserInterestsCallback> pendingUserInterests =
+          new java.util.HashMap<String, UserInterestsCallback>();
+  private volatile InterestUsersCallback pendingInterestUsersCallback;
+
+  public void setSocialListener(SocialListener listener) {
+    socialListener = listener;
+  }
+
+  public void setMessagingEnabled(boolean enabled) {
+    messagingEnabled = enabled;
+  }
+
+  public boolean isUploadInProgress() {
+    synchronized (uploadLock) {
+      return activeUploads > 0;
+    }
+  }
+
+  public int getActiveUploadCount() {
+    synchronized (uploadLock) {
+      return activeUploads;
+    }
+  }
+
+  public int getUploadQueueDepth() {
+    synchronized (uploadLock) {
+      return uploadQueue.size();
+    }
+  }
+
+  public boolean isBusy() {
+    return isTransferActive() || isUploadInProgress() || isSearchActive()
+            || sharePolicy.shouldKeepClientAlive();
+  }
+
+  public String getUsername() {
+    return username;
+  }
 
   public void setShareIndex(SoulseekShareIndex index) {
     shareIndex = index != null ? index : SoulseekShareIndex.empty();
@@ -265,8 +392,24 @@ public final class SoulseekClient extends Thread {
   }
 
   public void refreshShareAnnouncement() {
+    if (!running.get()) return;
     shareAnnounceCoalesce = true;
     if (isSearchActive()) return;
+    int dirs = shareIndex.dirCount();
+    int files = shareIndex.fileCount();
+    long now = System.currentTimeMillis();
+    if (lastShareAnnounceMs > 0
+            && now - lastShareAnnounceMs < SHARE_ANNOUNCE_MIN_INTERVAL_MS
+            && dirs == lastAnnouncedDirs && files == lastAnnouncedFiles) {
+      // #region agent log
+      try {
+        agentLog("SoulseekClient.refreshShareAnnouncement", "debounced", "H1",
+            new JSONObject().put("dirs", dirs).put("files", files)
+                .put("ageMs", now - lastShareAnnounceMs));
+      } catch (Exception ignored) {}
+      // #endregion
+      return;
+    }
     if (shareAnnounceThread != null && shareAnnounceThread.isAlive()) return;
     shareAnnounceThread = new Thread(new Runnable() {
       @Override
@@ -286,6 +429,7 @@ public final class SoulseekClient extends Thread {
   }
 
   private void runShareAnnouncementOnce() {
+    if (!running.get()) return;
     if (isSearchActive()) {
       shareAnnounceCoalesce = true;
       return;
@@ -300,9 +444,15 @@ public final class SoulseekClient extends Thread {
         return;
       }
       ensureConnected();
+      if (!running.get()) return;
       synchronized (serverLock) {
-        if (!loggedIn) return;
-        announceShareCountsLocked(shareIndex.dirCount(), shareIndex.fileCount());
+        if (!loggedIn || !running.get()) return;
+        int dirs = shareIndex.dirCount();
+        int files = shareIndex.fileCount();
+        announceShareCountsLocked(dirs, files);
+        lastShareAnnounceMs = System.currentTimeMillis();
+        lastAnnouncedDirs = dirs;
+        lastAnnouncedFiles = files;
       }
     } catch (Exception e) {
       debugLog("share announce fail: " + e);
@@ -310,9 +460,15 @@ public final class SoulseekClient extends Thread {
       try {
         agentLog("SoulseekClient.runShareAnnouncementOnce", "fail", "H1",
             new JSONObject().put("err", e.getClass().getSimpleName())
-                .put("msg", e.getMessage() != null ? e.getMessage() : ""));
+                .put("msg", e.getMessage() != null ? e.getMessage() : "")
+                .put("running", running.get()));
       } catch (Exception ignored) {}
       // #endregion
+      if (isTransientConnectError(e)) {
+        synchronized (serverLock) {
+          invalidateServerSessionLocked("share announce");
+        }
+      }
     }
   }
 
@@ -343,6 +499,11 @@ public final class SoulseekClient extends Thread {
     return reportedListenPort > 0 ? reportedListenPort : listenPort;
   }
 
+  public boolean isNatMapped() {
+    SoulseekNatpmp.Result r = lastNatpmp;
+    return r != null && r.mapped();
+  }
+
   public String getNatpmpStatusLine() {
     SoulseekNatpmp.Result r = lastNatpmp;
     if (r == null) return "NAT-PMP: not tried";
@@ -352,14 +513,106 @@ public final class SoulseekClient extends Thread {
       }
       return "NAT-PMP: port " + r.publicPort + " mapped";
     }
-    if ("no_gateway".equals(r.status)) return "NAT-PMP: no gateway";
-    if ("map_failed".equals(r.status)) return "NAT-PMP: router declined — forward manually";
+    if ("no_gateway".equals(r.status)) return "NAT-PMP: no gateway — check Wi‑Fi";
+    if ("no_local_ip".equals(r.status)) return "NAT-PMP: no local IP — connect Wi‑Fi";
+    if ("map_failed".equals(r.status)) {
+      if (r.gatewayIp != null) return "NAT-PMP: router declined (gw " + r.gatewayIp + ")";
+      return "NAT-PMP: router declined — forward manually";
+    }
     return "NAT-PMP: unavailable — forward port " + listenPort;
   }
 
   public boolean isPeerDenied(String peerUser) {
-    if (peerUser == null) return false;
     return deniedPeers.contains(peerUser.toLowerCase(Locale.US));
+  }
+
+  public void applyBlockedPeers(java.util.Collection<String> blocked) {
+    deniedPeers.clear();
+    if (blocked != null) {
+      for (String p : blocked) {
+        if (p != null && !p.isEmpty()) deniedPeers.add(p.toLowerCase(Locale.US));
+      }
+    }
+  }
+
+  public void blockPeer(final String peerUser) {
+    banPeer(peerUser);
+  }
+
+  /** Upload deny only — peer can still message; does not add server ignore list. */
+  public void banPeer(final String peerUser) {
+    if (peerUser == null || peerUser.trim().isEmpty()) return;
+    deniedPeers.add(peerUser.toLowerCase(Locale.US));
+  }
+
+  /** Server ignore list — suppresses PM notifications; does not deny uploads locally. */
+  public void ignorePeer(final String peerUser) {
+    if (peerUser == null || peerUser.trim().isEmpty()) return;
+    runServerOp("IgnorePeer", new Runnable() {
+      @Override
+      public void run() {
+        try {
+          sendServerLocked(SoulseekWire.MSG_ADD_TO_IGNORELIST, SoulseekWire.packString(peerUser));
+        } catch (Exception ignored) {}
+      }
+    });
+  }
+
+  public void unignorePeer(final String peerUser) {
+    if (peerUser == null || peerUser.trim().isEmpty()) return;
+    runServerOp("UnignorePeer", new Runnable() {
+      @Override
+      public void run() {
+        try {
+          sendServerLocked(SoulseekWire.MSG_UNIGNORE_USER, SoulseekWire.packString(peerUser));
+        } catch (Exception ignored) {}
+      }
+    });
+  }
+
+  public void unbanPeer(final String peerUser) {
+    if (peerUser == null || peerUser.trim().isEmpty()) return;
+    deniedPeers.remove(peerUser.toLowerCase(Locale.US));
+  }
+
+  public void unblockPeer(final String peerUser) {
+    unbanPeer(peerUser);
+  }
+
+  public void addFavoritePeer(final String peerUser) {
+    if (peerUser == null || peerUser.trim().isEmpty()) return;
+    runServerOp("AddFavorite", new Runnable() {
+      @Override
+      public void run() {
+        try {
+          sendServerLocked(SoulseekWire.MSG_ADD_TO_FAVORITES, SoulseekWire.packString(peerUser));
+        } catch (Exception ignored) {}
+      }
+    });
+  }
+
+  public void removeFavoritePeer(final String peerUser) {
+    if (peerUser == null || peerUser.trim().isEmpty()) return;
+    runServerOp("RemoveFavorite", new Runnable() {
+      @Override
+      public void run() {
+        try {
+          sendServerLocked(SoulseekWire.MSG_REMOVE_FROM_FAVORITES, SoulseekWire.packString(peerUser));
+        } catch (Exception ignored) {}
+      }
+    });
+  }
+
+  private void runServerOp(String name, Runnable op) {
+    new Thread(new Runnable() {
+      @Override
+      public void run() {
+        try {
+          ensureConnected();
+          op.run();
+        } catch (Exception ignored) {}
+      }
+    }, name).start();
   }
 
   /** Lightweight login probe — no listen socket or background reader. */
@@ -388,7 +641,8 @@ public final class SoulseekClient extends Thread {
   private void markPeerDenied(String peerUser, String reason) {
     if (peerUser == null) return;
     String lower = reason != null ? reason.toLowerCase(Locale.US) : "";
-    if (lower.contains("not shared") || lower.contains("banned")) {
+    if (lower.contains("not shared") || lower.contains("banned")
+            || lower.contains("not sharing") || lower.contains("upload denied")) {
       deniedPeers.add(peerUser.toLowerCase(Locale.US));
       debugLog("peer denied " + peerUser + " (" + reason + ")");
     }
@@ -402,10 +656,23 @@ public final class SoulseekClient extends Thread {
     if (listener != null) listener.onConnected(listenPort);
   }
 
-  public SoulseekClient(String username, String password, File downloadDir, Context context, Listener listener) {
+  public SoulseekClient(String username, String password, File downloadDir, Context context,
+                        Listener listener) {
+    this(username, password, downloadDir, context, listener, "Reach");
+  }
+
+  public SoulseekClient(String username, String password, File downloadDir, Context context,
+                        Listener listener, String clientDescription) {
+    this(username, password, downloadDir, context, listener, clientDescription, clientDescription);
+  }
+
+  public SoulseekClient(String username, String password, File downloadDir, Context context,
+                        Listener listener, String clientDescription, String userBio) {
     super("SoulseekClient");
     this.username = username;
     this.password = password;
+    this.clientDescription = clientDescription != null ? clientDescription : "Reach";
+    this.userBio = userBio != null ? userBio : this.clientDescription;
     this.downloadDir = downloadDir;
     this.appContext = context != null ? context.getApplicationContext() : null;
     this.listener = listener;
@@ -414,13 +681,21 @@ public final class SoulseekClient extends Thread {
 
   public void shutdown() {
     running.set(false);
+    shareAnnounceCoalesce = false;
+    Thread announce = shareAnnounceThread;
+    shareAnnounceThread = null;
+    if (announce != null) announce.interrupt();
+    Thread natRetry = natpmpRetryThread;
+    natpmpRetryThread = null;
+    if (natRetry != null) natRetry.interrupt();
+    Thread natRenew = natpmpRenewThread;
+    natpmpRenewThread = null;
+    if (natRenew != null) natRenew.interrupt();
     cancelSearch();
     cancelDownload();
-    loggedIn = false;
-    hasDistribParent = false;
-    closeQuietly(distribSocket);
-    distribSocket = null;
-    closeQuietly(serverSocket);
+    synchronized (serverLock) {
+      invalidateServerSessionLocked("shutdown");
+    }
     closeQuietly(listenSocket);
     interrupt();
   }
@@ -433,7 +708,7 @@ public final class SoulseekClient extends Thread {
 
   public boolean isTransferActive() {
     Thread dt = downloadThread;
-    return xferInProgress || (dt != null && dt.isAlive());
+    return xferInProgress || isUploadInProgress() || (dt != null && dt.isAlive());
   }
 
   public boolean isSearchActive() {
@@ -441,9 +716,9 @@ public final class SoulseekClient extends Thread {
     return t != null && t.isAlive();
   }
 
-  /** Shutdown listen/server threads when no download is running. */
+  /** Shutdown listen/server threads when no download, upload, search, or sharing duty. */
   public void pauseWhenIdle() {
-    if (!isTransferActive()) shutdown();
+    if (!isBusy()) shutdown();
   }
 
   public void search(final String query) {
@@ -460,13 +735,11 @@ public final class SoulseekClient extends Thread {
           if (searchCancelled) return;
           if (isTransientConnectError(err)) {
             try {
-              loggedIn = false;
               synchronized (serverLock) {
-                closeQuietly(serverSocket);
-                serverSocket = null;
+                invalidateServerSessionLocked("search retry");
               }
               sleepQuiet(600);
-              if (!searchCancelled) runSearchQuery(query);
+              if (!searchCancelled && running.get()) runSearchQuery(query);
               return;
             } catch (Throwable retryErr) {
               if (searchCancelled) return;
@@ -644,14 +917,16 @@ public final class SoulseekClient extends Thread {
             debugLog("server read stale: " + e);
             continue;
           }
-          loggedIn = false;
-          hasDistribParent = false;
-          closeQuietly(serverSocket);
-          serverSocket = null;
-          closeQuietly(distribSocket);
-          distribSocket = null;
+          invalidateServerSessionLocked("server read");
         }
         debugLog("server read error: " + e);
+        // #region agent log
+        try {
+          agentLog("SoulseekClient.run", "server read error", "H2",
+              new JSONObject().put("err", e.getClass().getSimpleName())
+                  .put("msg", formatError(e)).put("running", running.get()));
+        } catch (Exception ignored) {}
+        // #endregion
         if (running.get()) notifyError(formatError(e));
         sleepQuiet(500);
       }
@@ -667,11 +942,14 @@ public final class SoulseekClient extends Thread {
   }
 
   private void ensureConnected() throws Exception {
+    if (!running.get()) throw new IOException("Client shutdown");
     synchronized (serverLock) {
+      if (!running.get()) throw new IOException("Client shutdown");
       if (!isServerSessionAlive()) {
         connectAndLoginLocked();
       }
     }
+    if (!running.get()) throw new IOException("Client shutdown");
     if (!isAlive()) start();
   }
 
@@ -679,12 +957,24 @@ public final class SoulseekClient extends Thread {
     return loggedIn && serverSocket != null && !serverSocket.isClosed() && serverSocket.isConnected();
   }
 
-  private void connectAndLoginLocked() throws Exception {
+  private void invalidateServerSessionLocked(String reason) {
+    loggedIn = false;
+    hasDistribParent = false;
     closeQuietly(serverSocket);
+    serverSocket = null;
     closeQuietly(distribSocket);
     distribSocket = null;
-    hasDistribParent = false;
-    loggedIn = false;
+    // #region agent log
+    try {
+      agentLog("SoulseekClient.invalidateServerSessionLocked", "session cleared", "H2",
+          new JSONObject().put("reason", reason != null ? reason : ""));
+    } catch (Exception ignored) {}
+    // #endregion
+  }
+
+  private void connectAndLoginLocked() throws Exception {
+    if (!running.get()) throw new IOException("Client shutdown");
+    invalidateServerSessionLocked("reconnect");
     serverSocket = new Socket();
     serverSocket.connect(new InetSocketAddress(SoulseekWire.SERVER_HOST, SoulseekWire.SERVER_PORT), 15000);
     serverSocket.setKeepAlive(true);
@@ -706,15 +996,18 @@ public final class SoulseekClient extends Thread {
     if (r.hasRemaining()) r.readBool();
 
     startListenSocket();
-    SoulseekNatpmp.Result nat = SoulseekNatpmp.tryMapTcpPort(appContext, listenPort);
+    SoulseekNatpmp.Result nat = mapListenPortWithRetry();
     lastNatpmp = nat;
     int reported = nat.publicPort > 0 ? nat.publicPort : listenPort;
     reportedListenPort = reported;
     if (nat.mapped()) {
       debugLog("natpmp ok " + listenPort + " -> " + reported
-          + (nat.externalIp != null ? " wan=" + nat.externalIp : ""));
+          + (nat.externalIp != null ? " wan=" + nat.externalIp : "")
+          + (nat.gatewayIp != null ? " gw=" + nat.gatewayIp : ""));
     } else {
-      debugLog("natpmp fail " + listenPort + " status=" + nat.status);
+      debugLog("natpmp fail " + listenPort + " status=" + nat.status
+          + (nat.gatewayIp != null ? " gw=" + nat.gatewayIp : ""));
+      startNatpmpRetryUntilMapped();
     }
     startNatpmpRenewal();
     out.write(SoulseekWire.serverMessage(SoulseekWire.MSG_SET_WAIT_PORT, SoulseekWire.packUInt32(reported)));
@@ -727,10 +1020,12 @@ public final class SoulseekClient extends Thread {
     out.flush();
     loggedIn = true;
     serverLock.notifyAll();
+    syncLocalInterestsLocked();
     debugLog("login ok user=" + username + " listen=" + listenPort + " reported=" + reportedListenPort);
     phaseLog("dl0", true, "login listen=" + reportedListenPort);
     notifyStatus("Connected as " + username);
     notifyConnected();
+    ReachPeerConnectivity.onServerLoginOk(appContext, nat);
     // #region agent log
     try {
       agentLog("SoulseekClient.connectAndLoginLocked", "login ok", "H2",
@@ -739,7 +1034,89 @@ public final class SoulseekClient extends Thread {
               .put("hasParent", hasDistribParent));
     } catch (Exception ignored) {}
     // #endregion
-    if (sharePolicy.announceShares()) refreshShareAnnouncement();
+    if (running.get() && sharePolicy.announceShares()) refreshShareAnnouncement();
+    announceUploadSpeedLocked();
+  }
+
+  /** Tell the server our upload speed (updates avgspeed in user watch / room lists). */
+  private void announceUploadSpeedLocked() throws IOException {
+    sendServerLocked(SoulseekWire.MSG_SEND_UPLOAD_SPEED,
+        SoulseekWire.packUInt32(SoulseekWire.ADVERTISED_UPLOAD_SPEED));
+    debugLog("upload speed announced " + SoulseekWire.ADVERTISED_UPLOAD_SPEED);
+  }
+
+  private void announceUploadSpeedAsync() {
+    if (!running.get()) return;
+    new Thread(new Runnable() {
+      @Override
+      public void run() {
+        try {
+          ensureConnected();
+          synchronized (serverLock) {
+            if (loggedIn) announceUploadSpeedLocked();
+          }
+        } catch (Exception e) {
+          debugLog("upload speed announce fail: " + e);
+        }
+      }
+    }, "SoulseekUploadSpeed").start();
+  }
+
+  private SoulseekNatpmp.Result mapListenPortWithRetry() {
+    SoulseekNatpmp.Result nat = SoulseekNatpmp.tryMapTcpPort(appContext, listenPort);
+    if (nat.mapped()) return nat;
+    sleepQuiet(600);
+    SoulseekNatpmp.Result again = SoulseekNatpmp.tryMapTcpPort(appContext, listenPort);
+    return again.mapped() ? again : nat;
+  }
+
+  private void applyNatpmpResult(SoulseekNatpmp.Result nat) {
+    lastNatpmp = nat;
+    if (!nat.mapped()) return;
+    int reported = nat.publicPort > 0 ? nat.publicPort : listenPort;
+    if (reported == reportedListenPort) return;
+    reportedListenPort = reported;
+    try {
+      synchronized (serverLock) {
+        if (serverSocket != null && !serverSocket.isClosed()) {
+          serverSocket.getOutputStream().write(SoulseekWire.serverMessage(
+              SoulseekWire.MSG_SET_WAIT_PORT, SoulseekWire.packUInt32(reportedListenPort)));
+          serverSocket.getOutputStream().flush();
+          debugLog("natpmp updated wait port " + reportedListenPort);
+        }
+      }
+    } catch (Exception ignored) {}
+  }
+
+  private void startNatpmpRetryUntilMapped() {
+    if (natpmpRetryThread != null) return;
+    natpmpRetryThread = new Thread(new Runnable() {
+      @Override
+      public void run() {
+        for (int i = 0; i < NATPMP_RETRY_MAX && running.get() && loggedIn; i++) {
+          sleepQuiet(NATPMP_RETRY_MS);
+          if (!running.get() || !loggedIn) break;
+          SoulseekNatpmp.Result nat = lastNatpmp;
+          if (nat != null && nat.mapped()) break;
+          nat = SoulseekNatpmp.tryMapTcpPort(appContext, listenPort);
+          if (nat.mapped()) {
+            applyNatpmpResult(nat);
+            debugLog("natpmp retry ok " + listenPort + " -> " + nat.publicPort);
+            break;
+          }
+          lastNatpmp = nat;
+        }
+        if (appContext != null) {
+          SoulseekNatpmp.Result fin = lastNatpmp;
+          if (fin == null || !fin.mapped()) {
+            ReachPeerConnectivity.onNatRetriesExhausted(appContext, fin);
+          }
+        }
+        natpmpRetryThread = null;
+      }
+    }, "SoulseekNatpmpRetry");
+    natpmpRetryThread.setDaemon(true);
+    natpmpRetryThread.start();
   }
 
   private void startNatpmpRenewal() {
@@ -751,18 +1128,10 @@ public final class SoulseekClient extends Thread {
           sleepQuiet(NATPMP_RENEW_MS);
           if (!running.get() || !loggedIn) break;
           SoulseekNatpmp.Result nat = SoulseekNatpmp.tryMapTcpPort(appContext, listenPort);
-          lastNatpmp = nat;
-          if (nat.mapped() && nat.publicPort != reportedListenPort) {
-            reportedListenPort = nat.publicPort;
-            try {
-              synchronized (serverLock) {
-                if (serverSocket != null && !serverSocket.isClosed()) {
-                  serverSocket.getOutputStream().write(SoulseekWire.serverMessage(
-                      SoulseekWire.MSG_SET_WAIT_PORT, SoulseekWire.packUInt32(reportedListenPort)));
-                  serverSocket.getOutputStream().flush();
-                }
-              }
-            } catch (Exception ignored) {}
+          applyNatpmpResult(nat);
+          if (!nat.mapped()) lastNatpmp = nat;
+          if (appContext != null) {
+            ReachPeerConnectivity.onNatRenewal(appContext, nat);
           }
         }
         natpmpRenewThread = null;
@@ -819,7 +1188,7 @@ public final class SoulseekClient extends Thread {
   }
 
   private void sendSearchLocked(int token, String query) throws IOException {
-    activeSearchQuery = query.trim();
+    activeSearchQuery = SoulseekSearchQuery.sanitize(query);
     byte[] body = concat(SoulseekWire.packUInt32(token), SoulseekWire.packString(activeSearchQuery));
     sendServerLocked(SoulseekWire.MSG_FILE_SEARCH, body);
     debugLog("search token=" + token + " q=" + activeSearchQuery);
@@ -1191,7 +1560,7 @@ public final class SoulseekClient extends Thread {
       return;
     }
     Result res = new Result(user, file, f.size, f.bitrate, f.duration, livePeer,
-            f.freeSlot, f.speed);
+            f.freeSlot, f.speed, f.queueLength);
     pendingResults.add(res);
     if (pendingResults.size() <= MAX_SEARCH_NOTIFY && listener != null) {
       listener.onSearchResult(res);
@@ -1232,7 +1601,595 @@ public final class SoulseekClient extends Thread {
         debugLog("connectToPeer " + user + " " + type + " " + host + ":" + port + " tok=" + token);
         connectIndirectPeer(user, host, port, token, type);
       }
+    } else if (frame.code == SoulseekWire.MSG_WATCH_USER) {
+      handleWatchUserResponse(frame.body);
+    } else if (frame.code == SoulseekWire.MSG_GET_USER_STATUS) {
+      handleGetUserStatus(frame.body);
+    } else if (frame.code == SoulseekWire.MSG_MESSAGE_USER) {
+      handleIncomingPrivateMessage(frame.body);
+    } else if (frame.code == SoulseekWire.MSG_ROOM_LIST) {
+      handleRoomList(frame.body);
+    } else if (frame.code == SoulseekWire.MSG_SAY_CHATROOM) {
+      handleSayChatroom(frame.body);
+    } else if (frame.code == SoulseekWire.MSG_JOIN_ROOM) {
+      handleJoinRoomResponse(frame.body);
+    } else if (frame.code == SoulseekWire.MSG_LEAVE_ROOM) {
+      handleLeaveRoomResponse(frame.body);
+    } else if (frame.code == SoulseekWire.MSG_USER_JOINED_ROOM) {
+      handleUserJoinedRoom(frame.body);
+    } else if (frame.code == SoulseekWire.MSG_USER_LEFT_ROOM) {
+      handleUserLeftRoom(frame.body);
+    } else if (frame.code == SoulseekWire.MSG_ROOM_TICKERS) {
+      handleRoomTickers(frame.body);
+    } else if (frame.code == SoulseekWire.MSG_ROOM_TICKER_ADDED) {
+      handleRoomTickerAdded(frame.body);
+    } else if (frame.code == SoulseekWire.MSG_ROOM_TICKER_REMOVED) {
+      handleRoomTickerRemoved(frame.body);
+    } else if (frame.code == SoulseekWire.MSG_USER_INTERESTS) {
+      handleUserInterestsResponse(frame.body);
+    } else if (frame.code == SoulseekWire.MSG_ITEM_SIMILAR_USERS) {
+      handleItemSimilarUsersResponse(frame.body);
     }
+  }
+
+  private void handleWatchUserResponse(byte[] body) {
+    try {
+      SoulseekWire.Reader r = new SoulseekWire.Reader(body);
+      String user = r.readString();
+      boolean exists = r.readBool();
+      if (!exists) {
+        deliverUserWatch(new SoulseekUserDirectory.UserInfo(user, false, 0, 0, 0, 0, 0, "", false));
+        return;
+      }
+      int status = r.readUInt32();
+      int avgspeed = r.readUInt32();
+      int uploadnum = r.readUInt32();
+      r.readUInt32();
+      int files = r.readUInt32();
+      int dirs = r.readUInt32();
+      String country = "";
+      if (r.hasRemaining()) country = r.readString();
+      deliverUserWatch(new SoulseekUserDirectory.UserInfo(user, true, status, avgspeed, uploadnum,
+              files, dirs, country, false));
+    } catch (Exception e) {
+      deliverUserWatchError(e.getMessage() != null ? e.getMessage() : "Watch failed");
+    }
+  }
+
+  private void handleGetUserStatus(byte[] body) {
+    try {
+      SoulseekWire.Reader r = new SoulseekWire.Reader(body);
+      String user = r.readString();
+      int status = r.readUInt32();
+      boolean priv = r.readBool();
+      if (socialListener != null) {
+        socialListener.onUserStatusUpdate(user, status, priv);
+      }
+    } catch (Exception ignored) {}
+  }
+
+  private void handleRoomList(byte[] body) {
+    final List<SoulseekWire.RoomEntry> rooms = SoulseekWire.parseRoomList(body);
+    if (socialListener != null) {
+      socialListener.onRoomList(rooms);
+    }
+  }
+
+  private void handleSayChatroom(byte[] body) {
+    try {
+      SoulseekWire.Reader r = new SoulseekWire.Reader(body);
+      String room = r.readString();
+      String sender = r.readString();
+      String text = r.readString();
+      int ts = (int) (System.currentTimeMillis() / 1000L);
+      if (socialListener != null) {
+        socialListener.onRoomMessage(room, sender, text, ts);
+      }
+    } catch (Exception ignored) {}
+  }
+
+  private void handleJoinRoomResponse(byte[] body) {
+    try {
+      String room = pendingJoinRoom;
+      if (room == null || room.isEmpty()) {
+        SoulseekWire.Reader r = new SoulseekWire.Reader(body);
+        if (r.hasRemaining()) {
+          int n = r.readUInt32();
+          if (n > 0) return;
+        }
+        return;
+      }
+      joinedRooms.add(room);
+      pendingJoinRoom = null;
+      if (socialListener != null) socialListener.onRoomJoined(room);
+    } catch (Exception ignored) {
+      pendingJoinRoom = null;
+    }
+  }
+
+  private void handleLeaveRoomResponse(byte[] body) {
+    try {
+      SoulseekWire.Reader r = new SoulseekWire.Reader(body);
+      String room = r.readString();
+      joinedRooms.remove(room);
+      if (socialListener != null) socialListener.onRoomLeft(room);
+    } catch (Exception ignored) {}
+  }
+
+  private void handleUserJoinedRoom(byte[] body) {
+    try {
+      SoulseekWire.Reader r = new SoulseekWire.Reader(body);
+      String room = r.readString();
+      String user = r.readString();
+      debugLog("room join " + room + " " + user);
+      if (socialListener != null) socialListener.onRoomUserJoined(room, user);
+    } catch (Exception ignored) {}
+  }
+
+  private void handleUserLeftRoom(byte[] body) {
+    try {
+      SoulseekWire.Reader r = new SoulseekWire.Reader(body);
+      String room = r.readString();
+      String user = r.readString();
+      debugLog("room left " + room + " " + user);
+      if (socialListener != null) socialListener.onRoomUserLeft(room, user);
+    } catch (Exception ignored) {}
+  }
+
+  private void handleRoomTickers(byte[] body) {
+    SoulseekWire.RoomTickersMessage msg = SoulseekWire.parseRoomTickers(body);
+    if (msg == null || socialListener == null) return;
+    socialListener.onRoomTickers(msg.room, msg.tickers);
+  }
+
+  private void handleRoomTickerAdded(byte[] body) {
+    String room = SoulseekWire.parseRoomTickerAddedRoom(body);
+    SoulseekWire.RoomTickerEntry entry = SoulseekWire.parseRoomTickerAdded(body);
+    if (entry == null || socialListener == null) return;
+    socialListener.onRoomTickerAdded(room, entry.username, entry.text);
+  }
+
+  private void handleRoomTickerRemoved(byte[] body) {
+    String room = SoulseekWire.parseRoomTickerRemovedRoom(body);
+    String username = SoulseekWire.parseRoomTickerRemovedUser(body);
+    if (username == null || username.isEmpty() || socialListener == null) return;
+    socialListener.onRoomTickerRemoved(room, username);
+  }
+
+  private static String parseVersionDescription(String text) {
+    if (text == null || !text.startsWith("\u0001VERSION ")) return null;
+    int end = text.lastIndexOf('\u0001');
+    if (end > 10) return text.substring(10, end).trim();
+    return text.substring(10).trim();
+  }
+
+  private void handleIncomingPrivateMessage(byte[] body) {
+    try {
+      SoulseekWire.Reader r = new SoulseekWire.Reader(body);
+      int msgId = r.readUInt32();
+      int timestamp = r.readUInt32();
+      String from = r.readString();
+      String text = r.readString();
+      r.readBool();
+      try {
+        sendServerLocked(SoulseekWire.MSG_MESSAGE_ACKED, SoulseekWire.packUInt32(msgId));
+      } catch (Exception ignored) {}
+      if (text != null && text.startsWith("\u0001VERSION ")) {
+        try {
+          String peerDesc = parseVersionDescription(text);
+          if (appContext != null && peerDesc != null) {
+            ReachPeerCapabilities.markFromVersion(
+                    appContext.getSharedPreferences("SOLAR_SETTINGS", Context.MODE_PRIVATE),
+                    from, peerDesc);
+          }
+          sendPrivateMessageInternal(from, "\u0001VERSION " + clientDescription + "\u0001");
+        } catch (Exception ignored) {}
+        return;
+      }
+      if (messagingEnabled && socialListener != null) {
+        socialListener.onPrivateMessage(msgId, timestamp, from, text);
+      }
+    } catch (Exception e) {
+      debugLog("pm parse fail: " + e);
+    }
+  }
+
+  private void deliverUserWatch(SoulseekUserDirectory.UserInfo info) {
+    SoulseekUserDirectory.Callback cb = pendingUserWatch;
+    pendingUserWatch = null;
+    pendingWatchUser = null;
+    if (cb != null) cb.onUserInfo(info);
+  }
+
+  private void deliverUserWatchError(String reason) {
+    SoulseekUserDirectory.Callback cb = pendingUserWatch;
+    pendingUserWatch = null;
+    pendingWatchUser = null;
+    if (cb != null) cb.onError(reason);
+  }
+
+  public void watchUser(final String peerUser, final SoulseekUserDirectory.Callback callback) {
+    new Thread(new Runnable() {
+      @Override
+      public void run() {
+        try {
+          ensureConnected();
+          pendingUserWatch = callback;
+          pendingWatchUser = peerUser;
+          sendServerLocked(SoulseekWire.MSG_WATCH_USER, SoulseekWire.packString(peerUser));
+          Thread.sleep(8000);
+          if (pendingUserWatch != null) deliverUserWatchError("User lookup timed out");
+        } catch (Exception e) {
+          deliverUserWatchError(e.getMessage() != null ? e.getMessage() : "Watch failed");
+        }
+      }
+    }, "SoulseekWatch").start();
+  }
+
+  public void requestRoomList() {
+    new Thread(new Runnable() {
+      @Override
+      public void run() {
+        try {
+          ensureConnected();
+          sendServerLocked(SoulseekWire.MSG_ROOM_LIST, new byte[0]);
+        } catch (Exception ignored) {}
+      }
+    }, "SoulseekRoomList").start();
+  }
+
+  public void joinRoom(final String room) {
+    if (room == null || room.trim().isEmpty()) return;
+    final String name = room.trim();
+    new Thread(new Runnable() {
+      @Override
+      public void run() {
+        try {
+          ensureConnected();
+          pendingJoinRoom = name;
+          sendServerLocked(SoulseekWire.MSG_JOIN_ROOM, SoulseekWire.packJoinRoom(name));
+        } catch (Exception e) {
+          pendingJoinRoom = null;
+        }
+      }
+    }, "SoulseekJoinRoom").start();
+  }
+
+  public void leaveRoom(final String room) {
+    if (room == null || room.trim().isEmpty()) return;
+    final String name = room.trim();
+    new Thread(new Runnable() {
+      @Override
+      public void run() {
+        try {
+          ensureConnected();
+          sendServerLocked(SoulseekWire.MSG_LEAVE_ROOM, SoulseekWire.packLeaveRoom(name));
+          joinedRooms.remove(name);
+        } catch (Exception ignored) {}
+      }
+    }, "SoulseekLeaveRoom").start();
+  }
+
+  public void sayInRoom(final String room, final String text) {
+    if (room == null || room.trim().isEmpty() || text == null || text.trim().isEmpty()) return;
+    final String roomName = room.trim();
+    final String body = text.trim();
+    new Thread(new Runnable() {
+      @Override
+      public void run() {
+        try {
+          ensureConnected();
+          sendServerLocked(SoulseekWire.MSG_SAY_CHATROOM,
+                  SoulseekWire.packSayChatroom(roomName, body));
+        } catch (Exception ignored) {}
+      }
+    }, "SoulseekSayRoom").start();
+  }
+
+  public void setRoomTicker(final String room, final String ticker) {
+    if (room == null || room.trim().isEmpty()) return;
+    final String roomName = room.trim();
+    final String text = ticker != null ? ticker.trim() : "";
+    new Thread(new Runnable() {
+      @Override
+      public void run() {
+        try {
+          ensureConnected();
+          sendServerLocked(SoulseekWire.MSG_SET_ROOM_TICKER,
+                  SoulseekWire.packSetRoomTicker(roomName, text));
+        } catch (Exception ignored) {}
+      }
+    }, "SoulseekSetRoomTicker").start();
+  }
+
+  public interface MessageSendCallback {
+    void onSent();
+    void onError(String reason);
+  }
+
+  public void sendPrivateMessage(final String peerUser, final String text,
+                                 final MessageSendCallback callback) {
+    new Thread(new Runnable() {
+      @Override
+      public void run() {
+        try {
+          sendPrivateMessageInternal(peerUser, text);
+          if (callback != null) callback.onSent();
+        } catch (Exception e) {
+          if (callback != null) {
+            callback.onError(e.getMessage() != null ? e.getMessage() : "Send failed");
+          }
+        }
+      }
+    }, "SoulseekPM").start();
+  }
+
+  private void sendPrivateMessageInternal(String peerUser, String text) throws Exception {
+    ensureConnected();
+    sendServerLocked(SoulseekWire.MSG_MESSAGE_USER,
+            concat(SoulseekWire.packString(peerUser), SoulseekWire.packString(text)));
+  }
+
+  public void runPeerOperation(final String peerUser, final PeerOperation op) {
+    new Thread(new Runnable() {
+      @Override
+      public void run() {
+        Socket peer = null;
+        try {
+          ensureConnected();
+          peer = openOutboundPeerSocket(peerUser);
+          if (peer == null) throw new IOException("Peer not reachable");
+          op.run(peer);
+        } catch (Exception e) {
+          // #region agent log
+          try {
+            agentLog("SoulseekClient.runPeerOperation", "peer op failed", "H3",
+                new JSONObject().put("peerUser", peerUser)
+                    .put("err", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+          } catch (Exception ignored) {}
+          // #endregion
+          if (op != null) op.onError(e.getMessage() != null ? e.getMessage() : "Peer failed");
+        } finally {
+          closeQuietly(peer);
+        }
+      }
+    }, "SoulseekPeerOp").start();
+  }
+
+  private Socket openOutboundPeerSocket(String peerUser) throws Exception {
+    final int connectToken = (int) (System.currentTimeMillis() & 0x7fffffff);
+    final String peerKey = peerUser.toLowerCase(Locale.US);
+    final LinkedBlockingQueue<Socket> pierceQueue = new LinkedBlockingQueue<Socket>(1);
+    pierceWaiters.put(connectToken, pierceQueue);
+    try {
+      peerAddresses.remove(peerKey);
+      sendServerLocked(SoulseekWire.MSG_CONNECT_TO_PEER,
+              concat(SoulseekWire.packUInt32(connectToken), SoulseekWire.packString(peerUser),
+                      SoulseekWire.packString(CONN_PEER)));
+      sendServerLocked(SoulseekWire.MSG_GET_PEER_ADDRESS, SoulseekWire.packString(peerUser));
+      PeerEndpoint ep = waitPeerAddress(peerKey, 15000);
+      if (ep == null) return null;
+      Socket peer = acquirePeerSocket(peerUser, ep, connectToken, pierceQueue);
+      if (peer == null) return null;
+      peer.getOutputStream().write(SoulseekWire.peerInitMessage(SoulseekWire.PEER_INIT_CONNECT,
+              concat(SoulseekWire.packString(username), SoulseekWire.packString(CONN_PEER),
+                      SoulseekWire.packUInt32(0))));
+      peer.getOutputStream().flush();
+      return peer;
+    } finally {
+      pierceWaiters.remove(connectToken);
+    }
+  }
+
+  void notifyBrowseResult(final SoulseekBrowseSession.Callback callback,
+                          final List<SoulseekWire.BrowseFolder> folders) {
+    if (callback == null) return;
+    if (listener != null) {
+      // no-op; callback on worker thread is fine for UI layer to post
+    }
+    callback.onFolders(folders);
+  }
+
+  void notifyBrowseError(final SoulseekBrowseSession.Callback callback, final String reason) {
+    if (callback != null) callback.onError(reason);
+  }
+
+  void notifyProfileBio(final SoulseekProfileSession.BioCallback callback, final String bio) {
+    if (callback != null) callback.onBio(bio);
+  }
+
+  void notifyProfileBioError(final SoulseekProfileSession.BioCallback callback, final String reason) {
+    if (callback != null) callback.onError(reason);
+  }
+
+  public void addLike(final String item) {
+    final String norm = SoulseekInterests.normalizeItem(item);
+    if (norm.isEmpty()) return;
+    new Thread(new Runnable() {
+      @Override
+      public void run() {
+        try {
+          synchronized (serverLock) {
+            ensureConnected();
+            sendServerLocked(SoulseekWire.MSG_ADD_THING_I_LIKE,
+                    SoulseekWire.packInterestString(norm));
+          }
+        } catch (Exception e) {
+          debugLog("addLike failed: " + e.getMessage());
+        }
+      }
+    }, "SoulseekLike").start();
+  }
+
+  public void removeLike(final String item) {
+    final String norm = SoulseekInterests.normalizeItem(item);
+    if (norm.isEmpty()) return;
+    new Thread(new Runnable() {
+      @Override
+      public void run() {
+        try {
+          synchronized (serverLock) {
+            ensureConnected();
+            sendServerLocked(SoulseekWire.MSG_REMOVE_THING_I_LIKE,
+                    SoulseekWire.packInterestString(norm));
+          }
+        } catch (Exception e) {
+          debugLog("removeLike failed: " + e.getMessage());
+        }
+      }
+    }, "SoulseekLike").start();
+  }
+
+  public void addHate(final String item) {
+    final String norm = SoulseekInterests.normalizeItem(item);
+    if (norm.isEmpty()) return;
+    new Thread(new Runnable() {
+      @Override
+      public void run() {
+        try {
+          synchronized (serverLock) {
+            ensureConnected();
+            sendServerLocked(SoulseekWire.MSG_ADD_THING_I_HATE,
+                    SoulseekWire.packInterestString(norm));
+          }
+        } catch (Exception e) {
+          debugLog("addHate failed: " + e.getMessage());
+        }
+      }
+    }, "SoulseekHate").start();
+  }
+
+  public void removeHate(final String item) {
+    final String norm = SoulseekInterests.normalizeItem(item);
+    if (norm.isEmpty()) return;
+    new Thread(new Runnable() {
+      @Override
+      public void run() {
+        try {
+          synchronized (serverLock) {
+            ensureConnected();
+            sendServerLocked(SoulseekWire.MSG_REMOVE_THING_I_HATE,
+                    SoulseekWire.packInterestString(norm));
+          }
+        } catch (Exception e) {
+          debugLog("removeHate failed: " + e.getMessage());
+        }
+      }
+    }, "SoulseekHate").start();
+  }
+
+  public void requestUserInterests(final String username, final UserInterestsCallback callback) {
+    if (username == null || username.trim().isEmpty()) {
+      if (callback != null) callback.onError("No user");
+      return;
+    }
+    final String key = username.trim().toLowerCase(Locale.US);
+    new Thread(new Runnable() {
+      @Override
+      public void run() {
+        try {
+          synchronized (serverLock) {
+            ensureConnected();
+            if (callback != null) pendingUserInterests.put(key, callback);
+            sendServerLocked(SoulseekWire.MSG_USER_INTERESTS,
+                    SoulseekWire.packUserInterestsRequest(username.trim()));
+          }
+        } catch (Exception e) {
+          pendingUserInterests.remove(key);
+          if (callback != null) {
+            callback.onError(e.getMessage() != null ? e.getMessage() : "Interests failed");
+          }
+        }
+      }
+    }, "SoulseekInterests").start();
+  }
+
+  private void syncLocalInterestsLocked() {
+    try {
+      android.content.SharedPreferences prefs =
+              appContext.getSharedPreferences("SOLAR_SETTINGS", Context.MODE_PRIVATE);
+      for (String like : SoulseekInterests.loadLikes(prefs)) {
+        if (!like.isEmpty()) {
+          sendServerLocked(SoulseekWire.MSG_ADD_THING_I_LIKE, SoulseekWire.packInterestString(like));
+        }
+      }
+      for (String hate : SoulseekInterests.loadDislikes(prefs)) {
+        if (!hate.isEmpty()) {
+          sendServerLocked(SoulseekWire.MSG_ADD_THING_I_HATE, SoulseekWire.packInterestString(hate));
+        }
+      }
+      for (String sys : SoulseekInterests.systemLikes()) {
+        sendServerLocked(SoulseekWire.MSG_ADD_THING_I_LIKE, SoulseekWire.packInterestString(sys));
+      }
+    } catch (Exception e) {
+      debugLog("interest sync failed: " + e.getMessage());
+    }
+  }
+
+  private void handleUserInterestsResponse(byte[] body) {
+    UserInterestsCallback cb = null;
+    String userKey = "";
+    try {
+      SoulseekWire.UserInterestsResponse resp = SoulseekWire.parseUserInterestsResponse(body);
+      userKey = resp.username != null ? resp.username.toLowerCase(Locale.US) : "";
+      synchronized (serverLock) {
+        cb = pendingUserInterests.remove(userKey);
+      }
+      if (cb != null) {
+        cb.onInterests(resp.username, resp.likes, resp.dislikes);
+      }
+    } catch (Exception e) {
+      synchronized (serverLock) {
+        cb = pendingUserInterests.remove(userKey);
+      }
+      if (cb != null) {
+        cb.onError(e.getMessage() != null ? e.getMessage() : "Parse failed");
+      }
+    }
+  }
+
+  private void handleItemSimilarUsersResponse(byte[] body) {
+    InterestUsersCallback cb;
+    synchronized (serverLock) {
+      cb = pendingInterestUsersCallback;
+      pendingInterestUsersCallback = null;
+    }
+    if (cb == null) return;
+    try {
+      SoulseekWire.ItemSimilarUsersResponse resp =
+              SoulseekWire.parseItemSimilarUsersResponse(body);
+      cb.onUsers(resp.users);
+    } catch (Exception e) {
+      cb.onError(e.getMessage() != null ? e.getMessage() : "Parse failed");
+    }
+  }
+
+  public void searchUsersByInterest(final String interest, final InterestUsersCallback callback) {
+    if (callback == null) return;
+    final String item = SoulseekInterests.normalizeItem(interest);
+    if (item.isEmpty()) {
+      callback.onError("Empty interest");
+      return;
+    }
+    runServerOp("InterestUsers", new Runnable() {
+      @Override
+      public void run() {
+        try {
+          synchronized (serverLock) {
+            pendingInterestUsersCallback = callback;
+            sendServerLocked(SoulseekWire.MSG_ITEM_SIMILAR_USERS,
+                    SoulseekWire.packItemSimilarUsersRequest(item));
+          }
+        } catch (Exception e) {
+          synchronized (serverLock) {
+            if (pendingInterestUsersCallback == callback) {
+              pendingInterestUsersCallback = null;
+            }
+          }
+          callback.onError(e.getMessage() != null ? e.getMessage() : "Request failed");
+        }
+      }
+    });
   }
 
   private void tryConnectDistribParentLocked(byte[] body) {
@@ -1369,6 +2326,12 @@ public final class SoulseekClient extends Thread {
   }
 
   private void handleIncomingPeer(Socket peer) {
+    // #region agent log
+    try {
+      agentLog("SoulseekClient.handleIncomingPeer", "inbound peer connect", "H1",
+          new JSONObject().put("remote", String.valueOf(peer.getRemoteSocketAddress())));
+    } catch (Exception ignored) {}
+    // #endregion
     try {
       SoulseekWire.PeerInitFrame init = SoulseekWire.readPeerInitFrame(peer.getInputStream());
       if (init.code == SoulseekWire.PEER_INIT_CONNECT) {
@@ -1378,11 +2341,6 @@ public final class SoulseekClient extends Thread {
         r.readUInt32();
         if (CONN_FILE.equals(connType)) {
           handleIncomingFileTransfer(peer, peerUser);
-          return;
-        }
-        if (pendingDownload != null) {
-          debugLog("drop search P during download " + peerUser);
-          closeQuietly(peer);
           return;
         }
         handlePeerSocket(peer, peerUser);
@@ -1410,9 +2368,23 @@ public final class SoulseekClient extends Thread {
       while (running.get() && !peer.isClosed()) {
         SoulseekWire.PeerFrame frame = SoulseekWire.readPeerFrame(in);
         if (frame.code == SoulseekWire.PEER_SHARES_REQUEST) {
+          // #region agent log
+          try {
+            agentLog("SoulseekClient.handlePeerSocket", "PEER_SHARES_REQUEST", "H1-H2",
+                new JSONObject().put("peerUser", peerUser));
+          } catch (Exception ignored) {}
+          // #endregion
           replySharesList(peer);
         } else if (frame.code == SoulseekWire.PEER_FOLDER_CONTENTS_REQUEST) {
           replyFolderContents(peer, frame.body);
+        } else if (frame.code == SoulseekWire.PEER_USER_INFO_REQUEST) {
+          // #region agent log
+          try {
+            agentLog("SoulseekClient.handlePeerSocket", "PEER_USER_INFO_REQUEST", "H1-H4",
+                new JSONObject().put("peerUser", peerUser));
+          } catch (Exception ignored) {}
+          // #endregion
+          replyUserInfo(peer);
         } else if (frame.code == SoulseekWire.PEER_QUEUE_UPLOAD) {
           SoulseekWire.Reader rq = new SoulseekWire.Reader(frame.body);
           String filename = rq.readString();
@@ -1432,6 +2404,10 @@ public final class SoulseekClient extends Thread {
             acceptTransferRequest(peer, frame.body);
           }
         } else if (frame.code == SoulseekWire.PEER_FILE_SEARCH_RESPONSE) {
+          if (pendingDownload != null) {
+            debugLog("ignore search response during download " + peerUser);
+            continue;
+          }
           SoulseekWire.SearchResponse parsed = SoulseekWire.parseSearchResponse(frame.body, activeSearchToken);
           String resultUser = parsed.username != null && parsed.username.length() > 0
               ? parsed.username : peerUser;
@@ -1470,6 +2446,31 @@ public final class SoulseekClient extends Thread {
     }
   }
 
+  private void replyUserInfo(Socket peer) throws Exception {
+    int active;
+    int queued;
+    synchronized (uploadLock) {
+      active = activeUploads;
+      queued = uploadQueue.size();
+    }
+    boolean slots = sharePolicy.acceptNewUploads() && active < MAX_UPLOAD_SLOTS;
+    int permitted = sharePolicy.acceptNewUploads()
+            ? SoulseekWire.UPLOAD_PERM_EVERYONE : SoulseekWire.UPLOAD_PERM_NO_ONE;
+    byte[] pic = ReachProfilePicture.load(appContext);
+    byte[] body = SoulseekWire.packUserInfoResponse(userBio, pic,
+            slots, queued, MAX_UPLOAD_SLOTS, permitted);
+    // #region agent log
+    try {
+      agentLog("SoulseekClient.replyUserInfo", "user info reply", "H4",
+          new JSONObject().put("bioLen", userBio != null ? userBio.length() : 0)
+              .put("picLen", pic != null ? pic.length : 0)
+              .put("bodyLen", body.length));
+    } catch (Exception ignored) {}
+    // #endregion
+    peer.getOutputStream().write(SoulseekWire.peerMessage(SoulseekWire.PEER_USER_INFO_RESPONSE, body));
+    peer.getOutputStream().flush();
+  }
+
   private void replySharesList(Socket peer) throws Exception {
     boolean announce = sharePolicy.announceShares();
     int files = shareIndex.fileCount();
@@ -1480,10 +2481,17 @@ public final class SoulseekClient extends Thread {
           new JSONObject().put("announce", announce).put("files", files).put("dirs", dirs));
     } catch (Exception ignored) {}
     // #endregion
-    byte[] raw = announce && files > 0
+    byte[] raw = announce
         ? shareIndex.buildShareListUncompressed()
         : SoulseekShareIndex.empty().buildShareListUncompressed();
     byte[] body = SoulseekShareIndex.zlibCompress(raw);
+    // #region agent log
+    try {
+      agentLog("SoulseekClient.replySharesList", "shares reply sent", "H2-H3",
+          new JSONObject().put("announce", announce).put("files", files).put("dirs", dirs)
+              .put("rawLen", raw.length).put("zlibLen", body.length));
+    } catch (Exception ignored) {}
+    // #endregion
     peer.getOutputStream().write(SoulseekWire.peerMessage(SoulseekWire.PEER_SHARES_REPLY, body));
     peer.getOutputStream().flush();
   }
@@ -1514,19 +2522,30 @@ public final class SoulseekClient extends Thread {
         closeQuietly(peer);
         return;
       }
+      QueuedUpload deferred = null;
       synchronized (uploadLock) {
-        if (uploadInProgress) {
+        if (activeUploads < MAX_UPLOAD_SLOTS) {
+          activeUploads++;
+        } else if (sharePolicy.processUploadQueue()) {
+          deferred = new QueuedUpload(peer, peerUser, filename, file);
+          uploadQueue.add(deferred);
+        } else {
           sendUploadDenied(peer, filename, "Busy");
           closeQuietly(peer);
           return;
         }
-        uploadInProgress = true;
       }
-      sendPlaceInQueue(peer, filename, 1);
-      runUpload(peer, peerUser, filename, file);
+      int place;
+      synchronized (uploadLock) {
+        place = activeUploads + uploadQueue.size();
+      }
+      sendPlaceInQueue(peer, filename, place);
+      if (deferred == null) {
+        runUpload(peer, peerUser, filename, file);
+      }
     } catch (Exception e) {
       debugLog("queue upload fail: " + e);
-      finishUploadSlot();
+      finishUploadSlot(null);
       closeQuietly(peer);
     }
   }
@@ -1543,12 +2562,57 @@ public final class SoulseekClient extends Thread {
     peer.getOutputStream().flush();
   }
 
-  private void finishUploadSlot() {
+  private void finishUploadSlot(QueuedUpload failedQueued) {
+    QueuedUpload next = null;
     synchronized (uploadLock) {
-      uploadInProgress = false;
+      if (failedQueued != null) {
+        uploadQueue.remove(failedQueued);
+      } else if (activeUploads > 0) {
+        activeUploads--;
+      }
+      if (activeUploads < MAX_UPLOAD_SLOTS && !uploadQueue.isEmpty()
+              && sharePolicy.processUploadQueue()) {
+        next = uploadQueue.pollFirst();
+        if (next != null) {
+          activeUploads++;
+        }
+      }
     }
-    sharePolicy.onUploadQueueEmpty();
     refreshShareAnnouncement();
+    if (next != null) {
+      try {
+        sendPlaceInQueue(next.peer, next.filename, 1);
+        runUpload(next.peer, next.peerUser, next.filename, next.file);
+      } catch (Exception e) {
+        debugLog("dequeued upload fail: " + e);
+        closeQuietly(next.peer);
+        finishUploadSlot(next);
+      }
+      return;
+    }
+    synchronized (uploadLock) {
+      if (activeUploads == 0 && uploadQueue.isEmpty()) {
+        sharePolicy.onUploadQueueEmpty();
+      }
+    }
+  }
+
+  private void finishUploadSlot() {
+    finishUploadSlot(null);
+  }
+
+  private static final class QueuedUpload {
+    final Socket peer;
+    final String peerUser;
+    final String filename;
+    final File file;
+
+    QueuedUpload(Socket peer, String peerUser, String filename, File file) {
+      this.peer = peer;
+      this.peerUser = peerUser;
+      this.filename = filename;
+      this.file = file;
+    }
   }
 
   private void runUpload(final Socket peer, final String peerUser, final String filename, final File file) {
@@ -1556,6 +2620,16 @@ public final class SoulseekClient extends Thread {
       @Override
       public void run() {
         Socket f = null;
+        PowerManager.WakeLock wakeLock = null;
+        if (appContext != null) {
+          try {
+            PowerManager pm = (PowerManager) appContext.getSystemService(Context.POWER_SERVICE);
+            if (pm != null) {
+              wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SoulseekUL");
+              wakeLock.acquire();
+            }
+          } catch (Exception ignored) {}
+        }
         try {
           int token = (int) (System.currentTimeMillis() & 0x7fffffff);
           long size = file.length();
@@ -1593,6 +2667,7 @@ public final class SoulseekClient extends Thread {
           long offset = SoulseekWire.readUInt64(f.getInputStream());
           sendFileToPeer(f.getOutputStream(), file, offset, size);
           debugLog("upload complete " + basenameForSave(filename) + " -> " + peerUser);
+          announceUploadSpeedAsync();
         } catch (Exception e) {
           debugLog("upload fail " + peerUser + ": " + e);
           try {
@@ -1601,6 +2676,9 @@ public final class SoulseekClient extends Thread {
             peer.getOutputStream().flush();
           } catch (Exception ignored) {}
         } finally {
+          if (wakeLock != null && wakeLock.isHeld()) {
+            try { wakeLock.release(); } catch (Exception ignored) {}
+          }
           closeQuietly(f);
           closeQuietly(peer);
           finishUploadSlot();

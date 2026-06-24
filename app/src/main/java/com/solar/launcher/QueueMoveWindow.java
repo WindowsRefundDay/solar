@@ -29,4 +29,13 @@ final class QueueMoveWindow {
     static boolean canMoveTo(int from, int to) {
         return from >= 0 && to >= 0 && from != to;
     }
+
+    /**
+     * Slot delta from browse position to ribbon center for enter/cancel animations.
+     * Uses {@link QueueBrowseWindow#browseViewportSlot} as the single source of truth.
+     */
+    static int ribbonEnterTranslationSlots(int moveIdx, int count) {
+        int browseSlot = QueueBrowseWindow.browseViewportSlot(moveIdx, count, VISIBLE_ROWS);
+        return browseSlot - RIBBON_CENTER;
+    }
 }

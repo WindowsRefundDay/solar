@@ -1,6 +1,7 @@
 package com.solar.launcher;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.net.wifi.WifiInfo;
@@ -78,18 +79,91 @@ public final class ConnectivityHelper {
     public static boolean itemNeedsInternetForDiscovery(String id) {
         if (id == null) return false;
         id = HomeMenuConfig.migrateIdStatic(id);
-        return HomeMenuConfig.ID_SOULSEEK.equals(id);
+        return HomeMenuConfig.ID_SOULSEEK.equals(id) || HomeMenuConfig.ID_DEEZER.equals(id);
     }
 
     /** Set by MainActivity when Reach login fails on an online network. */
     private static volatile boolean reachLoginOk = true;
+    private static volatile boolean reachEnabled = true;
+    /** False when NAT-PMP cannot map listen port — peer transfers gated. */
+    private static volatile boolean reachPeerOk = true;
+    private static volatile boolean deezerEnabled = true;
+    private static volatile boolean deezerLoginOk = false;
+
+    public static void setDeezerEnabled(boolean enabled) {
+        deezerEnabled = enabled;
+    }
+
+    public static void setDeezerLoginOk(boolean ok) {
+        deezerLoginOk = ok;
+    }
+
+    public static boolean isDeezerEnabled() {
+        return deezerEnabled;
+    }
+
+    public static boolean isDeezerLoginOk() {
+        return deezerLoginOk;
+    }
 
     public static void setReachLoginOk(boolean ok) {
         reachLoginOk = ok;
     }
 
+    public static void setReachEnabled(boolean enabled) {
+        reachEnabled = enabled;
+    }
+
+    public static void setReachPeerOk(boolean ok) {
+        reachPeerOk = ok;
+    }
+
+    public static boolean isReachEnabled() {
+        return reachEnabled;
+    }
+
     public static boolean isReachLoginOk() {
         return reachLoginOk;
+    }
+
+    public static boolean isReachPeerOk() {
+        return reachPeerOk;
+    }
+
+    /** Get Music home shortcut: Deezer and/or Reach when configured and reachable. */
+    public static boolean isGetMusicShortcutAvailable(SharedPreferences prefs) {
+        if (prefs != null) {
+            return GetMusicSources.anyAvailable(prefs, reachEnabled, deezerEnabled);
+        }
+        return (deezerEnabled && deezerLoginOk)
+                || (reachEnabled && reachLoginOk && reachPeerOk);
+    }
+
+    /** Active route is cellular — Soulseek peer TCP is usually blocked (CG-NAT). */
+    public static boolean isMobileActive(Context context) {
+        if (context == null) return false;
+        try {
+            ConnectivityManager cm = (ConnectivityManager) context.getApplicationContext()
+                    .getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return false;
+            NetworkInfo active = cm.getActiveNetworkInfo();
+            if (active != null && active.isConnected()
+                    && active.getType() == ConnectivityManager.TYPE_MOBILE) {
+                return true;
+            }
+            NetworkInfo[] all = cm.getAllNetworkInfo();
+            if (all != null) {
+                boolean mobile = false;
+                boolean wifi = false;
+                for (NetworkInfo ni : all) {
+                    if (ni == null || !ni.isConnected()) continue;
+                    if (ni.getType() == ConnectivityManager.TYPE_MOBILE) mobile = true;
+                    if (ni.getType() == ConnectivityManager.TYPE_WIFI) wifi = true;
+                }
+                return mobile && !wifi;
+            }
+        } catch (Exception ignored) {}
+        return false;
     }
 
     /** Needs routable internet before starting an online-only action. */
@@ -120,7 +194,12 @@ public final class ConnectivityHelper {
         if (id == null) return false;
         id = HomeMenuConfig.migrateIdStatic(id);
         if (HomeMenuConfig.ID_MORE.equals(id)) return true;
-        if (HomeMenuConfig.ID_SOULSEEK.equals(id)) return internetAvailable && reachLoginOk;
+        if (HomeMenuConfig.ID_SOULSEEK.equals(id)) {
+            return internetAvailable && isGetMusicShortcutAvailable(null);
+        }
+        if (HomeMenuConfig.ID_DEEZER.equals(id)) {
+            return internetAvailable && deezerEnabled && deezerLoginOk;
+        }
         if (itemNeedsInternetForDiscovery(id)) return internetAvailable;
         if (itemNeedsLocalNetwork(id)) return localNetworkAvailable;
         if (HomeMenuConfig.ID_PODCASTS.equals(id)) return internetAvailable || podcastsSaved;

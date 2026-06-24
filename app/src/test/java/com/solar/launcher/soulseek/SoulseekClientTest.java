@@ -17,7 +17,7 @@ import static org.junit.Assert.fail;
 public class SoulseekClientTest {
 
     private static SoulseekClient.Result r(String user, String file, boolean live, boolean slot, int speed) {
-        return new SoulseekClient.Result(user, file, 3 * 1024 * 1024, 192, 180, live, slot, speed);
+        return new SoulseekClient.Result(user, file, 3 * 1024 * 1024, 192, 180, live, slot, speed, 0);
     }
 
     @Test
@@ -75,23 +75,48 @@ public class SoulseekClientTest {
 
     @Test
     public void mp3ScoresAboveFlacForSamePeer() {
-        int mp3 = SoulseekClient.Result.computeQualityScore("track.mp3", 3 * 1024 * 1024, true, true, 500_000);
-        int flac = SoulseekClient.Result.computeQualityScore("track.flac", 3 * 1024 * 1024, true, true, 500_000);
+        int mp3 = SoulseekClient.Result.computeQualityScore(
+                "track.mp3", 3 * 1024 * 1024, 180, true, true, 500_000, 0, null);
+        int flac = SoulseekClient.Result.computeQualityScore(
+                "track.flac", 3 * 1024 * 1024, 180, true, true, 500_000, 0, null);
         assertTrue(mp3 > flac);
     }
 
     @Test
     public void freeSlotScoresAboveNoSlot() {
-        int slot = SoulseekClient.Result.computeQualityScore("a.m4a", 2 * 1024 * 1024, true, true, 200_000);
-        int noslot = SoulseekClient.Result.computeQualityScore("a.m4a", 2 * 1024 * 1024, true, false, 200_000);
+        int slot = SoulseekClient.Result.computeQualityScore(
+                "a.m4a", 2 * 1024 * 1024, 180, true, true, 200_000, 0, null);
+        int noslot = SoulseekClient.Result.computeQualityScore(
+                "a.m4a", 2 * 1024 * 1024, 180, true, false, 200_000, 0, null);
         assertTrue(slot > noslot);
     }
 
     @Test
     public void livePeerScoresAboveUnknown() {
-        int live = SoulseekClient.Result.computeQualityScore("a.m4a", 2 * 1024 * 1024, true, true, 0);
-        int unknown = SoulseekClient.Result.computeQualityScore("a.m4a", 2 * 1024 * 1024, false, true, 0);
+        int live = SoulseekClient.Result.computeQualityScore(
+                "a.m4a", 2 * 1024 * 1024, 180, true, true, 0, 0, null);
+        int unknown = SoulseekClient.Result.computeQualityScore(
+                "a.m4a", 2 * 1024 * 1024, 180, false, true, 0, 0, null);
         assertTrue(live > unknown);
+    }
+
+    @Test
+    public void filenameRelevanceBoostsMatchingResults() {
+        SoulseekClient.Result match = new SoulseekClient.Result(
+                "a", "Artist/Album/Artist - Title.mp3", 3 * 1024 * 1024, 192, 180, true, true, 200_000, 0);
+        SoulseekClient.Result miss = new SoulseekClient.Result(
+                "b", "Other/random.mp3", 3 * 1024 * 1024, 192, 180, true, true, 200_000, 0);
+        assertTrue(SoulseekClient.Result.compareByDownloadReliability(
+                match, miss, "artist title", null) < 0);
+    }
+
+    @Test
+    public void longQueueRanksBelowShortQueue() {
+        SoulseekClient.Result shortQ = new SoulseekClient.Result(
+                "a", "a.mp3", 3 * 1024 * 1024, 192, 180, true, true, 200_000, 5);
+        SoulseekClient.Result longQ = new SoulseekClient.Result(
+                "b", "b.mp3", 3 * 1024 * 1024, 192, 180, true, true, 200_000, 60);
+        assertTrue(SoulseekClient.Result.compareByDownloadReliability(shortQ, longQ) < 0);
     }
 
     @Test
@@ -104,9 +129,9 @@ public class SoulseekClientTest {
 
     @Test
     public void overBitrateThreshold_usesWireBitrate() {
-        SoulseekClient.Result r320 = new SoulseekClient.Result("a", "a.mp3", 4 * 1024 * 1024, 320, 180, true, true, 0);
-        SoulseekClient.Result r192 = new SoulseekClient.Result("b", "b.mp3", 3 * 1024 * 1024, 192, 180, true, true, 0);
-        SoulseekClient.Result rFlac = new SoulseekClient.Result("c", "c.flac", 20 * 1024 * 1024, 900, 180, true, true, 0);
+        SoulseekClient.Result r320 = new SoulseekClient.Result("a", "a.mp3", 4 * 1024 * 1024, 320, 180, true, true, 0, 0);
+        SoulseekClient.Result r192 = new SoulseekClient.Result("b", "b.mp3", 3 * 1024 * 1024, 192, 180, true, true, 0, 0);
+        SoulseekClient.Result rFlac = new SoulseekClient.Result("c", "c.flac", 20 * 1024 * 1024, 900, 180, true, true, 0, 0);
         assertFalse(r320.isOverBitrateThreshold());
         assertFalse(r192.isOverBitrateThreshold());
         assertTrue(rFlac.isOverBitrateThreshold());
@@ -116,14 +141,14 @@ public class SoulseekClientTest {
     public void overBitrateThreshold_estimatesFromSizeAndDuration() {
         long size = 40L * 1024 * 1024;
         int duration = 600;
-        SoulseekClient.Result r = new SoulseekClient.Result("a", "big.mp3", size, 0, duration, true, true, 0);
+        SoulseekClient.Result r = new SoulseekClient.Result("a", "big.mp3", size, 0, duration, true, true, 0, 0);
         assertTrue(r.isOverBitrateThreshold());
     }
 
     @Test
     public void overBitrateThreshold_treatsLosslessExtensionAsHighWhenUnknown() {
-        SoulseekClient.Result flac = new SoulseekClient.Result("a", "music/track.FLAC", 10 * 1024 * 1024, 0, 0, true, true, 0);
-        SoulseekClient.Result mp3 = new SoulseekClient.Result("b", "music/track.mp3", 3 * 1024 * 1024, 0, 0, true, true, 0);
+        SoulseekClient.Result flac = new SoulseekClient.Result("a", "music/track.FLAC", 10 * 1024 * 1024, 0, 0, true, true, 0, 0);
+        SoulseekClient.Result mp3 = new SoulseekClient.Result("b", "music/track.mp3", 3 * 1024 * 1024, 0, 0, true, true, 0, 0);
         assertTrue(flac.isOverBitrateThreshold());
         assertFalse(mp3.isOverBitrateThreshold());
     }

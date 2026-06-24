@@ -34,6 +34,9 @@ public final class PlayQueueStore {
                     o.put("epSaved", q.podcastFromSaved);
                 }
                 if (q.reachMeta != null) o.put("reachMeta", q.reachMeta);
+                if (q.reachPeerUsername != null) o.put("reachPeer", q.reachPeerUsername);
+                if (q.deezerMeta != null) o.put("deezerMeta", q.deezerMeta);
+                if (q.deezerTrackId > 0) o.put("deezerTrackId", q.deezerTrackId);
                 arr.put(o);
             }
             JSONObject root = new JSONObject();
@@ -89,7 +92,13 @@ public final class PlayQueueStore {
                         continue;
                     }
                     if ("REACH_STREAM".equals(kind)) {
-                        items.add(PlayQueue.QueueItem.reach(file, o.optString("reachMeta", file.getName())));
+                        String peer = o.optString("reachPeer", "");
+                        items.add(PlayQueue.QueueItem.reach(file, o.optString("reachMeta", file.getName()),
+                                peer.isEmpty() ? null : peer));
+                    } else if ("DEEZER_STREAM".equals(kind)) {
+                        items.add(PlayQueue.QueueItem.deezer(file,
+                                o.optString("deezerMeta", file.getName()),
+                                o.optLong("deezerTrackId", 0)));
                     } else {
                         items.add(PlayQueue.QueueItem.music(file));
                     }

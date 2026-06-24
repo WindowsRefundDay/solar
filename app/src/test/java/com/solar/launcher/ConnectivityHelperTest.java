@@ -64,12 +64,18 @@ public class ConnectivityHelperTest {
 
     @Test
     public void shouldShowHomeShortcut_reachAndPcUpload() {
+        ConnectivityHelper.setReachPeerOk(true);
         if (ConnectivityHelper.shouldShowHomeShortcut(HomeMenuConfig.ID_SOULSEEK, false, true, false)) {
             throw new AssertionError("reach offline");
         }
         if (!ConnectivityHelper.shouldShowHomeShortcut(HomeMenuConfig.ID_SOULSEEK, true, false, false)) {
             throw new AssertionError("reach online");
         }
+        ConnectivityHelper.setReachPeerOk(false);
+        if (ConnectivityHelper.shouldShowHomeShortcut(HomeMenuConfig.ID_SOULSEEK, true, false, false)) {
+            throw new AssertionError("reach peer blocked");
+        }
+        ConnectivityHelper.setReachPeerOk(true);
         if (ConnectivityHelper.shouldShowHomeShortcut(HomeMenuConfig.ID_PC_UPLOAD, true, false, false)) {
             throw new AssertionError("pc upload needs lan");
         }

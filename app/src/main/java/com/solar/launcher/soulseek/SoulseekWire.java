@@ -1,5 +1,7 @@
 package com.solar.launcher.soulseek;
 
+import com.solar.launcher.DeviceFeatures;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -14,21 +16,56 @@ import java.util.zip.DataFormatException;
 import java.util.zip.Inflater;
 
 /** ponytail: Soulseek binary wire format (Nicotine+ / slskmessages.py subset). */
-final class SoulseekWire {
+public final class SoulseekWire {
     static final String SERVER_HOST = "server.slsknet.org";
     static final int SERVER_PORT = 2242;
-    static final int CLIENT_MAJOR = 160;
-    static final int CLIENT_MINOR = 1;
+    /**
+     * Experimental major version reserved for new clients (SLSK protocol). Reach uses this
+     * instead of impersonating Nicotine+ (160) or SoulseekQt (157) — login would reject
+     * unknown majors, but peer browse/profile depend on TCP/NAT, not client id.
+     */
+    static final int CLIENT_MAJOR = 177;
+
+    /** Upload permission codes in user-info response (peer code 16). */
+    static final int UPLOAD_PERM_NO_ONE = 0;
+    static final int UPLOAD_PERM_EVERYONE = 1;
+    static final int UPLOAD_PERM_USERS_IN_LIST = 2;
+    static final int UPLOAD_PERM_PERMITTED = 3;
+
+    /** Bytes/sec advertised to the server (MSG_SEND_UPLOAD_SPEED) and peers. */
+    static final int ADVERTISED_UPLOAD_SPEED = 10_485_760;
+
+    static int clientMinor() {
+        return DeviceFeatures.soulseekClientMinor();
+    }
 
     static final int MSG_LOGIN = 1;
     static final int MSG_SET_WAIT_PORT = 2;
     static final int MSG_GET_PEER_ADDRESS = 3;
+    static final int MSG_WATCH_USER = 5;
+    static final int MSG_UNWATCH_USER = 6;
+    static final int MSG_GET_USER_STATUS = 7;
     static final int MSG_CONNECT_TO_PEER = 18;
+    static final int MSG_MESSAGE_USER = 22;
+    static final int MSG_MESSAGE_ACKED = 23;
     static final int MSG_FILE_SEARCH = 26;
     static final int MSG_SET_STATUS = 28;
+    static final int MSG_ADD_TO_IGNORELIST = 53;
+    static final int MSG_ADD_TO_FAVORITES = 54;
+    static final int MSG_REMOVE_FROM_FAVORITES = 55;
+    static final int MSG_UNIGNORE_USER = 12;
+    static final int MSG_ADD_THING_I_LIKE = 51;
+    static final int MSG_REMOVE_THING_I_LIKE = 52;
+    static final int MSG_USER_INTERESTS = 57;
+    static final int MSG_ADD_THING_I_HATE = 117;
+    static final int MSG_REMOVE_THING_I_HATE = 118;
+    /** @deprecated use {@link #MSG_UNIGNORE_USER} */
+    static final int MSG_REMOVE_FROM_IGNORELIST = MSG_UNIGNORE_USER;
     static final int MSG_HAVE_NO_PARENT = 71;
     static final int MSG_ACCEPT_CHILDREN = 100;
     static final int MSG_POSSIBLE_PARENTS = 102;
+    static final int MSG_USER_SEARCH = 42;
+    static final int MSG_ITEM_SIMILAR_USERS = 112;
     static final int MSG_EMBEDDED_MESSAGE = 93;
     static final int MSG_CANT_CONNECT_TO_PEER = 1001;
     static final int DISTRIB_SEARCH = 3;
@@ -46,11 +83,25 @@ final class SoulseekWire {
 
     static final int STATUS_ONLINE = 2;
     static final int MSG_SHARED_FOLDER_FILES = 35;
+    static final int MSG_SEND_UPLOAD_SPEED = 121;
+    static final int MSG_SAY_CHATROOM = 13;
+    static final int MSG_JOIN_ROOM = 14;
+    static final int MSG_LEAVE_ROOM = 15;
+    static final int MSG_USER_JOINED_ROOM = 16;
+    static final int MSG_USER_LEFT_ROOM = 17;
+    static final int MSG_ROOM_LIST = 64;
+    static final int MSG_ROOM_TICKERS = 113;
+    static final int MSG_ROOM_TICKER_ADDED = 114;
+    static final int MSG_ROOM_TICKER_REMOVED = 115;
+    static final int MSG_SET_ROOM_TICKER = 116;
     static final int PEER_SHARES_REQUEST = 4;
     static final int PEER_SHARES_REPLY = 5;
     static final int PEER_FOLDER_CONTENTS_REQUEST = 36;
     static final int PEER_FOLDER_CONTENTS_RESPONSE = 37;
+    static final int PEER_USER_INFO_REQUEST = 15;
+    static final int PEER_USER_INFO_RESPONSE = 16;
 
+    static final int STATUS_AWAY = 1;
     static final int TRANSFER_DOWNLOAD = 0;
     static final int TRANSFER_UPLOAD = 1;
 
@@ -175,7 +226,7 @@ final class SoulseekWire {
         bos.write(packUInt32(CLIENT_MAJOR));
         String hash = md5Hex(username + password);
         bos.write(packString(hash));
-        bos.write(packUInt32(CLIENT_MINOR));
+        bos.write(packUInt32(clientMinor()));
         return bos.toByteArray();
     }
 
@@ -267,14 +318,17 @@ final class SoulseekWire {
         final int duration;
         final boolean freeSlot;
         final int speed;
+        final int queueLength;
 
-        SearchFile(String filename, long size, int bitrate, int duration, boolean freeSlot, int speed) {
+        SearchFile(String filename, long size, int bitrate, int duration, boolean freeSlot,
+                   int speed, int queueLength) {
             this.filename = filename;
             this.size = size;
             this.bitrate = bitrate;
             this.duration = duration;
             this.freeSlot = freeSlot;
             this.speed = speed;
+            this.queueLength = queueLength;
         }
     }
 
@@ -346,16 +400,18 @@ final class SoulseekWire {
             int bitrate = 0;
             int duration = 0;
             int speed = 0;
+            int queueLength = 0;
             for (int a = 0; a < attrs; a++) {
                 int code = r.readUInt32();
                 int val = r.readUInt32();
                 if (code == 0) bitrate = val;
                 else if (code == 1) duration = val;
+                else if (code == 7 || code == 2) queueLength = val;
                 else if (code == 6) speed = val;
             }
             boolean freeSlot = slotFlag == 1;
             if (include && isAudio(name)) {
-                out.add(new SearchFile(name, size, bitrate, duration, freeSlot, speed));
+                out.add(new SearchFile(name, size, bitrate, duration, freeSlot, speed, queueLength));
             }
         }
     }
@@ -513,6 +569,380 @@ final class SoulseekWire {
         DistribFrame(int code, byte[] body) {
             this.code = code;
             this.body = body;
+        }
+    }
+
+    public static final class BrowseFile {
+        public final String folder;
+        public final String name;
+        public final long size;
+        public final String ext;
+
+        public BrowseFile(String folder, String name, long size, String ext) {
+            this.folder = folder;
+            this.name = name;
+            this.size = size;
+            this.ext = ext;
+        }
+
+        public String virtualPath() {
+            if (folder == null || folder.isEmpty()) return name;
+            return folder + "\\" + name;
+        }
+    }
+
+    public static final class BrowseFolder {
+        public final String path;
+        public final List<BrowseFile> files;
+
+        public BrowseFolder(String path, List<BrowseFile> files) {
+            this.path = path;
+            this.files = files;
+        }
+    }
+
+    static byte[] packUserInfoResponse(String descr, boolean slotsAvail, int queueSize,
+            int uploadTotal, int uploadAllowed) throws IOException {
+        return packUserInfoResponse(descr, null, slotsAvail, queueSize, uploadTotal, uploadAllowed);
+    }
+
+    static byte[] packUserInfoResponse(String descr, byte[] picture, boolean slotsAvail, int queueSize,
+            int uploadTotal, int uploadAllowed) throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        DataOutputStream out = new DataOutputStream(bos);
+        writeString(out, descr != null ? descr : "");
+        if (picture != null && picture.length > 0) {
+            out.write(1);
+            out.writeInt(Integer.reverseBytes(picture.length));
+            out.write(picture);
+        } else {
+            out.write(0);
+        }
+        out.writeInt(Integer.reverseBytes(uploadTotal));
+        out.writeInt(Integer.reverseBytes(queueSize));
+        out.write(slotsAvail ? 1 : 0);
+        out.writeInt(Integer.reverseBytes(uploadAllowed));
+        return bos.toByteArray();
+    }
+
+    static byte[] packInterestString(String item) throws IOException {
+        return packString(item != null ? item : "");
+    }
+
+    static byte[] packItemSimilarUsersRequest(String item) throws IOException {
+        return packInterestString(item);
+    }
+
+    public static final class ItemSimilarUsersResponse {
+        public final String item;
+        public final List<String> users;
+
+        ItemSimilarUsersResponse(String item, List<String> users) {
+            this.item = item != null ? item : "";
+            this.users = users != null ? users : new ArrayList<String>();
+        }
+    }
+
+    static ItemSimilarUsersResponse parseItemSimilarUsersResponse(byte[] body) throws IOException {
+        Reader r = new Reader(body);
+        String item = r.readString();
+        int num = r.readUInt32();
+        if (num < 0) num = 0;
+        if (num > 5000) num = 5000;
+        List<String> users = new ArrayList<String>(num);
+        for (int i = 0; i < num; i++) {
+            users.add(r.readString());
+        }
+        return new ItemSimilarUsersResponse(item, users);
+    }
+
+    static byte[] packUserInterestsRequest(String username) throws IOException {
+        return packString(username != null ? username : "");
+    }
+
+    public static final class UserInterestsResponse {
+        public final String username;
+        public final List<String> likes;
+        public final List<String> dislikes;
+
+        UserInterestsResponse(String username, List<String> likes, List<String> dislikes) {
+            this.username = username != null ? username : "";
+            this.likes = likes != null ? likes : new ArrayList<String>();
+            this.dislikes = dislikes != null ? dislikes : new ArrayList<String>();
+        }
+    }
+
+    static UserInterestsResponse parseUserInterestsResponse(byte[] body) throws IOException {
+        Reader r = new Reader(body);
+        String user = r.readString();
+        int likesNum = r.readUInt32();
+        if (likesNum < 0) likesNum = 0;
+        if (likesNum > 500) likesNum = 500;
+        List<String> likes = new ArrayList<String>(likesNum);
+        for (int i = 0; i < likesNum; i++) likes.add(r.readString());
+        int hatesNum = r.readUInt32();
+        if (hatesNum < 0) hatesNum = 0;
+        if (hatesNum > 500) hatesNum = 500;
+        List<String> hates = new ArrayList<String>(hatesNum);
+        for (int i = 0; i < hatesNum; i++) hates.add(r.readString());
+        return new UserInterestsResponse(user, likes, hates);
+    }
+
+    public static final class UserInfoResponse {
+        public final String description;
+
+        UserInfoResponse(String description) {
+            this.description = description != null ? description : "";
+        }
+    }
+
+    static UserInfoResponse parseUserInfoResponse(byte[] body) throws IOException {
+        Reader r = new Reader(body);
+        String descr = r.readString();
+        if (r.hasRemaining()) {
+            boolean hasPic = r.readBool();
+            if (hasPic && r.hasRemaining()) {
+                int picLen = r.readUInt32();
+                if (picLen > 0 && picLen < 10_000_000) {
+                    r.skip(picLen);
+                }
+            }
+        }
+        return new UserInfoResponse(descr);
+    }
+
+    private static void writeString(DataOutputStream out, String s) throws IOException {
+        if (s == null) s = "";
+        byte[] raw = s.getBytes("UTF-8");
+        out.writeInt(Integer.reverseBytes(raw.length));
+        out.write(raw);
+    }
+
+    private static void skipBrowseFileAttributes(Reader r) throws IOException {
+        int attrs = r.readUInt32();
+        if (attrs < 0) attrs = 0;
+        if (attrs > 32) attrs = 32;
+        for (int a = 0; a < attrs; a++) {
+            r.readUInt32();
+            r.readUInt32();
+        }
+    }
+
+    private static BrowseFile readBrowseFile(Reader r, String dir) throws IOException {
+        r.readUInt8();
+        String name = r.readString();
+        long size = r.readFileSize();
+        int extLen = r.readUInt32();
+        if (extLen > 0 && extLen < 256) {
+            r.skip(extLen);
+        }
+        skipBrowseFileAttributes(r);
+        if (isAudio(name)) {
+            return new BrowseFile(dir, name, size, SoulseekShareIndex.extension(name));
+        }
+        return null;
+    }
+
+    static List<BrowseFolder> parseShareList(byte[] compressed) {
+        List<BrowseFolder> folders = new ArrayList<BrowseFolder>();
+        try {
+            byte[] raw = inflateAll(compressed);
+            Reader r = new Reader(raw);
+            int dirCount = r.readUInt32();
+            for (int d = 0; d < dirCount && d < 10000; d++) {
+                String dir = r.readString();
+                int fileCount = r.readUInt32();
+                List<BrowseFile> files = new ArrayList<BrowseFile>();
+                for (int f = 0; f < fileCount && f < MAX_FILES_PER_RESPONSE; f++) {
+                    BrowseFile file = readBrowseFile(r, dir);
+                    if (file != null) files.add(file);
+                }
+                folders.add(new BrowseFolder(dir, files));
+            }
+        } catch (Exception ignored) {}
+        return folders;
+    }
+
+    static List<BrowseFolder> parseFolderContents(byte[] compressed) {
+        List<BrowseFolder> folders = new ArrayList<BrowseFolder>();
+        try {
+            byte[] raw = inflateAll(compressed);
+            Reader r = new Reader(raw);
+            r.readUInt32(); // token
+            r.readString(); // folder
+            int dirCount = r.readUInt32();
+            for (int d = 0; d < dirCount && d < 10000; d++) {
+                String dir = r.readString();
+                int fileCount = r.readUInt32();
+                List<BrowseFile> files = new ArrayList<BrowseFile>();
+                for (int f = 0; f < fileCount && f < MAX_FILES_PER_RESPONSE; f++) {
+                    BrowseFile file = readBrowseFile(r, dir);
+                    if (file != null) files.add(file);
+                }
+                folders.add(new BrowseFolder(dir, files));
+            }
+        } catch (Exception ignored) {}
+        return folders;
+    }
+
+    static String parentFolder(String virtualPath) {
+        if (virtualPath == null) return "";
+        int slash = Math.max(virtualPath.lastIndexOf('\\'), virtualPath.lastIndexOf('/'));
+        return slash > 0 ? virtualPath.substring(0, slash) : "";
+    }
+
+    public static final class RoomEntry {
+        public final String name;
+        public final int userCount;
+
+        public RoomEntry(String name, int userCount) {
+            this.name = name != null ? name : "";
+            this.userCount = userCount;
+        }
+    }
+
+    static byte[] packJoinRoom(String room) throws IOException {
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        bos.write(packString(room));
+        bos.write(packUInt32(0));
+        return bos.toByteArray();
+    }
+
+    static byte[] packLeaveRoom(String room) throws IOException {
+        return packString(room);
+    }
+
+    static byte[] packSayChatroom(String room, String message) throws IOException {
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        bos.write(packString(room));
+        bos.write(packString(message));
+        return bos.toByteArray();
+    }
+
+    static List<RoomEntry> parseRoomList(byte[] body) {
+        List<RoomEntry> out = new ArrayList<RoomEntry>();
+        if (body == null || body.length == 0) return out;
+        try {
+            Reader r = new Reader(body);
+            appendRoomBlock(out, r, true);
+            if (r.hasRemaining()) appendRoomBlock(out, r, true);
+            if (r.hasRemaining()) appendRoomBlock(out, r, true);
+            if (r.hasRemaining()) {
+                int n = r.readUInt32();
+                for (int i = 0; i < n && i < 10000; i++) {
+                    String name = r.readString();
+                    if (name != null && !name.isEmpty()) {
+                        out.add(new RoomEntry(name, 0));
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return out;
+    }
+
+    private static void appendRoomBlock(List<RoomEntry> out, Reader r, boolean withCounts)
+            throws IOException {
+        int n = r.readUInt32();
+        String[] names = new String[n];
+        for (int i = 0; i < n; i++) names[i] = r.readString();
+        if (!withCounts) {
+            for (String name : names) {
+                if (name != null && !name.isEmpty()) out.add(new RoomEntry(name, 0));
+            }
+            return;
+        }
+        int nc = r.readUInt32();
+        for (int i = 0; i < n && i < nc; i++) {
+            int users = r.readUInt32();
+            if (names[i] != null && !names[i].isEmpty()) {
+                out.add(new RoomEntry(names[i], users));
+            }
+        }
+    }
+
+    public static final class RoomTickerEntry {
+        public final String username;
+        public final String text;
+
+        public RoomTickerEntry(String username, String text) {
+            this.username = username != null ? username : "";
+            this.text = text != null ? text : "";
+        }
+    }
+
+    public static final class RoomTickersMessage {
+        public final String room;
+        public final List<RoomTickerEntry> tickers;
+
+        RoomTickersMessage(String room, List<RoomTickerEntry> tickers) {
+            this.room = room != null ? room : "";
+            this.tickers = tickers != null ? tickers : new ArrayList<RoomTickerEntry>();
+        }
+    }
+
+    static byte[] packSetRoomTicker(String room, String ticker) throws IOException {
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        bos.write(packString(room));
+        bos.write(packString(ticker != null ? ticker : ""));
+        return bos.toByteArray();
+    }
+
+    static RoomTickersMessage parseRoomTickers(byte[] body) {
+        if (body == null || body.length == 0) return null;
+        try {
+            Reader r = new Reader(body);
+            String room = r.readString();
+            int n = r.readUInt32();
+            List<RoomTickerEntry> tickers = new ArrayList<RoomTickerEntry>();
+            for (int i = 0; i < n && i < 10000; i++) {
+                String user = r.readString();
+                String msg = r.readString();
+                if (user != null && !user.isEmpty() && msg != null && !msg.isEmpty()) {
+                    tickers.add(new RoomTickerEntry(user, msg));
+                }
+            }
+            return new RoomTickersMessage(room, tickers);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    static RoomTickerEntry parseRoomTickerAdded(byte[] body) {
+        if (body == null || body.length == 0) return null;
+        try {
+            Reader r = new Reader(body);
+            r.readString(); // room
+            String user = r.readString();
+            String msg = r.readString();
+            if (user == null || user.isEmpty()) return null;
+            return new RoomTickerEntry(user, msg != null ? msg : "");
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    static String parseRoomTickerAddedRoom(byte[] body) {
+        if (body == null || body.length == 0) return "";
+        try {
+            Reader r = new Reader(body);
+            return r.readString();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    static String parseRoomTickerRemovedRoom(byte[] body) {
+        return parseRoomTickerAddedRoom(body);
+    }
+
+    static String parseRoomTickerRemovedUser(byte[] body) {
+        if (body == null || body.length == 0) return "";
+        try {
+            Reader r = new Reader(body);
+            r.readString();
+            return r.readString();
+        } catch (Exception e) {
+            return "";
         }
     }
 }

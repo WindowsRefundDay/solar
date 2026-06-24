@@ -216,6 +216,7 @@
             android:clipChildren="true">
 
             <ScrollView
+                android:id="@+id/settings_list_scroll"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:fillViewport="true"
@@ -227,6 +228,52 @@
                     android:layout_height="wrap_content"
                     android:orientation="vertical" />
             </ScrollView>
+
+            <LinearLayout
+                android:id="@+id/soulseek_conversation_host"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <Button
+                    android:id="@+id/btn_conversation_back"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/soulseek_back_messages" />
+
+                <TextView
+                    android:id="@+id/tv_conversation_title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="marquee"
+                    android:gravity="center"
+                    android:marqueeRepeatLimit="marquee_forever"
+                    android:paddingLeft="10dp"
+                    android:paddingTop="6dp"
+                    android:paddingRight="10dp"
+                    android:paddingBottom="6dp"
+                    android:singleLine="true"
+                    android:textColor="#FFFFFF"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <ListView
+                    android:id="@+id/list_conversation_thread"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:divider="@null"
+                    android:scrollbars="none" />
+            </LinearLayout>
+
+            <ListView
+                android:id="@+id/list_reach_browse"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:divider="@null"
+                android:scrollbars="none"
+                android:visibility="gone" />
         </FrameLayout>
 
         <LinearLayout
@@ -268,14 +315,24 @@
                 android:layout_marginTop="12dp"
                 android:visibility="gone" />
 
-            <TextView
-                android:id="@+id/tv_settings_preview_state"
+            <ScrollView
+                android:id="@+id/settings_preview_state_scroll"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:layout_height="0dp"
+                android:layout_weight="1"
                 android:layout_marginTop="8dp"
-                android:gravity="center"
-                android:textColor="#FFFFFF"
-                android:textSize="16sp" />
+                android:fillViewport="true"
+                android:overScrollMode="never"
+                android:scrollbars="none">
+
+                <TextView
+                    android:id="@+id/tv_settings_preview_state"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_horizontal|top"
+                    android:textColor="#FFFFFF"
+                    android:textSize="16sp" />
+            </ScrollView>
         </LinearLayout>
 
         <FrameLayout

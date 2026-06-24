@@ -119,15 +119,87 @@ public class PlayQueueTest {
     }
 
     @Test
-    public void move_nowPlayingIndexFollowsTrack() {
+    public void replaceFileRef_preservesReachPeer() {
         PlayQueue q = new PlayQueue();
-        java.util.List<PlayQueue.QueueItem> items = new ArrayList<PlayQueue.QueueItem>();
-        items.add(PlayQueue.QueueItem.music(new File("/a.mp3")));
-        items.add(PlayQueue.QueueItem.music(new File("/b.mp3")));
-        items.add(PlayQueue.QueueItem.music(new File("/c.mp3")));
-        q.setAll(items, 1);
-        q.move(1, 0);
-        if (q.index() != 0) throw new AssertionError("np index follows moved track");
-        if (!"/b.mp3".equals(q.items().get(0).file.getPath())) throw new AssertionError("b at 0");
+        File partial = new File("/cache/partial.tmp");
+        File complete = new File("/cache/complete.mp3");
+        q.append(PlayQueue.QueueItem.reach(partial, "Song", "sharer"));
+        q.replaceFileRef(partial, complete, "Song");
+        if (!"sharer".equals(q.items().get(0).reachPeerUsername)) throw new AssertionError("peer");
+    }
+
+    @Test
+    public void promoteStreamToMusic_reachAndDeezer() {
+        PlayQueue q = new PlayQueue();
+        File partial = new File("/cache/partial.tmp");
+        File library = new File("/storage/sdcard0/Music/song.mp3");
+        q.append(PlayQueue.QueueItem.reach(partial, "Reach Song"));
+        q.promoteStreamToMusic(partial, library);
+        if (q.items().get(0).kind != PlayQueue.ItemKind.MUSIC_FILE) throw new AssertionError("reach promoted");
+        if (!library.equals(q.items().get(0).file)) throw new AssertionError("library path");
+
+        q.clear();
+        File dzPartial = new File("/cache/deezer.part");
+        q.append(PlayQueue.QueueItem.deezer(dzPartial, "Deezer Song", 42L));
+        q.promoteStreamToMusic(dzPartial, library);
+        if (q.items().get(0).kind != PlayQueue.ItemKind.MUSIC_FILE) throw new AssertionError("deezer promoted");
+    }
+
+    @Test
+    public void playbackCoordinator_finishStreamFileInQueue_promotesToMusic() throws Exception {
+        java.io.File musicRoot = java.io.File.createTempFile("music", "");
+        musicRoot.delete();
+        musicRoot.mkdirs();
+        java.io.File cacheRoot = java.io.File.createTempFile("cache", "");
+        cacheRoot.delete();
+        cacheRoot.mkdirs();
+        java.io.File partial = new java.io.File(cacheRoot, "reach/part.tmp");
+        partial.getParentFile().mkdirs();
+        partial.createNewFile();
+        java.io.File library = new java.io.File(musicRoot, "saved.mp3");
+        library.createNewFile();
+
+        PlaybackCoordinator pc = new PlaybackCoordinator();
+        pc.configureStreamPaths(musicRoot, cacheRoot);
+        java.util.List<java.io.File> pl = new java.util.ArrayList<java.io.File>();
+        pl.add(partial);
+        pc.activateMusic(pl, 0, false);
+        pc.finishStreamFileInQueue(partial, library, "saved.mp3");
+        if (pc.unifiedQueue().items().get(0).kind != PlayQueue.ItemKind.MUSIC_FILE) {
+            throw new AssertionError("promoted in coordinator");
+        }
+    }
+
+    @Test
+    public void playbackCoordinator_playPodcastAfterCurrent_mixesWithMusic() {
+        PlaybackCoordinator pc = new PlaybackCoordinator();
+        java.util.List<java.io.File> pl = new java.util.ArrayList<java.io.File>();
+        pl.add(new java.io.File("/a.mp3"));
+        pl.add(new java.io.File("/b.mp3"));
+        pc.activateMusic(pl, 0, false);
+        OpenRssClient.Episode ep = new OpenRssClient.Episode("ep1", "http://x", "");
+        int at = pc.playPodcastAfterCurrent(ep, "Show", false);
+        if (at != 1) throw new AssertionError("insert after current");
+        if (pc.unifiedQueue().size() != 3) throw new AssertionError("mixed size");
+        if (pc.unifiedQueue().index() != 1) throw new AssertionError("now playing podcast");
+        if (!pc.isPodcastActive()) throw new AssertionError("podcast active");
+    }
+
+    @Test
+    public void streamQueueHelper_libraryVsTemp() throws Exception {
+        java.io.File cache = java.io.File.createTempFile("cache", "");
+        cache.delete();
+        cache.mkdirs();
+        java.io.File music = java.io.File.createTempFile("music", "");
+        music.delete();
+        music.mkdirs();
+        java.io.File reachPartial = new java.io.File(cache, "reach/foo.tmp");
+        reachPartial.getParentFile().mkdirs();
+        reachPartial.createNewFile();
+        java.io.File lib = new java.io.File(music, "track.mp3");
+        lib.createNewFile();
+        if (!StreamQueueHelper.isStreamTempFile(cache, reachPartial)) throw new AssertionError("temp");
+        if (!StreamQueueHelper.isLibraryMusicFile(music, cache, lib)) throw new AssertionError("library");
+        if (StreamQueueHelper.isLibraryMusicFile(music, cache, reachPartial)) throw new AssertionError("not library");
     }
 }

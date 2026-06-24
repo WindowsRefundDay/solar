@@ -1,5 +1,7 @@
 package com.solar.launcher.soulseek;
 
+import android.media.MediaMetadataRetriever;
+
 import com.solar.launcher.podcast.PodcastLibrary;
 
 import java.io.ByteArrayOutputStream;
@@ -24,14 +26,19 @@ public final class SoulseekShareIndex {
         final File file;
         final long size;
         final String ext;
+        final int bitrate;
+        final int duration;
 
-        Entry(String virtualPath, String dir, String name, File file, long size, String ext) {
+        Entry(String virtualPath, String dir, String name, File file, long size, String ext,
+                int bitrate, int duration) {
             this.virtualPath = virtualPath;
             this.dir = dir;
             this.name = name;
             this.file = file;
             this.size = size;
             this.ext = ext;
+            this.bitrate = bitrate;
+            this.duration = duration;
         }
     }
 
@@ -44,33 +51,41 @@ public final class SoulseekShareIndex {
     }
 
     public synchronized void scan(String username, File musicRoot, File podcastRoot) {
-        entries.clear();
-        byVirtualPath.clear();
-        byDir.clear();
-        if (username == null || username.trim().isEmpty()) return;
-        String user = username.trim();
-        if (musicRoot != null && musicRoot.isDirectory()) {
-            scanRoot(user, "Music", musicRoot, musicRoot);
-        }
-        if (podcastRoot != null && podcastRoot.isDirectory()) {
-            scanRoot(user, "Podcasts", podcastRoot, podcastRoot);
-        }
-        for (Entry e : entries) {
-            List<Entry> list = byDir.get(e.dir);
-            if (list == null) {
-                list = new ArrayList<Entry>();
-                byDir.put(e.dir, list);
+        List<Entry> newEntries = new ArrayList<Entry>();
+        Map<String, File> newByVirtualPath = new HashMap<String, File>();
+        Map<String, List<Entry>> newByDir = new LinkedHashMap<String, List<Entry>>();
+        if (username != null && !username.trim().isEmpty()) {
+            String user = username.trim();
+            if (musicRoot != null && musicRoot.isDirectory()) {
+                scanRoot(user, "Music", musicRoot, musicRoot, newEntries, newByVirtualPath);
             }
-            list.add(e);
+            if (podcastRoot != null && podcastRoot.isDirectory()) {
+                scanRoot(user, "Podcasts", podcastRoot, podcastRoot, newEntries, newByVirtualPath);
+            }
+            for (Entry e : newEntries) {
+                List<Entry> list = newByDir.get(e.dir);
+                if (list == null) {
+                    list = new ArrayList<Entry>();
+                    newByDir.put(e.dir, list);
+                }
+                list.add(e);
+            }
         }
+        entries.clear();
+        entries.addAll(newEntries);
+        byVirtualPath.clear();
+        byVirtualPath.putAll(newByVirtualPath);
+        byDir.clear();
+        byDir.putAll(newByDir);
     }
 
-    private void scanRoot(String user, String libName, File root, File dir) {
+    private void scanRoot(String user, String libName, File root, File dir,
+            List<Entry> outEntries, Map<String, File> outByVirtualPath) {
         File[] kids = dir.listFiles();
         if (kids == null) return;
         for (File f : kids) {
             if (f.isDirectory()) {
-                scanRoot(user, libName, root, f);
+                scanRoot(user, libName, root, f, outEntries, outByVirtualPath);
             } else if (isShareableAudio(f.getName())) {
                 String rel = relativize(root, f);
                 String virtual = "@@" + user + "\\" + libName + "\\" + rel.replace('/', '\\');
@@ -79,9 +94,10 @@ public final class SoulseekShareIndex {
                 String name = f.getName();
                 long size = f.length();
                 String ext = extension(name);
-                Entry e = new Entry(virtual, parent, name, f, size, ext);
-                entries.add(e);
-                byVirtualPath.put(normalizePath(virtual), f);
+                int[] meta = readAudioMetadata(f);
+                Entry e = new Entry(virtual, parent, name, f, size, ext, meta[0], meta[1]);
+                outEntries.add(e);
+                outByVirtualPath.put(normalizePath(virtual), f);
             }
         }
     }
@@ -143,10 +159,10 @@ public final class SoulseekShareIndex {
             out.writeInt(Integer.reverseBytes(files.size()));
             for (Entry e : files) {
                 out.writeByte(1);
-                writeString(out, e.name);
+                writeString(out, e.virtualPath);
                 writeFileSize(out, e.size);
-                writeString(out, e.ext);
-                out.writeInt(Integer.reverseBytes(0));
+                writeObsoleteExtField(out);
+                writeFileAttributes(out, e);
             }
         }
         out.writeInt(Integer.reverseBytes(0));
@@ -186,13 +202,65 @@ public final class SoulseekShareIndex {
             out.writeInt(Integer.reverseBytes(files.size()));
             for (Entry e : files) {
                 out.writeByte(1);
-                writeString(out, e.name);
+                writeString(out, e.virtualPath);
                 writeFileSize(out, e.size);
-                writeString(out, e.ext);
-                out.writeInt(Integer.reverseBytes(0));
+                writeObsoleteExtField(out);
+                writeFileAttributes(out, e);
             }
         }
         return bos.toByteArray();
+    }
+
+    private static int[] readAudioMetadata(File file) {
+        int[] out = new int[] { 0, 0 };
+        if (file == null || !file.isFile()) return out;
+        MediaMetadataRetriever mmr = null;
+        try {
+            mmr = new MediaMetadataRetriever();
+            mmr.setDataSource(file.getAbsolutePath());
+            String br = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE);
+            if (br != null) {
+                try {
+                    out[0] = Integer.parseInt(br);
+                } catch (NumberFormatException ignored) {}
+            }
+            String dur = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+            if (dur != null) {
+                try {
+                    int ms = Integer.parseInt(dur);
+                    if (ms > 0) out[1] = ms / 1000;
+                } catch (NumberFormatException ignored) {}
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (mmr != null) {
+                try {
+                    mmr.release();
+                } catch (Exception ignored) {}
+            }
+        }
+        return out;
+    }
+
+    private static void writeObsoleteExtField(DataOutputStream out) throws IOException {
+        out.writeInt(Integer.reverseBytes(0));
+    }
+
+    private static void writeFileAttributes(DataOutputStream out, Entry e) throws IOException {
+        int count = 0;
+        if (e.bitrate > 0) count += 2;
+        if (e.duration > 0) count++;
+        out.writeInt(Integer.reverseBytes(count));
+        if (e.bitrate > 0) {
+            out.writeInt(Integer.reverseBytes(0));
+            out.writeInt(Integer.reverseBytes(e.bitrate));
+            out.writeInt(Integer.reverseBytes(2));
+            out.writeInt(Integer.reverseBytes(1));
+        }
+        if (e.duration > 0) {
+            out.writeInt(Integer.reverseBytes(1));
+            out.writeInt(Integer.reverseBytes(e.duration));
+        }
     }
 
     public static byte[] zlibCompress(byte[] raw) {

@@ -37,6 +37,9 @@ final class QueueBrowseWindow {
     /** Viewport row for browse scroll — edges anchor top/bottom; center lock when count > 4. */
     static int browseViewportSlot(int index, int count, int viewportRows) {
         if (count <= 0 || index < 0 || index >= count) return 0;
+        if (count == 2) {
+            return index == 0 ? 0 : 1;
+        }
         if (index == 0) return 0;
         if (index == count - 1) return Math.max(0, viewportRows - 1);
         if (count <= 4) return Math.min(index, Math.max(0, viewportRows - 1));
@@ -46,6 +49,7 @@ final class QueueBrowseWindow {
     /** Top padding when queue content is shorter than the fixed viewport. */
     static int shortListTopPadding(int focusIdx, int count, int viewportPx, int slotH) {
         if (slotH <= 0 || count <= 0 || viewportPx <= 0) return 0;
+        if (count == 2) return 0;
         int contentH = count * slotH;
         if (contentH >= viewportPx) return 0;
         if (focusIdx <= 0) return 0;

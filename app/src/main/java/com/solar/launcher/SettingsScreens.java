@@ -8,6 +8,18 @@ public final class SettingsScreens {
     public static final String SOULSEEK = "settings.soulseek";
     public static final String SOULSEEK_CONNECTION = "settings.soulseek.connection";
     public static final String SOULSEEK_ABOUT = "settings.soulseek.about";
+    public static final String SOULSEEK_FIND_USER = "settings.soulseek.find_user";
+    public static final String SOULSEEK_FIND_REACH = "settings.soulseek.find_reach";
+    public static final String SOULSEEK_MESSAGES = "settings.soulseek.messages";
+    public static final String SOULSEEK_MESSAGES_THREAD = "settings.soulseek.messages.thread";
+    public static final String SOULSEEK_CHAT_ROOMS = "settings.soulseek.chat_rooms";
+    public static final String SOULSEEK_CHAT_ROOM_THREAD = "settings.soulseek.chat_room.thread";
+    public static final String SOULSEEK_CHAT_ROOM_WALL = "settings.soulseek.chat_room.wall";
+    public static final String SOULSEEK_INTERESTS = "settings.soulseek.interests";
+    public static final String SOULSEEK_USER_PROFILE = "settings.soulseek.user_profile";
+    public static final String DEEZER = "settings.deezer";
+    public static final String DEEZER_ACCOUNT = "settings.deezer.account";
+    public static final String DEEZER_CONNECTION = "settings.deezer.connection";
     public static final String ABOUT = "settings.about";
     public static final String SYSTEM_UPDATE = "settings.system_update";
     public static final String HOME = "settings.home";
@@ -32,6 +44,18 @@ public final class SettingsScreens {
         if (SOULSEEK.equals(key)) return R.string.settings_sub_soulseek;
         if (SOULSEEK_CONNECTION.equals(key)) return R.string.settings_sub_soulseek_connection;
         if (SOULSEEK_ABOUT.equals(key)) return R.string.settings_sub_soulseek_about;
+        if (SOULSEEK_FIND_USER.equals(key)) return R.string.settings_sub_soulseek_find_user;
+        if (SOULSEEK_FIND_REACH.equals(key)) return R.string.settings_sub_soulseek_find_reach;
+        if (SOULSEEK_MESSAGES.equals(key)) return R.string.settings_sub_soulseek_messages;
+        if (SOULSEEK_MESSAGES_THREAD.equals(key)) return R.string.settings_sub_soulseek_messages_thread;
+        if (SOULSEEK_CHAT_ROOMS.equals(key)) return R.string.settings_sub_soulseek_chat_rooms;
+        if (SOULSEEK_CHAT_ROOM_THREAD.equals(key)) return R.string.settings_sub_soulseek_chat_room;
+        if (SOULSEEK_CHAT_ROOM_WALL.equals(key)) return R.string.settings_sub_soulseek_chat_room_wall;
+        if (SOULSEEK_INTERESTS.equals(key)) return R.string.settings_sub_soulseek_interests;
+        if (SOULSEEK_USER_PROFILE.equals(key)) return R.string.settings_sub_soulseek_user_profile;
+        if (DEEZER.equals(key)) return R.string.settings_sub_deezer;
+        if (DEEZER_ACCOUNT.equals(key)) return R.string.settings_sub_deezer_account;
+        if (DEEZER_CONNECTION.equals(key)) return R.string.settings_sub_deezer_connection;
         if (ABOUT.equals(key)) return R.string.settings_sub_about;
         if (SYSTEM_UPDATE.equals(key)) return R.string.settings_sub_system_update;
         if (HOME.equals(key)) return R.string.settings_sub_home;
@@ -50,6 +74,10 @@ public final class SettingsScreens {
 
     public static boolean isSoulseek(String key) {
         return key != null && key.startsWith("settings.soulseek");
+    }
+
+    public static boolean isDeezer(String key) {
+        return key != null && key.startsWith("settings.deezer");
     }
 
     public static boolean isHome(String key) {

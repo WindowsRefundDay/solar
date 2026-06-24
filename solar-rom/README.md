@@ -49,6 +49,8 @@ Override release repo for ROM downloads: `SOLAR_GITHUB_REPO=thatwitchgirl/solar`
 
 ## CI
 
-`.github/workflows/build-release.yml` runs on pushes to **`main`** and **`nightly`**: signs the release APK, builds all three ROM zips (`rom.zip`, `rom_type_b.zip`, `rom_y2.zip`), and publishes a GitHub release.
+`.github/workflows/build-release.yml` runs on pushes to **`main`** and **`nightly`**: signs the release APK, builds Y1 ROM zips (`rom.zip`, `rom_type_b.zip`), and publishes a GitHub release.
+
+**Y2 ATA** (`build-rom.sh y2` → `rom_y2.zip`) is intentionally **not** built in CI until the Innioasis Y2 device ships. The script and firmware URL remain in the repo for future support.
 
 Required secrets: `SOLAR_PLATFORM_KEY_PK8_B64`, `SOLAR_PLATFORM_KEY_PEM_B64` (base64-encoded AOSP test platform key material).

@@ -52,4 +52,25 @@ public class TlsHelperDeviceTest {
             throw new AssertionError("LE probe failed: " + le);
         }
     }
+
+    /** Deezer uses Gandi/USERTrust chain — often missing on API 17 stock trust store. */
+    @Test
+    public void device_deezerTlsProbe() throws Exception {
+        Context ctx = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        TlsHelper.init(ctx.getApplicationContext());
+        String www = TlsHelper.probeProtocol("https://www.deezer.com/");
+        String api = TlsHelper.probeProtocol("https://api.deezer.com/");
+        org.json.JSONObject d = new org.json.JSONObject();
+        d.put("tlsWww", www != null ? www : "fail");
+        d.put("tlsApi", api != null ? api : "fail");
+        com.solar.launcher.deezer.DeezerDebugLog.log(ctx, "TlsHelperDeviceTest",
+                "deezer probe", "A", d);
+        android.util.Log.i("SolarTlsTest", "deezer www=" + www + " api=" + api);
+        if (www == null || !www.startsWith("TLS")) {
+            throw new AssertionError("www.deezer.com TLS failed: " + www);
+        }
+        if (api == null || !api.startsWith("TLS")) {
+            throw new AssertionError("api.deezer.com TLS failed: " + api);
+        }
+    }
 }

@@ -13,24 +13,28 @@ public class SolarUpdateClientTest {
 
     @Test
     public void fetchLiveCatalog() throws Exception {
-        List<SolarUpdateClient.ReleaseInfo> releases =
-                SolarUpdateClient.fetchUpdates(SolarUpdateClient.DEFAULT_UPDATES_URL);
-        if (releases.isEmpty()) {
+        List<SolarUpdateClient.ReleaseInfo> raw =
+                SolarUpdateClient.fetchUpdatesRaw(SolarUpdateClient.DEFAULT_UPDATES_URL);
+        if (raw.isEmpty()) {
             throw new AssertionError("live OTA catalog empty");
         }
+        List<SolarUpdateClient.ReleaseInfo> releases =
+                SolarUpdateClient.filterForDevice(raw);
         List<SolarUpdateClient.ReleaseInfo> picker = SolarUpdateClient.releasesForPicker(
-                releases, 4, "0.2.1", SolarUpdateClient.MAX_PICKER_RELEASES);
-        if (picker.isEmpty()) {
+                raw, 4, "0.2.1", SolarUpdateClient.MAX_PICKER_RELEASES);
+        if (picker.isEmpty() && !releases.isEmpty()) {
             throw new AssertionError("picker empty for stable install");
         }
     }
 
     @Test
     public void pickerCapsLargeCatalog() {
+        String variant = SolarUpdateClient.deviceVariant();
         List<SolarUpdateClient.ReleaseInfo> many = new ArrayList<SolarUpdateClient.ReleaseInfo>();
         for (int i = 1; i <= 30; i++) {
             many.add(new SolarUpdateClient.ReleaseInfo(
-                    "nightly-" + i, "nightly-" + i, i, "https://x/a.apk", true));
+                    "nightly-" + i, "nightly-" + i, i,
+                    "https://x/solar-" + variant + "-nightly-" + i + ".apk", true));
         }
         List<SolarUpdateClient.ReleaseInfo> picker = SolarUpdateClient.releasesForPicker(
                 many, 4, "0.2.1", SolarUpdateClient.MAX_PICKER_RELEASES);

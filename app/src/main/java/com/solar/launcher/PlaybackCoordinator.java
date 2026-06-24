@@ -35,7 +35,8 @@ public final class PlaybackCoordinator {
         PlayQueue.QueueItem c = queue.current();
         return activeMode == Mode.MUSIC
                 || (c != null && (c.kind == PlayQueue.ItemKind.MUSIC_FILE
-                || c.kind == PlayQueue.ItemKind.REACH_STREAM));
+                || c.kind == PlayQueue.ItemKind.REACH_STREAM
+                || c.kind == PlayQueue.ItemKind.DEEZER_STREAM));
     }
 
     public boolean hasAnyQueue() {
@@ -56,7 +57,8 @@ public final class PlaybackCoordinator {
         PlayQueue.QueueItem cur = queue.current();
         if (cur == null || cur.file == null) return 0;
         for (PlayQueue.QueueItem q : queue.items()) {
-            if (q.kind == PlayQueue.ItemKind.MUSIC_FILE || q.kind == PlayQueue.ItemKind.REACH_STREAM) {
+            if (q.kind == PlayQueue.ItemKind.MUSIC_FILE || q.kind == PlayQueue.ItemKind.REACH_STREAM
+                    || q.kind == PlayQueue.ItemKind.DEEZER_STREAM) {
                 if (q.file.equals(cur.file)) return idx;
                 idx++;
             }
@@ -68,7 +70,8 @@ public final class PlaybackCoordinator {
         int idx = 0;
         for (int i = 0; i < queue.items().size(); i++) {
             PlayQueue.QueueItem q = queue.items().get(i);
-            if (q.kind == PlayQueue.ItemKind.MUSIC_FILE || q.kind == PlayQueue.ItemKind.REACH_STREAM) {
+            if (q.kind == PlayQueue.ItemKind.MUSIC_FILE || q.kind == PlayQueue.ItemKind.REACH_STREAM
+                    || q.kind == PlayQueue.ItemKind.DEEZER_STREAM) {
                 if (idx == index) {
                     queue.setIndex(i);
                     return;
@@ -205,17 +208,25 @@ public final class PlaybackCoordinator {
     }
 
     public void appendReachToQueue(File temp, String meta) {
+        appendReachToQueue(temp, meta, null);
+    }
+
+    public void appendReachToQueue(File temp, String meta, String peerUsername) {
         if (temp == null || !temp.isFile()) return;
-        queue.append(PlayQueue.QueueItem.reach(temp, meta));
+        queue.append(PlayQueue.QueueItem.reach(temp, meta, peerUsername));
         if (!musicOriginal.contains(temp)) musicOriginal.add(temp);
         if (activeMode == Mode.NONE) activeMode = Mode.MUSIC;
     }
 
     /** Insert Reach stream after the current queue item and select it for playback. */
     public int playReachAfterCurrent(File temp, String meta) {
+        return playReachAfterCurrent(temp, meta, null);
+    }
+
+    public int playReachAfterCurrent(File temp, String meta, String peerUsername) {
         if (temp == null || !temp.isFile()) return -1;
         int after = queue.isEmpty() ? -1 : queue.index();
-        int insertAt = queue.insertAfter(after, PlayQueue.QueueItem.reach(temp, meta));
+        int insertAt = queue.insertAfter(after, PlayQueue.QueueItem.reach(temp, meta, peerUsername));
         if (insertAt < 0) return -1;
         if (!musicOriginal.contains(temp)) musicOriginal.add(temp);
         activeMode = Mode.MUSIC;
@@ -226,10 +237,14 @@ public final class PlaybackCoordinator {
 
     /** Insert Reach after now-playing without moving the play head or starting playback. */
     public int queueReachAfterCurrent(File temp, String meta) {
+        return queueReachAfterCurrent(temp, meta, null);
+    }
+
+    public int queueReachAfterCurrent(File temp, String meta, String peerUsername) {
         if (temp == null || !temp.isFile()) return -1;
         int playHead = queue.index();
         int after = queue.isEmpty() ? -1 : playHead;
-        int insertAt = queue.insertAfter(after, PlayQueue.QueueItem.reach(temp, meta));
+        int insertAt = queue.insertAfter(after, PlayQueue.QueueItem.reach(temp, meta, peerUsername));
         if (insertAt < 0) return -1;
         if (!musicOriginal.contains(temp)) musicOriginal.add(temp);
         if (activeMode == Mode.NONE && !queue.isEmpty()) activeMode = Mode.MUSIC;
@@ -239,19 +254,94 @@ public final class PlaybackCoordinator {
         return insertAt;
     }
 
+    private File streamMusicRoot;
+    private File streamAppCacheRoot;
+
+    public void configureStreamPaths(File musicRoot, File appCacheRoot) {
+        streamMusicRoot = musicRoot;
+        streamAppCacheRoot = appCacheRoot;
+    }
+
     public void replaceReachFileInQueue(File oldF, File newF, String meta) {
+        finishStreamFileInQueue(oldF, newF, meta);
+    }
+
+    public void finishStreamFileInQueue(File oldF, File newF, String meta) {
         if (oldF == null || newF == null) return;
-        queue.replaceFileRef(oldF, newF, meta);
+        if (StreamQueueHelper.isLibraryMusicFile(streamMusicRoot, streamAppCacheRoot, newF)) {
+            queue.promoteStreamToMusic(oldF, newF);
+        } else {
+            queue.replaceFileRef(oldF, newF, meta);
+        }
         for (int i = 0; i < musicOriginal.size(); i++) {
             if (oldF.equals(musicOriginal.get(i))) musicOriginal.set(i, newF);
         }
+    }
+
+    public int playDeezerAfterCurrent(File temp, String meta, long trackId) {
+        if (temp == null || !temp.isFile()) return -1;
+        int after = queue.isEmpty() ? -1 : queue.index();
+        int insertAt = queue.insertAfter(after, PlayQueue.QueueItem.deezer(temp, meta, trackId));
+        if (insertAt < 0) return -1;
+        if (!musicOriginal.contains(temp)) musicOriginal.add(temp);
+        activeMode = Mode.MUSIC;
+        musicInitiator = temp;
+        queue.setIndex(insertAt);
+        return insertAt;
+    }
+
+    public int queueDeezerAfterCurrent(File temp, String meta, long trackId) {
+        if (temp == null || !temp.isFile()) return -1;
+        int playHead = queue.index();
+        int after = queue.isEmpty() ? -1 : playHead;
+        int insertAt = queue.insertAfter(after, PlayQueue.QueueItem.deezer(temp, meta, trackId));
+        if (insertAt < 0) return -1;
+        if (!musicOriginal.contains(temp)) musicOriginal.add(temp);
+        if (activeMode == Mode.NONE && !queue.isEmpty()) activeMode = Mode.MUSIC;
+        if (queue.index() != playHead && !queue.isEmpty()) {
+            queue.setIndex(Math.max(0, Math.min(playHead, queue.size() - 1)));
+        }
+        return insertAt;
+    }
+
+    public void replaceDeezerFileInQueue(File oldF, File newF, String meta) {
+        finishStreamFileInQueue(oldF, newF, meta);
+    }
+
+    public int playPodcastAfterCurrent(OpenRssClient.Episode ep, String showTitle, boolean fromSaved) {
+        if (ep == null) return -1;
+        int after = queue.isEmpty() ? -1 : queue.index();
+        int insertAt = queue.insertAfter(after,
+                PlayQueue.QueueItem.podcast(ep, showTitle != null ? showTitle : "", fromSaved));
+        if (insertAt < 0) return -1;
+        activeMode = Mode.PODCAST;
+        podcastShowTitle = showTitle != null ? showTitle : "";
+        podcastFromSavedLibrary = fromSaved;
+        musicInitiator = null;
+        queue.setIndex(insertAt);
+        return insertAt;
+    }
+
+    public int queuePodcastAfterCurrent(OpenRssClient.Episode ep, String showTitle, boolean fromSaved) {
+        if (ep == null) return -1;
+        int playHead = queue.index();
+        int after = queue.isEmpty() ? -1 : playHead;
+        int insertAt = queue.insertAfter(after,
+                PlayQueue.QueueItem.podcast(ep, showTitle != null ? showTitle : "", fromSaved));
+        if (insertAt < 0) return -1;
+        if (activeMode == Mode.NONE && !queue.isEmpty()) activeMode = Mode.PODCAST;
+        if (queue.index() != playHead && !queue.isEmpty()) {
+            queue.setIndex(Math.max(0, Math.min(playHead, queue.size() - 1)));
+        }
+        return insertAt;
     }
 
     public void removeMusicTrackAt(int index) {
         int idx = 0;
         for (int i = 0; i < queue.items().size(); i++) {
             PlayQueue.QueueItem q = queue.items().get(i);
-            if (q.kind == PlayQueue.ItemKind.MUSIC_FILE || q.kind == PlayQueue.ItemKind.REACH_STREAM) {
+            if (q.kind == PlayQueue.ItemKind.MUSIC_FILE || q.kind == PlayQueue.ItemKind.REACH_STREAM
+                    || q.kind == PlayQueue.ItemKind.DEEZER_STREAM) {
                 if (idx == index) {
                     File removed = q.file;
                     queue.removeAt(i);
@@ -276,7 +366,8 @@ public final class PlaybackCoordinator {
         int idx = 0;
         for (int i = 0; i < queue.items().size(); i++) {
             PlayQueue.QueueItem q = queue.items().get(i);
-            if (q.kind == PlayQueue.ItemKind.MUSIC_FILE || q.kind == PlayQueue.ItemKind.REACH_STREAM) {
+            if (q.kind == PlayQueue.ItemKind.MUSIC_FILE || q.kind == PlayQueue.ItemKind.REACH_STREAM
+                    || q.kind == PlayQueue.ItemKind.DEEZER_STREAM) {
                 if (idx == slot) return i;
                 idx++;
             }
@@ -337,7 +428,8 @@ public final class PlaybackCoordinator {
             podcastShowTitle = c.podcastShowTitle;
             podcastFromSavedLibrary = c.podcastFromSaved;
             musicInitiator = null;
-        } else if (c.kind == PlayQueue.ItemKind.MUSIC_FILE || c.kind == PlayQueue.ItemKind.REACH_STREAM) {
+        } else if (c.kind == PlayQueue.ItemKind.MUSIC_FILE || c.kind == PlayQueue.ItemKind.REACH_STREAM
+                || c.kind == PlayQueue.ItemKind.DEEZER_STREAM) {
             activeMode = Mode.MUSIC;
             musicInitiator = c.file;
             podcastShowTitle = "";

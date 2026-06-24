@@ -34,26 +34,57 @@ out_dir, base = sys.argv[1], sys.argv[2]
 if not base.endswith("/"):
     base += "/"
 
+legacy_re = re.compile(r"solar-(v[\d.]+|nightly-\d+)\.apk$")
+variant_re = re.compile(
+    r"solar-(y1|y2)-((?:v[\d.]+)|(?:nightly-\d+)|(?:nightly-\d{8}-\d{4}))\.apk$"
+)
+unified_re = re.compile(
+    r"solar-((?:v[\d.]+)|(?:nightly-\d+)|(?:nightly-\d{8}-\d{4}))\.apk$"
+)
+ts_re = re.compile(r"^nightly-(\d{8})-(\d{4})$")
+num_re = re.compile(r"^nightly-(\d+)$")
+
 entries = []
 for path in sorted(glob.glob(os.path.join(out_dir, "solar-*.apk"))):
     name = os.path.basename(path)
-    m = re.match(r"solar-(v[\d.]+|nightly-\d+)\.apk$", name)
-    if not m:
+    variant = None
+    tag = None
+    m = variant_re.match(name)
+    if m:
+        variant, tag = m.group(1), m.group(2)
+    else:
+        m = unified_re.match(name)
+        if m:
+            variant, tag = "universal", m.group(1)
+        else:
+            m = legacy_re.match(name)
+            if m:
+                variant, tag = "universal", m.group(1)
+    if not tag:
         continue
-    tag = m.group(1)
     nightly = tag.startswith("nightly-")
     if nightly:
         version_name = tag
-        version_code = int(tag.split("-", 1)[1])
+        ts = ts_re.match(tag)
+        if ts:
+            y, mo, d = int(ts.group(1)[:4]), int(ts.group(1)[4:6]), int(ts.group(1)[6:8])
+            hh, mm = int(ts.group(2)[:2]), int(ts.group(2)[2:])
+            from datetime import datetime, timezone
+            dt = datetime(y, mo, d, hh, mm, tzinfo=timezone.utc)
+            epoch = datetime(2020, 1, 1, tzinfo=timezone.utc)
+            version_code = int((dt - epoch).total_seconds() // 60)
+        else:
+            num = num_re.match(tag)
+            version_code = int(num.group(1)) if num else 0
     else:
-        version_name = tag[1:]
+        version_name = tag[1:] if tag.startswith("v") else tag
         version_code = 0
-    entries.append((tag, version_name, version_code, nightly, name))
+    entries.append((tag, version_name, version_code, nightly, name, variant or "universal"))
 
 def sort_key(item):
-    tag, version_name, version_code, nightly, _ = item
+    tag, version_name, version_code, nightly, _, _ = item
     if nightly:
-        return (0, version_code)
+        return (0, version_code, tag)
     parts = [int(x) for x in version_name.split(".") if x.isdigit()]
     while len(parts) < 3:
         parts.append(0)
@@ -73,10 +104,10 @@ lines = [
     '<?xml version="1.0" encoding="utf-8"?>',
     f'<solar-updates base="{base}">',
 ]
-for tag, version_name, version_code, nightly, apk in entries:
+for tag, version_name, version_code, nightly, apk, variant in entries:
     lines.append(
         f'  <release tag="{tag}" versionName="{version_name}" versionCode="{version_code}" '
-        f'nightly="{"true" if nightly else "false"}" apk="{apk}"/>'
+        f'nightly="{"true" if nightly else "false"}" apk="{apk}" variant="{variant}"/>'
     )
 lines.append("</solar-updates>")
 lines.append("")
