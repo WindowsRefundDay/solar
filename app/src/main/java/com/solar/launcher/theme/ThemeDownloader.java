@@ -584,14 +584,19 @@ public class ThemeDownloader {
     }
 
     static File resolveAssetFile(File themesRoot, File themeDir, String catalogFolder, String galleryRel) {
+        if (galleryRel == null || galleryRel.isEmpty() || themeDir == null) return null;
+        // ponytail: never load sibling theme assets from themesRoot — active theme folder only.
+        if (galleryRel.contains("..")) return null;
         if (catalogFolder != null && !catalogFolder.isEmpty()
                 && galleryRel.startsWith(catalogFolder + "/")) {
-            return new File(themeDir, galleryRel.substring(catalogFolder.length() + 1));
+            File f = new File(themeDir, galleryRel.substring(catalogFolder.length() + 1));
+            return f.isFile() ? f : null;
         }
-        if (catalogFolder == null || catalogFolder.isEmpty()) {
-            return new File(themeDir, galleryRel);
-        }
-        return new File(themesRoot, galleryRel);
+        File exact = new File(themeDir, galleryRel);
+        if (exact.isFile()) return exact;
+        String name = new File(galleryRel.replace('\\', '/')).getName();
+        File byName = new File(themeDir, name);
+        return byName.isFile() ? byName : null;
     }
 
     public static Set<String> missingAssets(String folderName) throws Exception {

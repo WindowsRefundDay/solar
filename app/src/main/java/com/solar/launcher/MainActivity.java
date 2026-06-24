@@ -5010,9 +5010,7 @@ public class MainActivity extends Activity {
     private Bitmap resolveHomeMenuPreviewIconForId(String id) {
         HomeMenuConfig.Entry e = HomeMenuConfig.find(id);
         if (e == null) return null;
-        Bitmap icon = ThemeManager.getHomeMenuIcon(this, e);
-        if (icon != null) return icon;
-        return ThemeManager.getCustomIcon("icon_default_album.png", this, e.defaultResId);
+        return ThemeManager.getHomeMenuIcon(this, e);
     }
 
     private void applyAllHomeMenuRowStyles() {
@@ -9381,7 +9379,7 @@ public class MainActivity extends Activity {
                 com.solar.launcher.theme.SolarTheming.englishSettingsRowLabel(this, rowKey),
                 solarKey, resolveSettingIconKey(rowKey), resolveSolarSettingAppName(rowKey));
         if (icon == null && isAppearancePreviewRow(rowKey)) {
-            icon = ThemeManager.getSettingIcon("theme");
+            icon = ThemeManager.getThemeSettingBitmap("theme");
         }
         if (icon == null && RowKeys.APP_THEME.equals(rowKey)) {
             Bitmap cover = ThemeManager.getScaledThemeCover(ThemeManager.getCurrentTheme(), y1ThemeCoverHeightPx);

@@ -164,6 +164,19 @@ public final class HomeMenuConfig {
             new Entry(ID_APPS, R.string.home_menu_apps, null, R.drawable.setting_circle, "Apps", false),
     };
 
+    /**
+     * Optional {@code homePageConfig} key for Solar-only shortcuts when {@code solarConfig.app*}
+     * is unset. Never maps unrelated Y1 keys (e.g. shuffleQuick).
+     */
+    public static String y1HomeIconFallbackKey(String id) {
+        if (id == null) return null;
+        id = migrateId(id);
+        if (ID_SOULSEEK.equals(id) || ID_DEEZER.equals(id)) return "music";
+        if (ID_PODCASTS.equals(id) || ID_AUDIOBOOKS.equals(id)) return "audiobooks";
+        if (ID_PHOTOS.equals(id)) return "photos";
+        return null;
+    }
+
     private HomeMenuConfig() {}
 
     public static boolean isOptIn(String id) {

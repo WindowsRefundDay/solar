@@ -144,6 +144,25 @@ public class ThemeManagerTest {
     }
 
     @Test
+    public void getMusicFallbackFromSameTheme() throws Exception {
+        JSONObject root = new JSONObject();
+        root.put("homePageConfig", new JSONObject().put("music", "theme_music.png"));
+        ThemeManager.availableThemes.clear();
+        ThemeManager.availableThemes.add(new ThemeManager.ThemeEntry("/tmp", "t", "t", root));
+        ThemeManager.setThemeIndex(0);
+        HomeMenuConfig.Entry e = HomeMenuConfig.find(HomeMenuConfig.ID_SOULSEEK);
+        if (ThemeManager.getHomeMenuIcon(null, e) != null) {
+            throw new AssertionError("no file on disk — expect null bitmap");
+        }
+        if (!"music".equals(HomeMenuConfig.y1HomeIconFallbackKey(HomeMenuConfig.ID_SOULSEEK))) {
+            throw new AssertionError("get music fallback key");
+        }
+        if (HomeMenuConfig.y1HomeIconFallbackKey(HomeMenuConfig.ID_PC_UPLOAD) != null) {
+            throw new AssertionError("pc upload must not fallback");
+        }
+    }
+
+    @Test
     public void appMusicOverridesStock() throws Exception {
         JSONObject root = new JSONObject();
         root.put("homePageConfig", new JSONObject().put("music", "stock_music.png"));

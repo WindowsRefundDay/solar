@@ -17,8 +17,8 @@ Solar extends Innioasis Y1 themes via optional `solarConfig` in `config.json`. S
 1. **Home:** resolve icons through `ThemeManager.getHomeMenuIcon()` — never bypass solarConfig for stock rows.
 2. **Settings:** resolve right-pane icons through `ThemeManager.getSettingsRowIcon()` with English label from `SolarTheming.englishSettingsRowLabel()`.
 3. **Keys:** `app` + sanitized **English** label (`appMusic`, `appGet_Music`); settings rows use `settings` + English label (`settingsAbout`).
-4. **Precedence:** active theme `solarConfig` → Y1 `homePageConfig` / `settingConfig` → drawable fallback (stock home only).
+4. **Precedence:** active theme `solarConfig` → Y1 `homePageConfig` / `settingConfig` in the **same** theme → hide icon (no drawable, no cross-theme asset).
 5. **Docs:** add the new English label and solarConfig key to `docs/theming.md`.
 6. **Aura sample:** optional asset key in `app/src/main/assets/themes/default/config.json` when shipping a default icon.
 
-Do not merge bundled Aura solarConfig icons into third-party themes. Do not key icons off localized strings at runtime — always English label resources.
+Do not merge bundled Aura solarConfig icons into third-party themes. Never map unrelated Y1 keys (shuffleQuick, etc.) to Solar shortcuts. Wi‑Fi Transfer has no Y1 fallback. Do not key icons off localized strings at runtime — always English label resources.

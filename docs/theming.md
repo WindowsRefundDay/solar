@@ -8,9 +8,11 @@ Reference gallery themes: [InnioasisY1Themes](https://github.com/thesolarproject
 
 For any icon or color Solar supports in both places:
 
-1. **Active theme `solarConfig`** (if the key is set and the asset exists)
-2. **Stock Y1 block** in the same theme (`homePageConfig`, `settingConfig`, …)
-3. **Built-in drawable** (stock home shortcuts only)
+1. **Active theme `solarConfig`** (if the key is set and the asset file exists in that theme folder)
+2. **Stock Y1 block** in the **same** theme (`homePageConfig`, `settingConfig`, …)
+3. **Nothing** — hide the preview icon (no Android drawable, no bundled Aura, no sibling-theme files)
+
+Never use unrelated Y1 keys (e.g. `shuffleQuick`) as a stand-in for Solar-only shortcuts like Wi‑Fi Transfer.
 
 `solarConfig` from the bundled Aura default theme is **never** merged into third-party themes for **icons** (only non-icon keys like colors may merge on Default upgrade).
 
@@ -30,7 +32,17 @@ Theme authors add keys freely. Solar derives lookup names from **English UI labe
 
 ### Stock home shortcuts
 
-Stock rows (Music, Bluetooth, Settings, …) now check `solarConfig` **before** `homePageConfig`. Example: `appMusic` overrides `homePageConfig.music`.
+Stock rows (Music, Bluetooth, Settings, …) check `solarConfig` **before** `homePageConfig`. Example: `appMusic` overrides `homePageConfig.music`.
+
+### Solar-only shortcuts (explicit Y1 fallbacks only)
+
+| Shortcut | solarConfig | homePageConfig fallback |
+|----------|-------------|-------------------------|
+| Get Music | `appGet_Music` | `music` |
+| Deezer | `appDeezer` | `music` |
+| Podcasts | `appPodcasts` | `audiobooks` |
+| Photos | `appPhotos` | `photos` |
+| Wi‑Fi Transfer | `appPC_Upload` / `appPCUpload` | *(none)* |
 
 ### Settings rows
 

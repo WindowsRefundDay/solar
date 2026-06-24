@@ -1249,8 +1249,8 @@ public class ThemeManager {
     }
 
     /**
-     * Home shortcut icon: {@code solarConfig.app*} (English label) → stock {@code homePageConfig}
-     * → drawable fallback for Y1 stock rows.
+     * Home shortcut icon from the active theme only: {@code solarConfig.app*} →
+     * {@code homePageConfig} (stock or explicit Solar fallback). No drawable or cross-theme assets.
      */
     public static Bitmap getHomeMenuIcon(Context context, HomeMenuConfig.Entry entry) {
         if (context == null || entry == null) return null;
@@ -1258,10 +1258,7 @@ public class ThemeManager {
                 || HomeMenuConfig.ID_GET_THEMES.equals(entry.id)) {
             Bitmap themes = getSolarAppIcon("Themes");
             if (themes != null) return themes;
-            Bitmap themed = getSettingIcon("theme");
-            if (themed != null) return themed;
-            return android.graphics.BitmapFactory.decodeResource(
-                    context.getResources(), entry.defaultResId);
+            return getThemeSettingBitmap("theme");
         }
         String enLabel = entry.englishLabel(context);
         Bitmap solar = getSolarAppIcon(enLabel);
@@ -1271,9 +1268,43 @@ public class ThemeManager {
             if (solar != null) return solar;
         }
         if (entry.stockIconKey != null) {
-            return getHomeIcon(context, entry.stockIconKey, entry.defaultResId);
+            Bitmap stock = getThemeHomeBitmap(entry.stockIconKey);
+            if (stock != null) return stock;
         }
-        return getSolarAppHomeIcon(context, entry.solarAppName, entry.defaultResId);
+        String fallbackKey = HomeMenuConfig.y1HomeIconFallbackKey(entry.id);
+        if (fallbackKey != null) return getThemeHomeBitmap(fallbackKey);
+        return null;
+    }
+
+    /** {@code homePageConfig} asset from active theme only; null when unset or missing file. */
+    public static Bitmap getThemeHomeBitmap(String y1Key) {
+        if (y1Key == null || y1Key.isEmpty()) return null;
+        JSONObject home = getCurrentTheme().root.optJSONObject("homePageConfig");
+        if (home == null) return null;
+        String path = home.optString(y1Key, "").trim();
+        if (path.isEmpty()) return null;
+        return getThemeBitmapFromActiveThemeOnly(path);
+    }
+
+    /** {@code settingConfig} asset from active theme only. */
+    public static Bitmap getThemeSettingBitmap(String key) {
+        if (key == null || key.isEmpty()) return null;
+        JSONObject setting = getCurrentTheme().root.optJSONObject("settingConfig");
+        if (setting == null) return null;
+        String path = setting.optString(key, "").trim();
+        if (path.isEmpty()) return null;
+        return getThemeBitmapFromActiveThemeOnly(path);
+    }
+
+    /** Decode a theme asset path without bundled-default or Android drawable fallbacks. */
+    static Bitmap getThemeBitmapFromActiveThemeOnly(String relativePath) {
+        if (relativePath == null || relativePath.isEmpty()) return null;
+        ThemeEntry t = getCurrentTheme();
+        String cacheKey = t.folderPath + ":only:" + relativePath;
+        if (bitmapCache.containsKey(cacheKey)) return bitmapCache.get(cacheKey);
+        Bitmap bmp = decodeThemeBitmapForEntry(t, relativePath, 0);
+        if (bmp != null) bitmapCache.put(cacheKey, bmp);
+        return bmp;
     }
 
     /**
@@ -1290,7 +1321,7 @@ public class ThemeManager {
             icon = getSolarAppIcon(solarAppName);
         }
         if (icon == null && settingIconKey != null) {
-            icon = getSettingIcon(settingIconKey);
+            icon = getThemeSettingBitmap(settingIconKey);
         }
         if (icon == null && rowKey != null && rowKey.startsWith("home.shortcut.")) {
             HomeMenuConfig.Entry e = HomeMenuConfig.find(
@@ -1379,22 +1410,12 @@ public class ThemeManager {
     }
 
     /**
-     * Home preview for Solar-only shortcuts: {@code solarConfig.app{Name}} when set;
-     * Podcasts falls back to stock {@code homePageConfig.audiobooks}.
+     * @deprecated use {@link #getHomeMenuIcon(Context, HomeMenuConfig.Entry)} — theme assets only.
      */
     public static Bitmap getSolarAppHomeIcon(Context context, String appName, int defaultResId) {
         Bitmap solar = getSolarAppIcon(appName);
         if (solar != null) return solar;
-        if ("Podcasts".equals(appName)) {
-            JSONObject home = getCurrentTheme().root.optJSONObject("homePageConfig");
-            if (home != null) {
-                String path = home.optString("audiobooks", "").trim();
-                if (!path.isEmpty()) {
-                    Bitmap bmp = getThemeBitmap(path);
-                    if (bmp != null) return bmp;
-                }
-            }
-        }
+        if ("Podcasts".equals(appName)) return getThemeHomeBitmap("audiobooks");
         return null;
     }
 
