@@ -8,17 +8,17 @@ import org.json.JSONObject;
 import java.io.File;
 import java.io.FileWriter;
 
-/** Debug-mode NDJSON logger — session bd1c34; pull via adb from /storage/sdcard0/. */
-final class DebugAgentLog {
+/** Debug-mode NDJSON logger — session b0051d; pull via adb from /storage/sdcard0/. */
+public final class DebugAgentLog {
     private static final String TAG = "SolarNetDbg";
-    private static final String FILE = "debug-bd1c34.log";
-    private static final String SESSION = "bd1c34";
+    private static final String FILE = "debug-75bd6d.log";
+    private static final String SESSION = "75bd6d";
     private static final String WORKSPACE_LOG =
-            "/home/deck/Documents/Slide/s/.cursor/debug-bd1c34.log";
+            "/home/deck/Documents/Cursor Workspaces/TheSolarProject/solar/.cursor/debug-75bd6d.log";
 
     private DebugAgentLog() {}
 
-    static void log(Context ctx, String location, String message, String hypothesisId, JSONObject data) {
+    public static void log(Context ctx, String location, String message, String hypothesisId, JSONObject data) {
         try {
             long ts = System.currentTimeMillis();
             JSONObject o = new JSONObject();

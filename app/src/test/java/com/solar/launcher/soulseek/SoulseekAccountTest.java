@@ -48,6 +48,8 @@ public class SoulseekAccountTest {
   @Test
   public void usernameValidation() {
     if (!SoulseekAccount.isValidUsername("solarabcd")) throw new AssertionError("valid");
+    if (!SoulseekAccount.isValidUsername("Y1-plume-wave-42")) throw new AssertionError("friend code");
+    if (!SoulseekAccount.isValidUsername("Y2-abcd-efgh-ijkl")) throw new AssertionError("y2 friend");
     if (SoulseekAccount.isValidUsername("")) throw new AssertionError("empty");
     if (SoulseekAccount.isValidUsername("bad name")) throw new AssertionError("space");
     if (SoulseekAccount.isValidUsername("Dré")) throw new AssertionError("accent");
@@ -55,28 +57,63 @@ public class SoulseekAccountTest {
   }
 
   @Test
+  public void friendCodeFormat() {
+    String u = SoulseekAccount.generateUsername(null);
+    if (!SoulseekAccount.isFriendCode(u)) throw new AssertionError(u);
+    if (!u.startsWith("Y1-") && !u.startsWith("Y2-")) throw new AssertionError(u);
+    assertDictionarySegments(u);
+  }
+
+  @Test
+  public void legacyHashFriendCodeStillRecognized() {
+    if (!SoulseekAccount.isFriendCode("Y1-abcde-fghi-42")) throw new AssertionError("hash y1");
+    if (!SoulseekAccount.isFriendCode("Y2-abcd-efgh-ijkl")) throw new AssertionError("hash y2");
+  }
+
+  private static void assertDictionarySegments(String username) {
+    String[] parts = username.split("-");
+    if (parts.length < 3) throw new AssertionError("segments");
+    int end = parts.length - 1;
+    if (parts[0].equals("Y1")) end = parts.length - 2;
+    for (int i = 1; i <= end; i++) {
+      if (!SoulseekWordDictionary.isValidWord(parts[i])) {
+        throw new AssertionError("not dictionary word: " + parts[i]);
+      }
+    }
+  }
+
+  @Test
   public void resetToAutoRegenerates() {
     MemPrefs prefs = new MemPrefs();
     SoulseekAccount.saveCustom(prefs, "customuser", "secretpass");
-    SoulseekAccount reset = SoulseekAccount.resetToAuto(prefs);
+    SoulseekAccount reset = SoulseekAccount.resetToAuto(prefs, null);
     if (reset.custom) throw new AssertionError("should be auto");
-    if (!reset.username.startsWith("solar")) throw new AssertionError("username");
-    if (reset.password.length() < 8) throw new AssertionError("password");
+    if (!SoulseekAccount.isFriendCode(reset.username)) throw new AssertionError("username");
+    if (!"ReachAutoShare2024".equals(reset.password)) throw new AssertionError("password");
   }
 
   @Test
   public void loadReusesStoredAutoAccount() {
     MemPrefs prefs = new MemPrefs();
     prefs.edit()
-        .putString(SoulseekAccount.PREF_USER, "solarabcdef")
-        .putString(SoulseekAccount.PREF_PASS, "TestPass1234")
+        .putString(SoulseekAccount.PREF_USER, "solarhizxqvzs")
+        .putString(SoulseekAccount.PREF_PASS, "legacypass")
         .putBoolean(SoulseekAccount.PREF_CUSTOM, false)
         .commit();
     SoulseekAccount first = SoulseekAccount.load(prefs);
     SoulseekAccount second = SoulseekAccount.load(prefs);
-    if (!"solarabcdef".equals(first.username)) throw new AssertionError("username");
+    if (!"solarhizxqvzs".equals(first.username)) throw new AssertionError("username");
     if (!first.username.equals(second.username)) throw new AssertionError("reuse user");
     if (!first.password.equals(second.password)) throw new AssertionError("reuse pass");
     if (first.custom) throw new AssertionError("auto");
+  }
+
+  @Test
+  public void regenerateProducesNewUsername() {
+    String a = SoulseekAccount.generateUsername(null, true);
+    String b = SoulseekAccount.generateUsername(null, true);
+    if (a.equals(b)) throw new AssertionError("fresh usernames should differ");
+    if (!SoulseekAccount.isFriendCode(a)) throw new AssertionError(a);
+    assertDictionarySegments(a);
   }
 }

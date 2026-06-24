@@ -18,6 +18,7 @@ import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import com.solar.launcher.soulseek.SoulseekCountryFlags;
 import com.solar.launcher.theme.ThemeManager;
 
 import org.json.JSONObject;
@@ -28,6 +29,9 @@ public final class ThemedContextMenu {
     private static final int TAG_ARROW = 0x70ca0002;
     private static final int TAG_STATE = 0x70ca0003;
     private static final int TAG_HEADER = 0x70ca0004;
+    private static final int TAG_SCROLL_HEADER = 0x70ca0005;
+    private static final int TAG_DETAIL_BODY = 0x70ca0006;
+    private static final int TAG_DETAIL_PANEL = 0x70ca0009;
     private static final int TAG_QUEUE_TITLE = 0x70ca0010;
     private static final int TAG_QUEUE_SUB = 0x70ca0011;
     private static final int TAG_QUEUE_GRIP = 0x70ca0012;
@@ -131,6 +135,8 @@ public final class ThemedContextMenu {
     private boolean mediaSliderExclusive = false;
     private boolean optionsListVisible = true;
     private boolean submenuTierOpen = false;
+    private boolean scrollableDetailHeader = false;
+    private String detailHeaderText = "";
     private int queueRowHeightPx;
     private int quickReturnIndex = -1;
     /** Last quick-bar chip — scroll-right opens this tier (queue/music) instead of root list. */
@@ -272,6 +278,18 @@ public final class ThemedContextMenu {
 
     public void setSubmenuTierOpen(boolean open) {
         submenuTierOpen = open;
+    }
+
+    /** First list row is a capped message/detail block (Reach tiers) with vertical marquee. */
+    public void setScrollableDetailHeader(boolean enabled) {
+        scrollableDetailHeader = enabled;
+        if (!enabled) {
+            detailHeaderText = "";
+        }
+    }
+
+    public boolean isScrollableDetailHeader() {
+        return scrollableDetailHeader;
     }
 
     public boolean isSubmenuTierOpen() {
@@ -1317,8 +1335,12 @@ public final class ThemedContextMenu {
         itemsHost.removeAllViews();
         for (int i = 0; i < labels.length; i++) {
             boolean header = rowHeaders != null && i < rowHeaders.length && rowHeaders[i];
-            if (header) {
-                itemsHost.addView(createHeaderRow(labels[i]));
+            if (header && scrollableDetailHeader && i == 0) {
+                detailHeaderText = labels[i] != null ? labels[i] : "";
+                itemsHost.addView(createScrollableDetailHeaderRow());
+            } else if (header) {
+                String iconKey = itemIconKeys != null && i < itemIconKeys.length ? itemIconKeys[i] : null;
+                itemsHost.addView(createHeaderRow(labels[i], iconKey));
             } else {
                 String iconKey = itemIconKeys != null && i < itemIconKeys.length ? itemIconKeys[i] : null;
                 String stateText = itemStateTexts != null && i < itemStateTexts.length ? itemStateTexts[i] : null;
@@ -1336,6 +1358,9 @@ public final class ThemedContextMenu {
             String[] itemStateTexts, boolean[] itemHeaders, Listener listener, boolean resetFocus) {
         mediaSliderExclusive = false;
         queueMode = false;
+        if (!scrollableDetailHeader) {
+            detailHeaderText = "";
+        }
         queueRows = new QueueRowSpec[0];
         queueMoveFrom = -1;
         String preserveLabel = null;
@@ -1412,6 +1437,8 @@ public final class ThemedContextMenu {
 
     public void replaceQueueContent(String title, QueueRowSpec[] rows, int focusIndex, int moveFrom) {
         queueMode = true;
+        scrollableDetailHeader = false;
+        detailHeaderText = "";
         submenuTierOpen = true;
         optionsListVisible = true;
         ensureContextTitleBar(quickItems.length > 0);
@@ -2716,6 +2743,8 @@ public final class ThemedContextMenu {
         optionsListVisible = true;
         submenuTierOpen = false;
         quickReturnIndex = -1;
+        scrollableDetailHeader = false;
+        detailHeaderText = "";
     }
 
     private void recoverFocusFromCollapsedList() {
@@ -2821,6 +2850,9 @@ public final class ThemedContextMenu {
                 return;
             }
             if (labels == null || labels.length == 0) return;
+            if (scrollableDetailHeader && focusIndex == 0 && delta != 0) {
+                if (handleScrollableDetailWheel(delta)) return;
+            }
             if (delta < 0 && focusIndex == firstFocusableIndex(0)) {
                 focusQuickBarFromListTopExit();
                 return;
@@ -2829,6 +2861,12 @@ public final class ThemedContextMenu {
             int prev = focusIndex;
             int next = nextFocusableIndex(focusIndex, delta);
             if (next < 0 || next == focusIndex) return;
+            if (scrollableDetailHeader && prev == 0 && next > 0) {
+                resetScrollableDetailScroll();
+            }
+            if (scrollableDetailHeader && prev > 0 && next == 0) {
+                resetScrollableDetailScroll();
+            }
             focusIndex = next;
             if (queueMode) {
                 ensureQueueBrowseWindowForFocus();
@@ -2933,7 +2971,54 @@ public final class ThemedContextMenu {
     }
 
     private boolean isHeaderRow(int index) {
+        if (isScrollableDetailHeaderIndex(index)) return false;
         return rowHeaders != null && index >= 0 && index < rowHeaders.length && rowHeaders[index];
+    }
+
+    private int scrollableDetailHeaderHeightPx() {
+        return VerticalTextMarqueeHelper.defaultMaxHeightPx(activity);
+    }
+
+    private boolean isScrollableDetailHeaderIndex(int index) {
+        return scrollableDetailHeader && index == 0;
+    }
+
+    private void refreshScrollableDetailHeader() {
+        if (itemsHost == null || itemsHost.getChildCount() == 0) return;
+        View row = itemsHost.getChildAt(0);
+        if (row != null && row.getTag(TAG_SCROLL_HEADER) instanceof Boolean) {
+            bindScrollableDetailHeaderRow(row, isMenuListZone() && focusIndex == 0);
+        }
+    }
+
+    private void bindScrollableDetailHeaderRow(View row, boolean focused) {
+        FrameLayout panel = row.findViewWithTag(TAG_DETAIL_PANEL);
+        if (panel == null) return;
+        int maxH = scrollableDetailHeaderHeightPx();
+        int w = panelWidthPx > 0 ? panelWidthPx : row.getWidth();
+        VerticalTextMarqueeHelper.updateCappedPanel(activity, panel, detailHeaderText, maxH, w);
+        int panelH = panel.getLayoutParams() != null ? panel.getLayoutParams().height : maxH;
+        row.setBackground(rowBackground(focused, w, panelH));
+    }
+
+    private FrameLayout createScrollableDetailHeaderRow() {
+        int maxH = scrollableDetailHeaderHeightPx();
+        FrameLayout panel = VerticalTextMarqueeHelper.createCappedPanel(activity, detailHeaderText, maxH);
+        panel.setTag(TAG_DETAIL_PANEL);
+
+        FrameLayout row = new FrameLayout(activity);
+        row.setTag(TAG_SCROLL_HEADER, Boolean.TRUE);
+        row.setFocusable(true);
+        row.setFocusableInTouchMode(true);
+        int panelH = panel.getLayoutParams() != null ? panel.getLayoutParams().height : maxH;
+        LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, panelH);
+        rowLp.setMargins(0, 1, 0, 1);
+        row.setLayoutParams(rowLp);
+        row.addView(panel, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, panelH));
+        bindScrollableDetailHeaderRow(row, isMenuListZone() && focusIndex == 0);
+        return row;
     }
 
     private int lastFocusableIndex() {
@@ -2978,7 +3063,48 @@ public final class ThemedContextMenu {
         }
         int scrollIdx = focusIndex;
         if (scrollIdx < 0 || scrollIdx >= itemsHost.getChildCount()) return;
+        if (scrollableDetailHeader && scrollIdx == 0) {
+            itemsScroll.scrollTo(0, 0);
+            return;
+        }
         scrollQueueRowIntoViewImmediate(scrollIdx);
+    }
+
+    private FrameLayout scrollableDetailPanel() {
+        if (itemsHost == null || itemsHost.getChildCount() == 0) return null;
+        View row = itemsHost.getChildAt(0);
+        if (row == null) return null;
+        return (FrameLayout) row.findViewWithTag(TAG_DETAIL_PANEL);
+    }
+
+    private boolean handleScrollableDetailWheel(int delta) {
+        FrameLayout panel = scrollableDetailPanel();
+        if (panel == null) return false;
+        if (delta > 0) {
+            if (!VerticalTextMarqueeHelper.isPanelScrolledToBottom(panel)) {
+                VerticalTextMarqueeHelper.scrollPanelByStep(activity, panel, 1);
+                return true;
+            }
+            int next = nextFocusableIndex(focusIndex, 1);
+            if (next >= 0 && next != focusIndex) {
+                resetScrollableDetailScroll();
+                focusIndex = next;
+                refreshAll();
+                scrollFocusIntoView();
+            }
+            return true;
+        }
+        if (!VerticalTextMarqueeHelper.isPanelScrolledToTop(panel)) {
+            VerticalTextMarqueeHelper.scrollPanelByStep(activity, panel, -1);
+            return true;
+        }
+        focusQuickBarFromListTopExit();
+        return true;
+    }
+
+    private void resetScrollableDetailScroll() {
+        FrameLayout panel = scrollableDetailPanel();
+        if (panel != null) VerticalTextMarqueeHelper.resetPanelScroll(panel);
     }
 
     private void scrollQueueRowIntoView(int index) {
@@ -3134,6 +3260,13 @@ public final class ThemedContextMenu {
         if (iconKey.startsWith("shuffle") || iconKey.startsWith("repeat")) {
             return ThemeManager.getPlaybackModeIcon(iconKey);
         }
+        if (iconKey.startsWith("flag.")) {
+            Bitmap flag = SoulseekCountryFlags.loadFlag(activity, iconKey.substring(5));
+            if (flag == null) return null;
+            int w = (int) (rowHeightPx * 0.5f);
+            int h = (int) (rowHeightPx * 0.33f);
+            return Bitmap.createScaledBitmap(flag, w, h, true);
+        }
         return ThemeManager.getSettingIcon(iconKey);
     }
 
@@ -3150,8 +3283,13 @@ public final class ThemedContextMenu {
     }
 
     private TextView createHeaderRow(String text) {
+        return createHeaderRow(text, null);
+    }
+
+    private TextView createHeaderRow(String text, String iconKey) {
         float menuTextPx = activity.getResources().getDimension(R.dimen.y1_menu_text_size);
         int textPadLeft = (int) activity.getResources().getDimension(R.dimen.y1_menu_text_pad_left);
+        float density = activity.getResources().getDisplayMetrics().density;
         TextView tv = new TextView(activity);
         tv.setTag(TAG_HEADER, Boolean.TRUE);
         tv.setFocusable(false);
@@ -3160,7 +3298,15 @@ public final class ThemedContextMenu {
         tv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, menuTextPx * 0.85f);
         ThemeManager.applyThemedTextStyle(tv, ThemeManager.ensureReadableOnBackground(
                 ThemeManager.getSectionHeaderTextColor(), panelBgColor));
-        float density = activity.getResources().getDisplayMetrics().density;
+        android.graphics.Bitmap iconBmp = resolveContextMenuIcon(iconKey);
+        if (iconBmp != null) {
+            int pad = (int) (4 * density);
+            android.graphics.drawable.BitmapDrawable d =
+                    new android.graphics.drawable.BitmapDrawable(activity.getResources(), iconBmp);
+            d.setBounds(0, 0, iconBmp.getWidth(), iconBmp.getHeight());
+            tv.setCompoundDrawables(d, null, null, null);
+            tv.setCompoundDrawablePadding(pad);
+        }
         tv.setPadding(textPadLeft, (int) (8 * density), textPadLeft, (int) (2 * density));
         return tv;
     }
@@ -3250,6 +3396,10 @@ public final class ThemedContextMenu {
         }
         for (int i = 0; i < itemsHost.getChildCount(); i++) {
             View row = itemsHost.getChildAt(i);
+            if (row.getTag(TAG_SCROLL_HEADER) instanceof Boolean) {
+                bindScrollableDetailHeaderRow(row, isMenuListZone() && focusIndex == 0);
+                continue;
+            }
             if (row.getTag(TAG_HEADER) instanceof Boolean) continue;
             boolean focused = isMenuListZone() && !queueMode && i == focusIndex;
             TextView label = (TextView) row.getTag(TAG_LABEL);

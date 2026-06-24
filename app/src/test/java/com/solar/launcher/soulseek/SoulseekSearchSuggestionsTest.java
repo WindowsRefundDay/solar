@@ -71,8 +71,8 @@ public class SoulseekSearchSuggestionsTest {
     @Test
     public void similarFromResults_dedupesAndExcludesQuery() {
         List<SoulseekClient.Result> results = new ArrayList<SoulseekClient.Result>();
-        results.add(new SoulseekClient.Result("u", "Beat It - Michael Jackson.mp3", 0, 0, 0, true, true, 0));
-        results.add(new SoulseekClient.Result("u", "Billie Jean - Michael Jackson.mp3", 0, 0, 0, true, true, 0));
+        results.add(new SoulseekClient.Result("u", "Beat It - Michael Jackson.mp3", 0, 0, 0, true, true, 0, 0));
+        results.add(new SoulseekClient.Result("u", "Billie Jean - Michael Jackson.mp3", 0, 0, 0, true, true, 0, 0));
         List<String> pool = SoulseekSearchSuggestions.similarFromResults(results, "Michael Jackson", 20);
         if (pool.isEmpty()) throw new AssertionError("expected suggestions");
         for (String q : pool) {

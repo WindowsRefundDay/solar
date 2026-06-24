@@ -32,9 +32,9 @@ public class SoulseekWireTest {
 
     @Test
     public void generateCredentials_areValid() {
-        String u = SoulseekAccount.generateUsername();
-        String p = SoulseekAccount.generatePassword();
-        if (u.length() < 5 || u.length() > 30) throw new AssertionError("username len");
+        String u = SoulseekAccount.generateUsername(null);
+        String p = SoulseekAccount.generateAutoPassword();
+        if (!SoulseekAccount.isFriendCode(u)) throw new AssertionError("friend code " + u);
         if (p.length() < 8) throw new AssertionError("password len");
         if (!SoulseekAccount.isValidUsername(u)) throw new AssertionError("generated user");
     }
@@ -67,6 +67,22 @@ public class SoulseekWireTest {
     }
 
     @Test
+    public void parseUserInfoResponse_readsDescription() throws Exception {
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        bos.write(SoulseekWire.packString("Hello bio\nLine two"));
+        bos.write(new byte[] {0}); // no picture
+        bos.write(SoulseekWire.packUInt32(0));
+        bos.write(SoulseekWire.packUInt32(0));
+        bos.write(new byte[] {1}); // slots avail
+        bos.write(SoulseekWire.packUInt32(2));
+        SoulseekWire.UserInfoResponse info =
+                SoulseekWire.parseUserInfoResponse(bos.toByteArray());
+        if (!info.description.startsWith("Hello bio")) {
+            throw new AssertionError("descr: " + info.description);
+        }
+    }
+
+    @Test
     public void parseSearchResponse_readsUploadSpeedAttribute() throws Exception {
         java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
         bos.write(SoulseekWire.packString("fastpeer"));
@@ -79,6 +95,74 @@ public class SoulseekWireTest {
         SoulseekWire.SearchFile f = parsed.files.get(0);
         if (!f.freeSlot) throw new AssertionError("slot");
         if (f.speed != 512000) throw new AssertionError("speed " + f.speed);
+    }
+
+    @Test
+    public void parseShareList_readsFilesWithAttributes() throws Exception {
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        java.io.DataOutputStream out = new java.io.DataOutputStream(bos);
+        out.writeInt(Integer.reverseBytes(1));
+        writeWireString(out, "@@peer\\Music");
+        out.writeInt(Integer.reverseBytes(2));
+        writeBrowseShareFile(out, "a.mp3", 1024, "mp3", 2);
+        writeBrowseShareFile(out, "b.flac", 2048, "flac", 1);
+        out.writeInt(Integer.reverseBytes(0));
+        out.writeInt(Integer.reverseBytes(0));
+        java.util.List<SoulseekWire.BrowseFolder> folders =
+                SoulseekWire.parseShareList(zlibWrap(bos.toByteArray()));
+        int files = 0;
+        for (SoulseekWire.BrowseFolder folder : folders) files += folder.files.size();
+        if (files != 2) throw new AssertionError("files=" + files);
+    }
+
+    @Test
+    public void parseShareList_roundtripFromShareIndex() throws Exception {
+        java.io.File music = new java.io.File(System.getProperty("java.io.tmpdir"), "wire_share_music");
+        deleteTree(music);
+        new java.io.File(music, "Artist").mkdirs();
+        java.io.File track = new java.io.File(music, "Artist/song.mp3");
+        track.getParentFile().mkdirs();
+        java.io.FileOutputStream fos = new java.io.FileOutputStream(track);
+        fos.write(new byte[128]);
+        fos.close();
+
+        SoulseekShareIndex idx = new SoulseekShareIndex();
+        idx.scan("peer", music, null);
+        byte[] zlib = SoulseekShareIndex.zlibCompress(idx.buildShareListUncompressed());
+        java.util.List<SoulseekWire.BrowseFolder> folders = SoulseekWire.parseShareList(zlib);
+        int files = 0;
+        for (SoulseekWire.BrowseFolder folder : folders) files += folder.files.size();
+        if (files != 1) throw new AssertionError("roundtrip files=" + files);
+        deleteTree(music);
+    }
+
+    private static void writeWireString(java.io.DataOutputStream out, String s) throws Exception {
+        byte[] raw = s.getBytes("UTF-8");
+        out.writeInt(Integer.reverseBytes(raw.length));
+        out.write(raw);
+    }
+
+    private static void writeBrowseShareFile(java.io.DataOutputStream out, String name, long size,
+            String ext, int attrCount) throws Exception {
+        out.writeByte(1);
+        writeWireString(out, name);
+        out.writeInt(Integer.reverseBytes((int) size));
+        out.writeInt(Integer.reverseBytes(0xffffffff));
+        writeWireString(out, ext);
+        out.writeInt(Integer.reverseBytes(attrCount));
+        for (int i = 0; i < attrCount; i++) {
+            out.writeInt(Integer.reverseBytes(i == 0 ? 0 : 1));
+            out.writeInt(Integer.reverseBytes(320000));
+        }
+    }
+
+    private static void deleteTree(java.io.File f) {
+        if (f == null || !f.exists()) return;
+        if (f.isDirectory()) {
+            java.io.File[] kids = f.listFiles();
+            if (kids != null) for (java.io.File k : kids) deleteTree(k);
+        }
+        f.delete();
     }
 
     @Test

@@ -132,6 +132,44 @@ public final class SolarHttp {
         return new String(getBytes(urlStr), "UTF-8");
     }
 
+    public static byte[] postJson(String urlStr, String jsonBody, String userAgent,
+            String registryToken) throws IOException {
+        TlsHelper.ensureSecurityProvider();
+        okhttp3.MediaType json = okhttp3.MediaType.parse("application/json; charset=utf-8");
+        okhttp3.RequestBody body = okhttp3.RequestBody.create(json, jsonBody != null ? jsonBody : "{}");
+        Request.Builder b = new Request.Builder().url(urlStr).post(body);
+        b.header("User-Agent", userAgent != null ? userAgent : DEFAULT_UA);
+        b.header("Content-Type", "application/json; charset=utf-8");
+        if (registryToken != null && !registryToken.isEmpty()) {
+            b.header("X-Reach-Token", registryToken);
+        }
+        Response resp = execute(b.build());
+        try {
+            if (resp.body() == null) throw new IOException("Empty body for " + urlStr);
+            return resp.body().bytes();
+        } finally {
+            if (resp.body() != null) resp.body().close();
+        }
+    }
+
+    public static byte[] getBytes(String urlStr, String accept, String userAgent,
+            String registryToken) throws IOException {
+        TlsHelper.ensureSecurityProvider();
+        Request.Builder b = new Request.Builder().url(urlStr);
+        b.header("User-Agent", userAgent != null ? userAgent : DEFAULT_UA);
+        if (accept != null && !accept.isEmpty()) b.header("Accept", accept);
+        if (registryToken != null && !registryToken.isEmpty()) {
+            b.header("X-Reach-Token", registryToken);
+        }
+        Response resp = execute(b.build());
+        try {
+            if (resp.body() == null) throw new IOException("Empty body for " + urlStr);
+            return resp.body().bytes();
+        } finally {
+            if (resp.body() != null) resp.body().close();
+        }
+    }
+
     /** HEAD then tiny ranged GET — true if any URL variant is reachable (TLS/HTTP). */
     public static boolean probeAnyReachable(String[] urls) {
         if (urls == null || urls.length == 0) return false;

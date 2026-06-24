@@ -32,6 +32,9 @@ public final class SessionLifecycle {
         if (from == MainActivity.STATE_BROWSER && to != MainActivity.STATE_BROWSER) {
             activity.teardownBrowserSession();
         }
+        if (from == MainActivity.STATE_DEEZER && to != MainActivity.STATE_DEEZER) {
+            activity.teardownDeezerSession();
+        }
         activity.sessionSweepHandlers(from, to);
     }
 }

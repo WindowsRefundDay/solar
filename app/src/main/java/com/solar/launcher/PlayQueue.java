@@ -8,7 +8,7 @@ import java.util.List;
 
 /** Unified playback queue — music files, podcast episodes, Reach streams in one order. */
 public final class PlayQueue {
-    public enum ItemKind { MUSIC_FILE, PODCAST_EPISODE, REACH_STREAM }
+    public enum ItemKind { MUSIC_FILE, PODCAST_EPISODE, REACH_STREAM, DEEZER_STREAM }
 
     public static final class QueueItem {
         public final ItemKind kind;
@@ -17,27 +17,49 @@ public final class PlayQueue {
         public final String podcastShowTitle;
         public final boolean podcastFromSaved;
         public final String reachMeta;
+        public final String reachPeerUsername;
+        public final String deezerMeta;
+        public final long deezerTrackId;
 
         private QueueItem(ItemKind kind, File file, OpenRssClient.Episode episode,
-                String podcastShowTitle, boolean podcastFromSaved, String reachMeta) {
+                String podcastShowTitle, boolean podcastFromSaved, String reachMeta,
+                String reachPeerUsername, String deezerMeta, long deezerTrackId) {
             this.kind = kind;
             this.file = file;
             this.episode = episode;
             this.podcastShowTitle = podcastShowTitle != null ? podcastShowTitle : "";
             this.podcastFromSaved = podcastFromSaved;
             this.reachMeta = reachMeta;
+            this.reachPeerUsername = reachPeerUsername;
+            this.deezerMeta = deezerMeta;
+            this.deezerTrackId = deezerTrackId;
         }
 
         public static QueueItem music(File f) {
-            return new QueueItem(ItemKind.MUSIC_FILE, f, null, "", false, null);
+            return new QueueItem(ItemKind.MUSIC_FILE, f, null, "", false, null, null, null, 0);
         }
 
         public static QueueItem reach(File temp, String meta) {
-            return new QueueItem(ItemKind.REACH_STREAM, temp, null, "", false, meta);
+            return reach(temp, meta, null);
+        }
+
+        public static QueueItem reach(File temp, String meta, String peerUsername) {
+            return new QueueItem(ItemKind.REACH_STREAM, temp, null, "", false, meta, peerUsername, null, 0);
+        }
+
+        public static QueueItem deezer(File temp, String meta, long trackId) {
+            return new QueueItem(ItemKind.DEEZER_STREAM, temp, null, "", false, null, null, meta, trackId);
         }
 
         public static QueueItem podcast(OpenRssClient.Episode ep, String showTitle, boolean fromSaved) {
-            return new QueueItem(ItemKind.PODCAST_EPISODE, null, ep, showTitle, fromSaved, null);
+            return new QueueItem(ItemKind.PODCAST_EPISODE, null, ep, showTitle, fromSaved, null, null, null, 0);
+        }
+
+        /** Display title for stream items. */
+        public String streamMeta() {
+            if (kind == ItemKind.DEEZER_STREAM && deezerMeta != null) return deezerMeta;
+            if (kind == ItemKind.REACH_STREAM && reachMeta != null) return reachMeta;
+            return file != null ? file.getName() : "";
         }
     }
 
@@ -104,10 +126,28 @@ public final class PlayQueue {
             QueueItem q = items.get(i);
             if (q.file == null || !q.file.equals(oldF)) continue;
             if (q.kind == ItemKind.REACH_STREAM) {
-                items.set(i, QueueItem.reach(newF, reachMeta != null ? reachMeta : newF.getName()));
+                items.set(i, QueueItem.reach(newF, reachMeta != null ? reachMeta : newF.getName(),
+                        q.reachPeerUsername));
+            } else if (q.kind == ItemKind.DEEZER_STREAM) {
+                items.set(i, QueueItem.deezer(newF, reachMeta != null ? reachMeta : newF.getName(),
+                        q.deezerTrackId));
             } else if (q.kind == ItemKind.MUSIC_FILE) {
                 items.set(i, QueueItem.music(newF));
             }
+        }
+    }
+
+    /** After saving a stream temp file to the music library, re-tag as a local music track. */
+    public void promoteStreamToMusic(File oldF, File libraryFile) {
+        if (oldF == null || libraryFile == null) return;
+        for (int i = 0; i < items.size(); i++) {
+            QueueItem q = items.get(i);
+            if (q.file == null || !q.file.equals(oldF)) continue;
+            if (q.kind == ItemKind.REACH_STREAM || q.kind == ItemKind.DEEZER_STREAM
+                    || q.kind == ItemKind.MUSIC_FILE) {
+                items.set(i, QueueItem.music(libraryFile));
+            }
+            return;
         }
     }
 
@@ -188,7 +228,8 @@ public final class PlayQueue {
     public List<File> musicFiles() {
         List<File> out = new ArrayList<File>();
         for (QueueItem q : items) {
-            if (q.kind == ItemKind.MUSIC_FILE || q.kind == ItemKind.REACH_STREAM) {
+            if (q.kind == ItemKind.MUSIC_FILE || q.kind == ItemKind.REACH_STREAM
+                    || q.kind == ItemKind.DEEZER_STREAM) {
                 if (q.file != null) out.add(q.file);
             }
         }

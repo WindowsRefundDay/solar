@@ -43,6 +43,7 @@ public final class TlsHelper {
             "certs/amazon-root-ca-1.pem",
             "certs/gts-root-r1.pem",
             "certs/gts-root-r4.pem",
+            "certs/usertrust-rsa-ca.pem",
     };
 
     private TlsHelper() {}

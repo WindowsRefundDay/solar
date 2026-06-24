@@ -38,4 +38,17 @@ public class QueueMoveWindowTest {
         assertTrue(QueueMoveWindow.canMoveTo(2, 5));
         assertFalse(QueueMoveWindow.canMoveTo(2, 2));
     }
+
+    @Test
+    public void ribbonEnterTranslationSlots_twoTrack() {
+        assertEquals(-1, QueueMoveWindow.ribbonEnterTranslationSlots(0, 2));
+        assertEquals(0, QueueMoveWindow.ribbonEnterTranslationSlots(1, 2));
+    }
+
+    @Test
+    public void ribbonEnterTranslationSlots_longQueue() {
+        assertEquals(-1, QueueMoveWindow.ribbonEnterTranslationSlots(0, 5));
+        assertEquals(1, QueueMoveWindow.ribbonEnterTranslationSlots(4, 5));
+        assertEquals(0, QueueMoveWindow.ribbonEnterTranslationSlots(2, 5));
+    }
 }

@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -81,6 +82,10 @@ public final class SolarUpdateClient {
     private SolarUpdateClient() {}
 
     public static List<ReleaseInfo> fetchUpdates(String updatesUrl) throws IOException {
+        return filterForDevice(fetchUpdatesRaw(updatesUrl));
+    }
+
+    static List<ReleaseInfo> fetchUpdatesRaw(String updatesUrl) throws IOException {
         if (updatesUrl == null || updatesUrl.trim().isEmpty()) updatesUrl = DEFAULT_UPDATES_URL;
         TlsHelper.ensureSecurityProvider();
         Request req = new Request.Builder()
@@ -161,12 +166,39 @@ public final class SolarUpdateClient {
         return "v" + v;
     }
 
+    /** Y1/Y2 OTA APK names: {@code solar-y1-nightly-…} / {@code solar-y2-v0.4.apk}. */
+    public static List<ReleaseInfo> filterForDevice(List<ReleaseInfo> all) {
+        if (all == null || all.isEmpty()) return new ArrayList<ReleaseInfo>();
+        String variant = deviceVariant();
+        List<ReleaseInfo> out = new ArrayList<ReleaseInfo>();
+        for (ReleaseInfo r : all) {
+            if (matchesDeviceVariant(r, variant)) out.add(r);
+        }
+        return out;
+    }
+
+    static String deviceVariant() {
+        return DeviceFeatures.deviceFamily();
+    }
+
+    static boolean matchesDeviceVariant(ReleaseInfo r, String variant) {
+        if (r == null || variant == null) return false;
+        String apk = r.apkUrl == null ? "" : r.apkUrl.toLowerCase(Locale.US);
+        String tag = r.tag == null ? "" : r.tag.toLowerCase(Locale.US);
+        if (apk.contains("-y1-") || apk.contains("-y2-")
+                || tag.contains("-y1-") || tag.contains("-y2-")) {
+            return apk.contains("-" + variant + "-") || tag.contains("-" + variant + "-");
+        }
+        return true;
+    }
+
     /**
      * Newest-first subset for the version picker — caps row count and keeps the installed
      * release visible even when it would fall outside the window.
      */
     public static List<ReleaseInfo> releasesForPicker(List<ReleaseInfo> all,
             int localCode, String localName, int maxItems) {
+        all = filterForDevice(all);
         if (all == null || all.isEmpty()) return new ArrayList<ReleaseInfo>();
         if (maxItems <= 0) maxItems = MAX_PICKER_RELEASES;
 
@@ -251,8 +283,30 @@ public final class SolarUpdateClient {
 
     static int parseNightlyCode(String tag) {
         if (tag == null || !tag.startsWith("nightly-")) return 0;
+        String rest = tag.substring("nightly-".length());
+        Matcher ts = Pattern.compile("^(\\d{4})(\\d{2})(\\d{2})-(\\d{2})(\\d{2})$").matcher(rest);
+        if (ts.matches()) {
+            try {
+                int y = Integer.parseInt(ts.group(1));
+                int mo = Integer.parseInt(ts.group(2));
+                int d = Integer.parseInt(ts.group(3));
+                int hh = Integer.parseInt(ts.group(4));
+                int mm = Integer.parseInt(ts.group(5));
+                java.util.Calendar cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"));
+                cal.set(y, mo - 1, d, hh, mm, 0);
+                cal.set(java.util.Calendar.MILLISECOND, 0);
+                java.util.Calendar epoch = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"));
+                epoch.set(2020, 0, 1, 0, 0, 0);
+                epoch.set(java.util.Calendar.MILLISECOND, 0);
+                long minutes = (cal.getTimeInMillis() - epoch.getTimeInMillis()) / 60_000L;
+                if (minutes < 0 || minutes > Integer.MAX_VALUE) return 0;
+                return (int) minutes;
+            } catch (NumberFormatException e) {
+                return 0;
+            }
+        }
         try {
-            return Integer.parseInt(tag.substring("nightly-".length()));
+            return Integer.parseInt(rest);
         } catch (NumberFormatException e) {
             return 0;
         }
@@ -293,6 +347,26 @@ public final class SolarUpdateClient {
         if (compareSemver("0.1", "0.2") >= 0) throw new AssertionError("0.1 < 0.2");
         if (compareSemver("0.2", "0.2") != 0) throw new AssertionError("0.2 eq");
         if (parseNightlyCode("nightly-42") != 42) throw new AssertionError("nightly code");
+        if (parseNightlyCode("nightly-20240622-1530") <= 0) {
+            throw new AssertionError("nightly timestamp code");
+        }
+        if (parseNightlyCode("nightly-20240622-1545") <= parseNightlyCode("nightly-20240622-1530")) {
+            throw new AssertionError("nightly timestamp ordering");
+        }
+        ReleaseInfo y1Only = new ReleaseInfo("nightly-1", "nightly-1", 1,
+                "https://x/solar-y1-nightly-1.apk", true);
+        ReleaseInfo y2Only = new ReleaseInfo("nightly-1", "nightly-1", 1,
+                "https://x/solar-y2-nightly-1.apk", true);
+        if (!matchesDeviceVariant(y1Only, "y1")) throw new AssertionError("y1 match");
+        if (matchesDeviceVariant(y2Only, "y1")) throw new AssertionError("y1 rejects y2");
+        ReleaseInfo universal = new ReleaseInfo("v0.3", "0.3", 0,
+                "https://x/solar-v0.3.apk", false);
+        if (!matchesDeviceVariant(universal, "y1")) throw new AssertionError("universal y1");
+        if (!matchesDeviceVariant(universal, "y2")) throw new AssertionError("universal y2");
+        List<ReleaseInfo> mixed = new ArrayList<ReleaseInfo>();
+        mixed.add(y1Only);
+        mixed.add(y2Only);
+        if (filterForDevice(mixed).size() != 1) throw new AssertionError("device filter");
         ReleaseInfo r = new ReleaseInfo("v0.2", "0.2", 0, "https://x/a.apk", false);
         if (!r.isNewerThan(1, "0.1")) throw new AssertionError("stable newer");
         ReleaseInfo n = new ReleaseInfo("nightly-10", "nightly-10", 10, "https://x/a.apk", true);
@@ -310,8 +384,10 @@ public final class SolarUpdateClient {
             throw new AssertionError("stable downgrade");
         }
         List<ReleaseInfo> many = new ArrayList<ReleaseInfo>();
+        String variant = deviceVariant();
         for (int i = 1; i <= 20; i++) {
-            many.add(new ReleaseInfo("nightly-" + i, "nightly-" + i, i, "https://x/a.apk", true));
+            many.add(new ReleaseInfo("nightly-" + i, "nightly-" + i, i,
+                    "https://x/solar-" + variant + "-nightly-" + i + ".apk", true));
         }
         many.add(new ReleaseInfo("v0.2", "0.2", 0, "https://x/s.apk", false));
         List<ReleaseInfo> picked = releasesForPicker(many, 3, "0.2.1", MAX_PICKER_RELEASES);

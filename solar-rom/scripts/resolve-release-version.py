@@ -2,13 +2,16 @@
 """Compute the next Solar release version from git tags (sequential, not local gradle)."""
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Iterable, List, Optional, Tuple
 
-NIGHTLY_TAG_RE = re.compile(r"^nightly-(\d+)$")
+NIGHTLY_NUM_TAG_RE = re.compile(r"^nightly-(\d+)$")
+NIGHTLY_TS_TAG_RE = re.compile(r"^nightly-(\d{8}-\d{4})$")
 STABLE_TAG_RE = re.compile(r"^v(\d+\.\d+(?:\.\d+)?)$")
 
 
@@ -20,10 +23,36 @@ def git_tags() -> List[str]:
 def max_nightly_number(tags: Iterable[str]) -> int:
     nums: List[int] = []
     for tag in tags:
-        match = NIGHTLY_TAG_RE.match(tag)
+        match = NIGHTLY_NUM_TAG_RE.match(tag)
         if match:
             nums.append(int(match.group(1)))
     return max(nums) if nums else 0
+
+
+def nightly_ts_minutes(version_name: str) -> int:
+    match = NIGHTLY_TS_TAG_RE.match(version_name)
+    if not match:
+        return 0
+    y = int(match.group(1)[:4])
+    mo = int(match.group(1)[4:6])
+    d = int(match.group(1)[6:8])
+    hh = int(match.group(2)[:2])
+    mm = int(match.group(2)[2:])
+    dt = datetime(y, mo, d, hh, mm, tzinfo=timezone.utc)
+    epoch = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    return int((dt - epoch).total_seconds() // 60)
+
+
+def max_nightly_code(tags: Iterable[str]) -> int:
+    codes: List[int] = []
+    for tag in tags:
+        match = NIGHTLY_TS_TAG_RE.match(tag)
+        if match:
+            codes.append(nightly_ts_minutes(tag))
+        match = NIGHTLY_NUM_TAG_RE.match(tag)
+        if match:
+            codes.append(int(match.group(1)))
+    return max(codes) if codes else 0
 
 
 def max_stable_version(tags: Iterable[str]) -> Optional[Decimal]:
@@ -54,6 +83,15 @@ def read_gradle_version_code(gradle_path: str) -> int:
     return int(match.group(1)) if match else 0
 
 
+def nightly_timestamp_name() -> str:
+    ts = os.environ.get("SOURCE_DATE_EPOCH")
+    if ts:
+        dt = datetime.fromtimestamp(int(ts), tz=timezone.utc)
+    else:
+        dt = datetime.now(timezone.utc)
+    return dt.strftime("nightly-%Y%m%d-%H%M")
+
+
 def resolve(branch: str, gradle_path: str, tags: Optional[Iterable[str]] = None) -> Tuple[str, str, int, str]:
     """Return (channel, version_name, version_code, tag)."""
     tag_list = list(tags) if tags is not None else git_tags()
@@ -61,9 +99,9 @@ def resolve(branch: str, gradle_path: str, tags: Optional[Iterable[str]] = None)
     gradle_code = read_gradle_version_code(gradle_path)
 
     if branch == "nightly":
-        number = nightly_max + 1
-        version_name = f"nightly-{number}"
-        version_code = number
+        version_name = nightly_timestamp_name()
+        ts_code = nightly_ts_minutes(version_name)
+        version_code = max(max_nightly_code(tag_list), gradle_code, ts_code)
         return "nightly", version_name, version_code, version_name
 
     if branch == "main":
@@ -78,18 +116,23 @@ def resolve(branch: str, gradle_path: str, tags: Optional[Iterable[str]] = None)
 def self_test() -> None:
     tags = ["nightly-39", "nightly-49", "nightly-52", "v0.2", "v1.5"]
     channel, name, code, tag = resolve("nightly", __file__, tags)
-    assert channel == "nightly" and name == "nightly-53" and code == 53 and tag == "nightly-53", (
-        channel, name, code, tag
-    )
+    assert channel == "nightly" and tag == name, (channel, name, code, tag)
+    assert NIGHTLY_TS_TAG_RE.match(name), name
+    assert code >= 52, code
 
     channel, name, code, tag = resolve("nightly", __file__, [])
-    assert name == "nightly-1" and code == 1, (name, code)
+    assert NIGHTLY_TS_TAG_RE.match(name), (name, code)
+    assert code >= 1, code
 
     channel, name, code, tag = resolve("main", __file__, ["nightly-52", "v1.5", "v0.2"])
     assert name == "0.3" and tag == "v0.3" and code == 53, (name, code, tag)
 
     channel, name, code, tag = resolve("main", __file__, ["nightly-10"])
     assert name == "0.1" and tag == "v0.1", (name, tag)
+
+    ts_tags = ["nightly-20240622-1530", "nightly-20240622-1545"]
+    channel, name, code, tag = resolve("nightly", __file__, ts_tags)
+    assert code >= nightly_ts_minutes("nightly-20240622-1545"), (name, code)
 
     print("resolve-release-version: self-test ok")
 

@@ -1,6 +1,44 @@
 package com.solar.launcher;
 
+import com.solar.launcher.deezer.DeezerAccount;
+import com.solar.launcher.deezer.DeezerCache;
+import com.solar.launcher.deezer.DeezerMetadata;
+import com.solar.launcher.deezer.DeezerClient;
+import com.solar.launcher.deezer.DeezerPodcast;
+import com.solar.launcher.deezer.DeezerResult;
+import com.solar.launcher.deezer.DeezerScreen;
+import com.solar.launcher.deezer.DeezerSearch;
+import com.solar.launcher.soulseek.ConversationDisplayBuilder;
+import com.solar.launcher.soulseek.ReachDirectoryClient;
+import com.solar.launcher.soulseek.ReachDirectoryUser;
+import com.solar.launcher.soulseek.ReachMessageFormat;
+import com.solar.launcher.soulseek.ReachMessageRow;
+import com.solar.launcher.soulseek.SoulseekPeerNotes;
+import com.solar.launcher.soulseek.SoulseekPeerPrefs;
+import com.solar.launcher.soulseek.SoulseekChatRooms;
+import com.solar.launcher.soulseek.SoulseekInterests;
+import com.solar.launcher.soulseek.SoulseekPeerProfileCache;
+import com.solar.launcher.soulseek.SoulseekProfileSession;
+import com.solar.launcher.soulseek.SoulseekBrowseSession;
+import com.solar.launcher.soulseek.SoulseekCountryFlags;
+import com.solar.launcher.soulseek.SoulseekDownloadHistory;
+import com.solar.launcher.soulseek.SoulseekMessaging;
+import com.solar.launcher.soulseek.SoulseekUserDirectory;
+import com.solar.launcher.soulseek.SoulseekWire;
+import com.solar.launcher.soulseek.ReachChatRoomsAdapter;
+import com.solar.launcher.soulseek.ReachIntroMessage;
+import com.solar.launcher.soulseek.ReachIntroTracker;
+import com.solar.launcher.soulseek.RoomConversationDisplayBuilder;
+import com.solar.launcher.soulseek.SoulseekRoomWall;
+import com.solar.launcher.soulseek.ReachInboxAdapter;
+import com.solar.launcher.soulseek.ReachInterestsAdapter;
+import com.solar.launcher.soulseek.ReachUsersAdapter;
+import com.solar.launcher.soulseek.SoulseekBrowseAdapter;
 import com.solar.launcher.soulseek.ReachCache;
+import com.solar.launcher.soulseek.ReachPeerCapabilities;
+import com.solar.launcher.soulseek.store.ReachDatabase;
+import com.solar.launcher.soulseek.store.ReachDbExecutor;
+import com.solar.launcher.soulseek.ReachTrackProvenance;
 import com.solar.launcher.soulseek.StreamTempCache;
 import com.solar.launcher.soulseek.SoulseekAccount;
 import com.solar.launcher.soulseek.SoulseekClient;
@@ -61,6 +99,7 @@ import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ListView;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -112,8 +151,6 @@ public class MainActivity extends Activity {
     private TextView tvWidgetAlbumArtist;
     // 💡 [추가] 고속 인덱스 점프(알파벳 스크롤) 전용 변수들
     private List<String> currentScrollIndexList = new ArrayList<>();
-    private long lastWheelTime = 0;
-    private int wheelFastCount = 0;
     public static MainActivity instance;
     private long lastTrackChangeTime = 0; // 🚀 기기의 중복 키 신호를 막아줄 방어막 변수
     // 💡 [추가] 오디오 스펙트럼 관련 변수들
@@ -135,10 +172,21 @@ public class MainActivity extends Activity {
     static final int STATE_SOULSEEK = 12;
     static final int STATE_APPS = 13;
     static final int STATE_MORE = 14;
+    static final int STATE_DEEZER = 15;
+    static final int STATE_DEEZER_SETUP = 16;
     private static final int KEYBOARD_WIFI = 0;
     private static final int KEYBOARD_SOULSEEK_USER = 1;
     private static final int KEYBOARD_SOULSEEK_PASS = 2;
     private static final int KEYBOARD_SOULSEEK_SEARCH = 3;
+    private static final int KEYBOARD_SOULSEEK_FIND = 4;
+    private static final int KEYBOARD_SOULSEEK_MSG = 5;
+    private static final int KEYBOARD_SOULSEEK_CONTACT = 6;
+    private static final int KEYBOARD_SOULSEEK_ROOM = 7;
+    private static final int KEYBOARD_SOULSEEK_INTEREST = 8;
+    private static final int KEYBOARD_SOULSEEK_PEER_NOTE = 9;
+    private static final int KEYBOARD_SOULSEEK_ROOM_SEARCH = 10;
+    private static final int KEYBOARD_SOULSEEK_ROOM_WALL = 11;
+    private static final int KEYBOARD_DEEZER_SEARCH = 12;
     private static final int KEYBOARD_PODCAST_SEARCH = 4;
     /** ponytail: stock Y1 row art — home=itemConfig, settings/menu lists=menuConfig, file lists=itemConfig */
     private static final int Y1_ROW_HOME = 0;
@@ -194,6 +242,20 @@ public class MainActivity extends Activity {
     // 💡 [초고속 엔진] 수천 곡을 버티기 위한 재활용 리스트뷰와 기존 스크롤뷰
     private android.widget.ListView listVirtualSongs;
     private View settingsScrollView;
+    private ListView listReachBrowse;
+    private View soulseekConversationHost;
+    private TextView tvConversationTitle;
+    private ListView listConversationThread;
+    private Button btnConversationBack;
+    private Boolean soulseekConversationPeerOnline;
+    private int soulseekConversationWatchGen;
+    private boolean soulseekConversationFocusLastMessage;
+    private int soulseekReachFindReachGen;
+    private int soulseekReachUserActionsGen;
+    private boolean soulseekInterestAddLike = true;
+    private Runnable soulseekProfileOnBack;
+    private int soulseekProfileLoadGen;
+    private static final long REACH_DIRECTORY_HEARTBEAT_MS = 45L * 60L * 1000L;
     private android.widget.ListView listThemes;
     private ThemeUnifiedListAdapter themeUnifiedListAdapter;
     private final List<ThemeBrowser.Row> themeBrowserRows = new ArrayList<ThemeBrowser.Row>();
@@ -238,6 +300,9 @@ public class MainActivity extends Activity {
     private TextView tvStatusClock, tvStatusBattery;
     private ImageView ivStatusBluetooth, ivStatusWifi, ivStatusHeadphone, ivStatusPlayback, ivMainBg, ivScreenMask;
     private TextView tvSettingsPreviewTitle, tvSettingsPreviewState;
+    private ScrollView settingsPreviewStateScroll;
+    private Handler settingsPreviewScrollHandler;
+    private Runnable settingsPreviewScrollRunnable;
     private ImageView ivSettingsPreviewIcon;
     private StoragePieView storagePieView;
     private LinearLayout playerVisualizerContainer, playerContentRow;
@@ -266,6 +331,8 @@ public class MainActivity extends Activity {
     private static final int HOME_MENU_TAG_LABEL = 0x7f0a0001;
     private static final int HOME_MENU_TAG_ARROW = 0x7f0a0002;
     private int focusedHomeMenuIndex = 0;
+    private int homeMenuBuildGen = 0;
+    private boolean webServerStartedForDeezerSetup = false;
     private int homeScreenEditorMenuFocusIndex = 11;
     private int homeScreenEditorFocusIndex = 1;
     private int homeScreenOrderFocusIndex = 1;
@@ -291,6 +358,34 @@ public class MainActivity extends Activity {
     /** Screen to return to on Back from Wi‑Fi, PC upload, Bluetooth, brightness, storage, etc. */
     private int screenBackReturnTo = STATE_MENU;
     private boolean settingsAboutFullWidth;
+    private boolean settingsBrowseFullWidth;
+    private ReachChatRoomsAdapter reachChatRoomsAdapter;
+    private ReachInboxAdapter reachInboxAdapter;
+    private int reachInboxLoadGen = 0;
+    private int reachChatRoomsLoadGen = 0;
+    private int reachChatRoomsSearchGen = 0;
+    private String soulseekPeerNoteUsername = null;
+    private ReachUsersAdapter reachUsersAdapter;
+    private ReachInterestsAdapter reachInterestsAdapter;
+    private SoulseekBrowseAdapter soulseekBrowseAdapter;
+    private View soulseekBrowseListHeader;
+    private int soulseekBrowseGen = 0;
+    private int soulseekBrowseReturnUiMode = -1;
+    private SoulseekClient.Result soulseekBrowseReturnResult;
+    private java.util.List<SoulseekWire.RoomEntry> pendingRoomListSnapshot;
+    private final Runnable roomListDebounceRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!SettingsScreens.SOULSEEK_CHAT_ROOMS.equals(settingsSubScreenKey)) return;
+            if (reachChatRoomsAdapter == null) return;
+            String query = reachChatRoomsAdapter.getSearchQuery();
+            if (query != null && !query.isEmpty()) {
+                runReachChatRoomSearch(query, reachChatRoomsSearchGen);
+            } else {
+                applyCachedChatRoomsToAdapter(pendingRoomListSnapshot);
+            }
+        }
+    };
     private int playerReturnPodcastUiMode = PODCAST_UI_SEARCH;
     private int soulseekReturnPodcastUiMode = PODCAST_UI_SEARCH;
     /** When >= 0, next {@link #changeScreen} to podcasts restores this sub-screen instead of search root. */
@@ -338,6 +433,8 @@ public class MainActivity extends Activity {
     private static final int SOULSEEK_UI_RESULTS = 1;
     private static final int SOULSEEK_UI_ACTION = 2;
     private static final int SOULSEEK_UI_DOWNLOAD = 3;
+    private static final int SOULSEEK_UI_BROWSE = 4;
+    private static final int SOULSEEK_UI_UNAVAILABLE = 5;
     private static final int SOULSEEK_ACTION_PLAY = 1;
     private static final int SOULSEEK_ACTION_SAVE = 2;
     private static final int SOULSEEK_ACTION_QUEUE = 3;
@@ -359,6 +456,7 @@ public class MainActivity extends Activity {
     private long soulseekLastStatusUiMs = 0;
     private Button soulseekMoreRow = null;
     private Button soulseekFocusedResultRow = null;
+    private SoulseekClient.Result soulseekActionResult;
     private long soulseekLastProgressUiMs = 0;
     private int soulseekPendingAction = 0;
     private int soulseekActiveDownloadPercent = 0;
@@ -426,11 +524,14 @@ public class MainActivity extends Activity {
         }
     };
     private SoulseekClient.Result soulseekFailedResult = null;
+    private SoulseekClient.Result soulseekPendingThankYouResult = null;
+    private boolean soulseekPendingSaveToLibrary = false;
     private SoulseekClient soulseekClient;
     private boolean soulseekCharging = false;
     private final SoulseekShareIndex soulseekShareIndex = new SoulseekShareIndex();
     private final SoulseekSharePolicy soulseekSharePolicy = new SoulseekSharePolicy();
     private volatile boolean soulseekShareScanRunning = false;
+    private volatile boolean soulseekShareRescanPending = false;
     private static final int PODCAST_DOWNLOAD_MAX_RETRIES = 3;
     private int podcastDownloadRetryCount = 0;
     private long podcastDownloadLastProgressMs = 0;
@@ -439,6 +540,60 @@ public class MainActivity extends Activity {
     private boolean soulseekAutoDownloadPending = false;
     private boolean soulseekHideHighBitrate = true;
     private boolean soulseekSharingEnabled = true;
+    private boolean soulseekReachEnabled = true;
+    private boolean soulseekIncludeInGetMusic = true;
+    private boolean deezerEnabled = true;
+    private boolean deezerIncludeInGetMusic = true;
+    private int getMusicMode = GetMusicSources.MODE_REACH_ONLY;
+    private static final int GET_MUSIC_PAGE_SIZE = 25;
+    private final List<MusicSearchEntry> getMusicEntries = new ArrayList<MusicSearchEntry>();
+    private final List<DeezerResult> getMusicDeezerResults = new ArrayList<DeezerResult>();
+    private final List<DeezerSearch.DeezerArtist> getMusicDeezerArtists = new ArrayList<DeezerSearch.DeezerArtist>();
+    private final Set<String> getMusicReachKeys = new HashSet<String>();
+    private Set<String> getMusicDeezerDedupeKeys = new HashSet<String>();
+    private boolean getMusicSearchInProgress = false;
+    private boolean getMusicDeezerDone = false;
+    private int getMusicSearchGen = 0;
+    private int getMusicResultsVisibleCount = GET_MUSIC_PAGE_SIZE;
+    private int getMusicEntryUiCount = 0;
+    private Button getMusicSearchStatusRow = null;
+    private Button getMusicMoreRow = null;
+    private MusicSearchEntry getMusicActionEntry = null;
+    /** Non-null when browsing tracks inside a Get Music album/folder container. */
+    private MusicSearchEntry getMusicBrowseContainer = null;
+    private int getMusicContainerLoadGen = 0;
+    private final List<MusicSearchEntry> getMusicTopLevelEntries = new ArrayList<MusicSearchEntry>();
+    private boolean getMusicEmbeddedInDeezer = false;
+    private int deezerActiveDownloadPercent = -1;
+    private File deezerActiveGrowingFile = null;
+    private long deezerProgressDebugLastMs = 0;
+    private int deezerProgressDebugLastPct = -1;
+    private long deezerLastProgressUiMs = 0;
+    private int deezerReturnScreen = STATE_MENU;
+    private DeezerScreen deezerScreen;
+    private String pendingSearchPickerQuery;
+    private boolean pendingSearchPickerOpenKeyboard;
+    private boolean soulseekMessagingEnabled = true;
+    private String soulseekBrowseUser = "";
+    private String soulseekBrowseFolder = "";
+    private final java.util.List<SoulseekWire.BrowseFolder> soulseekBrowseFolders =
+            new java.util.ArrayList<SoulseekWire.BrowseFolder>();
+    private final java.util.HashMap<String, Integer> soulseekPeerSharedFiles =
+            new java.util.HashMap<String, Integer>();
+    private final java.util.HashMap<String, String> soulseekPeerCountry =
+            new java.util.HashMap<String, String>();
+    private final java.util.HashSet<String> soulseekPeerWatchInFlight =
+            new java.util.HashSet<String>();
+    private String soulseekMessagePeer = "";
+    private String soulseekChatRoomName = "";
+    private boolean soulseekRoomFocusLastMessage = false;
+    private String soulseekKeyboardMessageTo = "";
+    private String soulseekReplyQuoteText = "";
+    private String soulseekRoomReplyQuoteAuthor = "";
+    private String soulseekRoomReplyQuoteText = "";
+    private int contextReachRoomMessagePosition = -1;
+    private boolean contextReachRoomWallMode = false;
+    private LinearLayout soulseekRoomModeBar;
     private int soulseekListenPort = 0;
     private int keyboardPurpose = KEYBOARD_WIFI;
     private int keyboardReturnState = STATE_WIFI;
@@ -546,6 +701,27 @@ public class MainActivity extends Activity {
         }
     };
     private static final long BACK_LONG_PRESS_MS = 600;
+    private static final long BACK_FORCE_QUIT_MS = 8000L;
+    private static final long BACK_FORCE_QUIT_HINT_MS = 6000L;
+    private boolean backForceQuitHandled = false;
+    private boolean backForceQuitHintShown = false;
+    private final Runnable backForceQuitHintRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!backKeyHeld || backForceQuitHandled || otaSystemReplaceInProgress) return;
+            backForceQuitHintShown = true;
+            Toast.makeText(MainActivity.this, getString(R.string.back_force_quit_hint), Toast.LENGTH_SHORT).show();
+        }
+    };
+    private final Runnable backForceQuitRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!backKeyHeld || backForceQuitHandled || otaSystemReplaceInProgress) return;
+            backForceQuitHandled = true;
+            clickFeedback();
+            performForceQuit();
+        }
+    };
     private final Runnable backLongPressRunnable = new Runnable() {
         @Override
         public void run() {
@@ -591,6 +767,15 @@ public class MainActivity extends Activity {
     private boolean contextMenuInQueueTier = false;
     private boolean contextMenuQuickOnly = false;
     private boolean contextMenuNavPending = false;
+    private int contextReachMessagePosition = -1;
+    private String contextReachPeerUser;
+    private String contextReachPmBody = "";
+    private java.util.ArrayDeque<SoulseekClient.Result> soulseekFolderDownloadQueue;
+    private String soulseekFolderDownloadPeer;
+    private String soulseekFolderDownloadFolderName;
+    private boolean soulseekFolderThankPending;
+    private String contextReachReactQuote;
+    private SoulseekUserDirectory.UserInfo contextReachPeerInfo;
     private boolean contextQueueEditPlaylist = false;
     private PlaylistManager.Entry playlistEditEntry = null;
     private final java.util.ArrayList<File> playlistEditTracks = new java.util.ArrayList<File>();
@@ -607,7 +792,7 @@ public class MainActivity extends Activity {
     private boolean nowPlayingHomeMenuVisible = false;
 
     private static final long NETWORK_RESCAN_INTERVAL_MS = 10_000L;
-    private static final long WIFI_CONTEXT_REFRESH_DEBOUNCE_MS = 2000L;
+    private static final long WIFI_CONTEXT_REFRESH_DEBOUNCE_MS = 500L;
     private final Handler wifiContextRefreshHandler = new Handler();
     private boolean wifiContextRefreshPendingResetFocus = false;
     private final Runnable wifiContextRefreshRunnable = new Runnable() {
@@ -632,6 +817,7 @@ public class MainActivity extends Activity {
                     WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
                     if (wm != null && wm.isWifiEnabled()) wm.startScan();
                 } catch (Exception ignored) {}
+                refreshContextWifiTierImmediate(false);
             } else if (currentScreenState == STATE_WIFI) {
                 try {
                     WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
@@ -756,13 +942,13 @@ public class MainActivity extends Activity {
 
     private SolarWebServer webServer;
     private boolean isServerRunning = false;
+    private boolean launchExtrasHandled = false;
 
     private Handler clockHandler = new Handler();
     private Runnable clockTask = new Runnable() {
         @Override
         public void run() {
             updateStatusBarTitle();
-            if (isWidgetClockOn) refreshWidgets();
             clockHandler.postDelayed(this, 1000);
         }
     };
@@ -838,19 +1024,14 @@ public class MainActivity extends Activity {
                         if (mpDur > 0 && current >= mpDur - REACH_GROWING_EXTEND_MS) {
                             maybeExtendReachGrowingPlayback(false);
                         }
-                        if (reachDownloadInProgress() && currentScreenState == STATE_PLAYER) {
-                            updateReachPlayerBufferUi(
-                                    reachGrowingTotalBytes > 0
-                                            ? (int) (reachGrowingCacheFile.length() * 100 / reachGrowingTotalBytes)
-                                            : 0,
-                                    reachGrowingCacheFile.length(), reachGrowingTotalBytes);
-                        }
+                        refreshReachGrowingBufferUi();
                     }
                 } else if (mediaPlayer != null && podcastGrowingCacheFile != null
                         && (podcastDownloadInProgress || podcastPartialPlaybackStarted)) {
                     updatePodcastGrowingTimeUi();
                 } else if (mediaPlayer != null && reachPartialPlaybackStarted && reachGrowingCacheFile != null) {
                     updateReachGrowingTimeUi();
+                    refreshReachGrowingBufferUi();
                 }
             } catch (Exception e) {
             }
@@ -881,9 +1062,11 @@ public class MainActivity extends Activity {
 
             if (Intent.ACTION_SCREEN_OFF.equals(action)) {
                 isScreenSleeping = true;
+                updateSoulseekSharePolicy();
             } else if (Intent.ACTION_SCREEN_ON.equals(action)) {
                 isScreenSleeping = false;
                 lastScreenOnTime = System.currentTimeMillis();
+                updateSoulseekSharePolicy();
             } else if (Intent.ACTION_BATTERY_CHANGED.equals(action)) {
                 updateBatteryUi(intent);
             } else if (Intent.ACTION_HEADSET_PLUG.equals(action)) {
@@ -924,6 +1107,10 @@ public class MainActivity extends Activity {
                 else if (currentScreenState == STATE_WIFI)
                     startWifiScan();
                 onWifiConnectivityChanged();
+                if (themedContextMenu != null && themedContextMenu.isShowing()
+                        && isContextTierActive("wifi")) {
+                    refreshContextWifiTierImmediate(false, true);
+                }
             } else if (WifiManager.RSSI_CHANGED_ACTION.equals(action)
                     || WifiManager.NETWORK_STATE_CHANGED_ACTION.equals(action)) {
                 NetworkInfo networkInfo = intent.getParcelableExtra(WifiManager.EXTRA_NETWORK_INFO);
@@ -1136,6 +1323,14 @@ public class MainActivity extends Activity {
 
         migrateLegacyPrefs();
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        DeezerAccount.migrateLegacyArl(this, prefs);
+        final SharedPreferences reachPrefs = prefs;
+        ReachDbExecutor.run(new Runnable() {
+            @Override
+            public void run() {
+                ReachDatabase.getInstance(MainActivity.this).ensureMigrated(reachPrefs);
+            }
+        });
         libraryBrowsePrefs = new LibraryBrowsePrefs(this);
         ensurePrivilegedPermissionsAsync();
 
@@ -1221,6 +1416,7 @@ public class MainActivity extends Activity {
 
         if (!rootFolder.exists())
             rootFolder.mkdirs();
+        playback.configureStreamPaths(rootFolder, getCacheDir());
 
         // 🚀 [추가된 부분] 앱이 켜질 때(혹은 튕기고 재시작될 때) 조용히 자동 스캔을 돌려 리스트를 복구합니다!
         if (customLibrary.isEmpty() && !isCustomScanning) {
@@ -1240,6 +1436,10 @@ public class MainActivity extends Activity {
                         @Override
                         public void run() {
                             isCustomScanning = false;
+                            if (soulseekReachEnabled && soulseekSharingEnabled) {
+                                requestSoulseekShareRescan();
+                                updateSoulseekSharePolicy();
+                            }
                             // 스캔이 끝났을 때 사용자가 이미 브라우저 화면에 진입해 있다면 화면을 새로고침해 줍니다.
                             if (currentScreenState == STATE_BROWSER) {
                                 if (currentBrowserMode == BROWSER_ROOT) {
@@ -1275,6 +1475,7 @@ public class MainActivity extends Activity {
         settingsMenuHost = findViewById(R.id.settings_menu_host);
         settingsPreviewPane = findViewById(R.id.settings_preview_pane);
         tvSettingsPreviewTitle = findViewById(R.id.tv_settings_preview_title);
+        settingsPreviewStateScroll = findViewById(R.id.settings_preview_state_scroll);
         tvSettingsPreviewState = findViewById(R.id.tv_settings_preview_state);
         ivSettingsPreviewIcon = findViewById(R.id.iv_settings_preview_icon);
         storagePieView = findViewById(R.id.storage_pie_view);
@@ -1309,9 +1510,13 @@ public class MainActivity extends Activity {
         tvMenuPreviewTitle.setSelected(true);
 
         // 🚀 1. 저장해둔 위젯 체크 상태 불러오기
-        try { isWidgetClockOn = prefs.getBoolean("widget_clock", false); } catch (Exception e) {}
-        try { isWidgetBatteryOn = prefs.getBoolean("widget_battery", false); } catch (Exception e) {}
-        try { isWidgetAlbumOn = prefs.getBoolean("widget_album", false); } catch (Exception e) {}
+        try {
+            prefs.edit()
+                    .remove("widget_clock")
+                    .remove("widget_battery")
+                    .remove("widget_album")
+                    .apply();
+        } catch (Exception ignored) {}
         try { isFullWidthMenus = prefs.getBoolean("full_width_menus", false); } catch (Exception e) {}
         try { playerAlbumBlurEnabled = prefs.getBoolean(PREF_PLAYER_ALBUM_BLUR, false); } catch (Exception e) {}
         try { migrateBackgroundPrefs(); } catch (Exception e) {}
@@ -1419,7 +1624,27 @@ public class MainActivity extends Activity {
 
         layoutSettingsMode = findViewById(R.id.layout_settings_mode);
         containerSettingsItems = findViewById(R.id.container_settings_items);
-        settingsScrollView = (View) containerSettingsItems.getParent();
+        settingsScrollView = findViewById(R.id.settings_list_scroll);
+        listReachBrowse = (ListView) findViewById(R.id.list_reach_browse);
+        configureReachListView(listReachBrowse);
+        soulseekConversationHost = findViewById(R.id.soulseek_conversation_host);
+        tvConversationTitle = findViewById(R.id.tv_conversation_title);
+        listConversationThread = (ListView) findViewById(R.id.list_conversation_thread);
+        configureReachListView(listConversationThread);
+        btnConversationBack = findViewById(R.id.btn_conversation_back);
+        if (btnConversationBack != null) {
+            configureY1ThemedButton(btnConversationBack, Y1_ROW_MENU);
+            btnConversationBack.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    onConversationBackPressed();
+                }
+            });
+        }
+        if (tvKeyboardHint != null) {
+            tvKeyboardHint.setVisibility(View.GONE);
+        }
         listThemes = new android.widget.ListView(this);
         listThemes.setDivider(null);
         listThemes.setSelector(new android.graphics.drawable.ColorDrawable(0));
@@ -1560,8 +1785,39 @@ public class MainActivity extends Activity {
         } catch (Exception e) {}
         try {
             soulseekSharingEnabled = prefs.getBoolean(SoulseekAccount.PREF_SHARING_ENABLED, true);
+            soulseekReachEnabled = prefs.getBoolean(SoulseekAccount.PREF_REACH_ENABLED, true);
+            soulseekIncludeInGetMusic = SoulseekAccount.includeInGetMusic(prefs);
+            soulseekMessagingEnabled = prefs.getBoolean(SoulseekAccount.PREF_MESSAGING_ENABLED, true);
+            deezerEnabled = DeezerAccount.isEnabled(prefs);
+            deezerIncludeInGetMusic = DeezerAccount.includeInGetMusic(prefs);
+            ConnectivityHelper.setDeezerEnabled(deezerEnabled);
+            ConnectivityHelper.setReachEnabled(soulseekReachEnabled);
+            ReachPeerConnectivity.setCallback(new ReachPeerConnectivity.Callback() {
+                @Override
+                public void onReachPeerStateChanged(ReachPeerConnectivity.State state, String reason) {
+                    applyReachPeerConnectivityState(state, reason);
+                }
+            });
         } catch (Exception e) {}
         updateStatusBarTitle();
+        if (soulseekReachEnabled) {
+            requestSoulseekShareRescan();
+            updateSoulseekSharePolicy();
+        }
+        deezerScreen = new DeezerScreen(deezerHost);
+        if (deezerEnabled && DeezerAccount.hasArl(prefs)) {
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    try {
+                        DeezerClient c = new DeezerClient(prefs);
+                        boolean ok = c.initSession();
+                        ConnectivityHelper.setDeezerLoginOk(ok);
+                    } catch (Exception ignored) {
+                        ConnectivityHelper.setDeezerLoginOk(false);
+                    }
+                }
+            }, "DeezerInit").start();
+        }
 
         btnScanBt.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -1790,175 +2046,25 @@ public class MainActivity extends Activity {
         if (isFinishing()) return;
         runOnUiThread(r);
     }
-    // 💡 [반응형 업그레이드] 위젯 개수에 따라 크기와 여백이 스스로 변하는 스마트 위젯 엔진!
     private void refreshWidgets() {
-        // 1. 현재 켜져 있는 위젯의 개수를 계산합니다.
-        int activeCount = 0;
-        if (isWidgetClockOn) activeCount++;
-        if (isWidgetBatteryOn) activeCount++;
-        if (isWidgetAlbumOn) activeCount++;
-
-        boolean anyWidgetActive = activeCount > 0;
-
-        if (anyWidgetActive) {
-            ivMenuPreview.setVisibility(View.GONE);
-            if (tvMenuPreviewTitle != null) tvMenuPreviewTitle.setVisibility(View.GONE);
-            if (tvMenuPreviewArtist != null) tvMenuPreviewArtist.setVisibility(View.GONE);
-
-            layoutWidgets.setVisibility(View.VISIBLE);
-
-            float d = getResources().getDisplayMetrics().density;
-
-            // 🚀 동적 레이아웃 변수들
-            int clockPadding = 0, batteryWidth = 0, batteryHeight = 0, batteryMargin = 0;
-            int albumSize = 0, titleSize = 0, artistSize = 0;
-            float dateScale = 1.0f, timeScale = 1.0f;
-
-            // 💡 프로필 1: 위젯이 1개일 때 (단독 표시 모드)
-            if (activeCount == 1) {
-                // 🚀 시계 크기를 이전보다 살짝 줄여서(2.6 -> 2.1) 부담스럽지 않게 다듬습니다.
-                clockPadding = 0; dateScale = 1.0f; timeScale = 2.1f;
-
-                batteryWidth = 180; batteryHeight = 40; batteryMargin = 0;
-
-                // 🚀 앨범 아트와 글자 크기를 기본 화면(XML 기본 규격)과 완전히 동일하게 맞춥니다!
-                albumSize = 140; titleSize = 18; artistSize = 14;
-            }
-            // 💡 프로필 2: 위젯이 2개일 때 (여유로운 중간 크기)
-            else if (activeCount == 2) {
-                clockPadding = (int)(20 * d); dateScale = 0.8f; timeScale = 1.6f;
-                batteryWidth = 140; batteryHeight = 25; batteryMargin = (int)(20 * d);
-                albumSize = 130; titleSize = 18; artistSize = 14;
-            }
-            // 💡 프로필 3: 위젯이 3개일 때 (서로 양보하는 아담한 크기)
-            else {
-                clockPadding = (int)(10 * d); dateScale = 0.6f; timeScale = 1.2f;
-                batteryWidth = 100; batteryHeight = 16; batteryMargin = (int)(10 * d);
-                albumSize = 85; titleSize = 14; artistSize = 12;
-            }
-
-            // --- [1. 시계 위젯 세팅] ---
-            tvWidgetClock.setVisibility(isWidgetClockOn ? View.VISIBLE : View.GONE);
-            if (isWidgetClockOn) {
-                tvWidgetClock.setPadding(0, 0, 0, clockPadding);
-                String dateStr = new java.text.SimpleDateFormat("EEE, MMM dd", Locale.US).format(new Date());
-                String timeStr = new java.text.SimpleDateFormat("HH:mm", Locale.US).format(new Date());
-                String fullStr = timeStr + "\n" + dateStr;
-
-                android.text.SpannableString spannable = new android.text.SpannableString(fullStr);
-                spannable.setSpan(new android.text.style.RelativeSizeSpan(timeScale), 0, timeStr.length(), android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-                spannable.setSpan(new android.text.style.RelativeSizeSpan(dateScale), timeStr.length() + 1, fullStr.length(), android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-
-                tvWidgetClock.setText(spannable);
-                tvWidgetClock.setTextColor(ThemeManager.getTextColorPrimary());
-                tvWidgetClock.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
-            }
-
-            // --- [2. 배터리 위젯 세팅] ---
-            widgetBatteryView.setVisibility(isWidgetBatteryOn ? View.VISIBLE : View.GONE);
-            if (isWidgetBatteryOn) {
-                LinearLayout.LayoutParams blp = (LinearLayout.LayoutParams) widgetBatteryView.getLayoutParams();
-                blp.width = (int)(batteryWidth * d);
-                blp.height = (int)(batteryHeight * d);
-                blp.bottomMargin = batteryMargin;
-                widgetBatteryView.setLayoutParams(blp);
-                widgetBatteryView.setColor(ThemeManager.getTextColorPrimary());
-            }
-
-            // --- [3. 앨범 위젯 세팅] ---
-            ivWidgetAlbum.setVisibility(isWidgetAlbumOn ? View.VISIBLE : View.GONE);
-            tvWidgetAlbumTitle.setVisibility(isWidgetAlbumOn ? View.VISIBLE : View.GONE);
-            tvWidgetAlbumArtist.setVisibility(isWidgetAlbumOn ? View.VISIBLE : View.GONE);
-
-            if (isWidgetAlbumOn) {
-                LinearLayout.LayoutParams alp = (LinearLayout.LayoutParams) ivWidgetAlbum.getLayoutParams();
-                alp.width = (int)(albumSize * d);
-                alp.height = (int)(albumSize * d);
-                ivWidgetAlbum.setLayoutParams(alp);
-
-                tvWidgetAlbumTitle.setTextSize(titleSize);
-                tvWidgetAlbumTitle.setTextColor(ThemeManager.getTextColorPrimary());
-                tvWidgetAlbumTitle.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
-                if (tvPlayerTitle != null) tvWidgetAlbumTitle.setText(tvPlayerTitle.getText());
-
-                tvWidgetAlbumArtist.setTextSize(artistSize);
-                tvWidgetAlbumArtist.setTextColor(ThemeManager.getTextColorSecondary());
-                tvWidgetAlbumArtist.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.NORMAL);
-                if (tvPlayerArtist != null) tvWidgetAlbumArtist.setText(tvPlayerArtist.getText());
-
-                if (lastAlbumArtBytes != null) {
-                    try {
-                        BitmapFactory.Options opts = new BitmapFactory.Options();
-                        opts.inSampleSize = 2;
-                        Bitmap bmp = BitmapFactory.decodeByteArray(lastAlbumArtBytes, 0, lastAlbumArtBytes.length, opts);
-                        ivWidgetAlbum.setImageBitmap(bmp);
-                    } catch (Exception e) {}
-                } else {
-                    ivWidgetAlbum.setImageBitmap(ThemeManager.getCustomIcon("icon_default_album.png", this, R.drawable.default_album));
-                }
-            }
-        } else {
-            layoutWidgets.setVisibility(View.GONE);
-            updateHomeMenuPreviewVisibility();
-            if (!isFullWidthMenus) {
-                View focused = getCurrentFocus();
-                if (focused != null && currentScreenState == STATE_MENU) {
-                    if (isNowPlayingHomeFocused()) refreshNowPlayingPreview();
-                    else updateHomeMenuPreview(focusedHomeMenuIndex);
-                }
-            }
-        }
+        if (layoutWidgets != null) layoutWidgets.setVisibility(View.GONE);
+        updateHomeMenuPreviewVisibility();
         if (currentScreenState == STATE_MENU) {
             updateScreenBackground(STATE_MENU);
         }
     }
 
     private boolean anyHomeWidgetActive() {
-        return isWidgetClockOn || isWidgetBatteryOn || isWidgetAlbumOn;
+        return false;
     }
+
     private void hideFastScrollLetter() {
         fastScrollHandler.removeCallbacks(hideFastScrollTask);
         if (tvFastScrollLetter != null) tvFastScrollLetter.setVisibility(View.GONE);
     }
 
-    // 💡 [추가] 문자열에서 첫 글자를 뽑아내어 화면에 띄워주는 함수
     private void showFastScrollLetter(String rawText) {
-        // 브라우저 모드(리스트 화면)가 아니면 띄우지 않습니다.
-        if (tvFastScrollLetter == null || (currentScreenState != STATE_BROWSER && currentScreenState != STATE_APPS && currentScreenState != STATE_MORE)) return;
-
-        // 버튼 텍스트 앞에 붙어있는 꾸밈용 이모지들을 싹 지우고 순수 제목만 남깁니다.
-        String clean = rawText.replace("📁 ", "").replace("👤 ", "")
-                .replace("💿 ", "").replace("🎵 ", "")
-                .replace("📦 [INSTALL] ", "").trim();
-
-        if (clean.isEmpty()) return;
-
-        // 첫 글자 1개만 추출 (무조건 대문자로 변환)
-        String firstChar = clean.substring(0, 1).toUpperCase();
-
-        // 🚀 [그래픽 과부하 방지] 이미 화면에 떠 있는 알파벳과 '똑같은' 알파벳이라면?
-        // 무거운 박스 그리기 작업을 생략하고 글자가 사라지는 타이머만 연장해 줍니다!
-        if (tvFastScrollLetter.getVisibility() == View.VISIBLE && tvFastScrollLetter.getText().toString().equals(firstChar)) {
-            fastScrollHandler.removeCallbacks(hideFastScrollTask);
-            fastScrollHandler.postDelayed(hideFastScrollTask, 800);
-            return; // 여기서 함수를 멈춰버립니다.
-        }
-
-        tvFastScrollLetter.setText(firstChar);
-
-        // 🚀 현재 적용된 테마의 강조 색상으로 박스를 예쁘게 색칠합니다!
-        tvFastScrollLetter.setTextColor(ThemeManager.getTextColorPrimary());
-        tvFastScrollLetter.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
-        android.graphics.drawable.GradientDrawable letterBg = new android.graphics.drawable.GradientDrawable();
-        letterBg.setColor(ThemeManager.getListButtonFocusedBg() | 0xDD000000); // 살짝 반투명하게 덮기
-        letterBg.setCornerRadius(15 * getResources().getDisplayMetrics().density); // 둥근 모서리
-        tvFastScrollLetter.setBackground(letterBg);
-
-        tvFastScrollLetter.setVisibility(View.VISIBLE);
-
-        // 0.8초 동안 휠 조작이 없으면 글자가 자동으로 스르륵 사라지도록 타이머 리셋
-        fastScrollHandler.removeCallbacks(hideFastScrollTask);
-        fastScrollHandler.postDelayed(hideFastScrollTask, 800);
+        hideFastScrollLetter();
     }
 
     private void refreshBatteryStatus() {
@@ -2049,6 +2155,120 @@ public class MainActivity extends Activity {
         tv.setEllipsize(TextUtils.TruncateAt.MARQUEE);
         tv.setMarqueeRepeatLimit(-1);
         tv.setHorizontallyScrolling(true);
+    }
+
+    private void stopSettingsPreviewVerticalMarquee() {
+        if (settingsPreviewScrollHandler != null && settingsPreviewScrollRunnable != null) {
+            settingsPreviewScrollHandler.removeCallbacks(settingsPreviewScrollRunnable);
+            settingsPreviewScrollRunnable = null;
+        }
+        if (settingsPreviewStateScroll != null) {
+            settingsPreviewStateScroll.scrollTo(0, 0);
+        }
+    }
+
+    private void startSettingsPreviewVerticalMarquee(final ScrollView scroll) {
+        stopSettingsPreviewVerticalMarquee();
+        if (scroll == null || tvSettingsPreviewState == null || isFullWidthMenus) return;
+        scroll.post(new Runnable() {
+            @Override
+            public void run() {
+                final int contentH = tvSettingsPreviewState.getHeight();
+                final int viewH = scroll.getHeight();
+                if (contentH <= viewH + 4) return;
+                if (settingsPreviewScrollHandler == null) {
+                    settingsPreviewScrollHandler = new Handler();
+                }
+                settingsPreviewScrollRunnable = new Runnable() {
+                    private int pauseTicks;
+
+                    @Override
+                    public void run() {
+                        if (scroll != settingsPreviewStateScroll || settingsPreviewScrollRunnable != this) {
+                            return;
+                        }
+                        int maxScroll = Math.max(0, contentH - viewH);
+                        int y = scroll.getScrollY();
+                        if (pauseTicks > 0) {
+                            pauseTicks--;
+                        } else if (y >= maxScroll) {
+                            scroll.scrollTo(0, 0);
+                            pauseTicks = 40;
+                        } else {
+                            scroll.scrollBy(0, 1);
+                        }
+                        settingsPreviewScrollHandler.postDelayed(this, 50);
+                    }
+                };
+                settingsPreviewScrollHandler.postDelayed(settingsPreviewScrollRunnable, 1500);
+            }
+        });
+    }
+
+    private void applySettingsPreviewStateText(CharSequence text, boolean verticalMarquee) {
+        stopSettingsPreviewVerticalMarquee();
+        if (settingsPreviewStateScroll != null) {
+            settingsPreviewStateScroll.setVisibility(text != null && text.length() > 0
+                    ? View.VISIBLE : View.GONE);
+        }
+        if (tvSettingsPreviewState == null) return;
+        tvSettingsPreviewState.setSingleLine(false);
+        tvSettingsPreviewState.setEllipsize(null);
+        tvSettingsPreviewState.setHorizontallyScrolling(false);
+        tvSettingsPreviewState.setGravity(verticalMarquee
+                ? (android.view.Gravity.CENTER_HORIZONTAL | android.view.Gravity.TOP)
+                : android.view.Gravity.CENTER);
+        tvSettingsPreviewState.setText(text != null ? text : "");
+        tvSettingsPreviewState.setVisibility(text != null && text.length() > 0
+                ? View.VISIBLE : View.GONE);
+        if (verticalMarquee && text != null && text.length() > 0) {
+            startSettingsPreviewVerticalMarquee(settingsPreviewStateScroll);
+        }
+    }
+
+    private void applySettingsPreviewCappedText(CharSequence text) {
+        stopSettingsPreviewVerticalMarquee();
+        if (settingsPreviewStateScroll == null || tvSettingsPreviewState == null) return;
+        boolean show = text != null && text.length() > 0;
+        settingsPreviewStateScroll.setVisibility(show ? View.VISIBLE : View.GONE);
+        tvSettingsPreviewState.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (!show) return;
+        int maxH = VerticalTextMarqueeHelper.defaultMaxHeightPx(this);
+        int cappedH = VerticalTextMarqueeHelper.computePanelHeight(this, text, maxH,
+                settingsPreviewStateScroll.getWidth() > 0
+                        ? settingsPreviewStateScroll.getWidth()
+                        : screenWidthPx);
+        ViewGroup.LayoutParams scrollLp = settingsPreviewStateScroll.getLayoutParams();
+        if (scrollLp != null) {
+            scrollLp.height = cappedH;
+            settingsPreviewStateScroll.setLayoutParams(scrollLp);
+        }
+        tvSettingsPreviewState.setSingleLine(false);
+        tvSettingsPreviewState.setEllipsize(null);
+        tvSettingsPreviewState.setHorizontallyScrolling(false);
+        tvSettingsPreviewState.setGravity(android.view.Gravity.START | android.view.Gravity.TOP);
+        tvSettingsPreviewState.setText(text);
+        VerticalTextMarqueeHelper.stop(settingsPreviewStateScroll);
+        settingsPreviewStateScroll.post(new Runnable() {
+            @Override
+            public void run() {
+                VerticalTextMarqueeHelper.start(settingsPreviewStateScroll, tvSettingsPreviewState);
+            }
+        });
+    }
+
+    private String formatProfileNoteAndBio(String username, String bio) {
+        String note = SoulseekPeerNotes.getNoteSync(this, username);
+        StringBuilder sb = new StringBuilder();
+        if (note != null && !note.trim().isEmpty()) {
+            sb.append(getString(R.string.soulseek_user_note_label)).append("\n");
+            sb.append(note.trim());
+        }
+        String bioText = bio != null && !bio.trim().isEmpty()
+                ? bio.trim() : getString(R.string.soulseek_profile_no_bio);
+        if (sb.length() > 0) sb.append("\n\n");
+        sb.append(bioText);
+        return sb.toString();
     }
 
     private int y1RowKindForScreen() {
@@ -2924,8 +3144,7 @@ public class MainActivity extends Activity {
         ThemeManager.applyThemedTextStyle(tvSettingsPreviewTitle, ThemeManager.getTextColorPrimary());
         String author = ThemeBrowser.installedAuthor(theme);
         if (tvSettingsPreviewState != null) {
-            tvSettingsPreviewState.setVisibility(View.VISIBLE);
-            tvSettingsPreviewState.setText(author.isEmpty() ? " " : author);
+            applySettingsPreviewStateText(author.isEmpty() ? " " : author, false);
             ThemeManager.applyThemedTextStyle(tvSettingsPreviewState, ThemeManager.getTextColorSecondary());
         }
         if (storagePieView != null) storagePieView.setVisibility(View.GONE);
@@ -3077,8 +3296,7 @@ public class MainActivity extends Activity {
             ThemeManager.applyThemedTextStyle(tvSettingsPreviewTitle, ThemeManager.getTextColorPrimary());
         }
         if (tvSettingsPreviewState != null) {
-            tvSettingsPreviewState.setVisibility(View.VISIBLE);
-            tvSettingsPreviewState.setText(getString(R.string.settings_focus_theme));
+            applySettingsPreviewStateText(getString(R.string.settings_focus_theme), false);
             ThemeManager.applyThemedTextStyle(tvSettingsPreviewState, ThemeManager.getTextColorSecondary());
         }
     }
@@ -3109,8 +3327,33 @@ public class MainActivity extends Activity {
         if (!SettingsScreens.isSoulseek(settingsSubScreenKey)) {
             return false;
         }
+        if (SettingsScreens.SOULSEEK_MESSAGES_THREAD.equals(settingsSubScreenKey)) {
+            buildSoulseekMessagesUI();
+            return true;
+        }
+        if (SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD.equals(settingsSubScreenKey)
+                || SettingsScreens.SOULSEEK_CHAT_ROOM_WALL.equals(settingsSubScreenKey)) {
+            buildSoulseekChatRoomsUI();
+            return true;
+        }
+        if (SettingsScreens.SOULSEEK_MESSAGES.equals(settingsSubScreenKey)
+                || SettingsScreens.SOULSEEK_CHAT_ROOMS.equals(settingsSubScreenKey)
+                || SettingsScreens.SOULSEEK_INTERESTS.equals(settingsSubScreenKey)) {
+            buildSoulseekSettingsUI();
+            return true;
+        }
+        if (SettingsScreens.SOULSEEK_USER_PROFILE.equals(settingsSubScreenKey)) {
+            if (soulseekProfileOnBack != null) soulseekProfileOnBack.run();
+            else buildSoulseekSettingsUI();
+            return true;
+        }
         if (SettingsScreens.SOULSEEK_CONNECTION.equals(settingsSubScreenKey)
                 || SettingsScreens.SOULSEEK_ABOUT.equals(settingsSubScreenKey)) {
+            buildSoulseekSettingsUI();
+            return true;
+        }
+        if (SettingsScreens.SOULSEEK_FIND_USER.equals(settingsSubScreenKey)
+                || SettingsScreens.SOULSEEK_FIND_REACH.equals(settingsSubScreenKey)) {
             buildSoulseekSettingsUI();
             return true;
         }
@@ -3215,6 +3458,24 @@ public class MainActivity extends Activity {
             buildSoulseekConnectionInfoUI();
         } else if (SettingsScreens.SOULSEEK_ABOUT.equals(subKey)) {
             buildSoulseekAboutInfoUI();
+        } else if (SettingsScreens.SOULSEEK_FIND_USER.equals(subKey)) {
+            buildSoulseekFindUserUI();
+        } else if (SettingsScreens.SOULSEEK_FIND_REACH.equals(subKey)) {
+            buildSoulseekFindReachUsersUI();
+        } else if (SettingsScreens.SOULSEEK_MESSAGES.equals(subKey)) {
+            buildSoulseekMessagesUI();
+        } else if (SettingsScreens.SOULSEEK_MESSAGES_THREAD.equals(subKey)) {
+            buildSoulseekConversationUI(soulseekMessagePeer);
+        } else if (SettingsScreens.SOULSEEK_CHAT_ROOMS.equals(subKey)) {
+            buildSoulseekChatRoomsUI();
+        } else if (SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD.equals(subKey)) {
+            buildSoulseekChatRoomUI(soulseekChatRoomName);
+        } else if (SettingsScreens.SOULSEEK_CHAT_ROOM_WALL.equals(subKey)) {
+            buildSoulseekRoomWallUI(soulseekChatRoomName);
+        } else if (SettingsScreens.SOULSEEK_INTERESTS.equals(subKey)) {
+            buildSoulseekInterestsUI();
+        } else if (SettingsScreens.SOULSEEK_USER_PROFILE.equals(subKey)) {
+            if (settingsSubScreenExtra != null) buildSoulseekUserProfileUI(settingsSubScreenExtra);
         } else {
             buildSoulseekSettingsUI();
         }
@@ -3228,6 +3489,18 @@ public class MainActivity extends Activity {
                 || SettingsScreens.THEME_VARIANT.equals(settingsSubScreenKey)) {
             String extra = settingsSubScreenExtra != null ? settingsSubScreenExtra : "";
             return getString(res, extra);
+        }
+        if (SettingsScreens.SOULSEEK_MESSAGES_THREAD.equals(settingsSubScreenKey)
+                && settingsSubScreenExtra != null && !settingsSubScreenExtra.isEmpty()) {
+            return settingsSubScreenExtra;
+        }
+        if (SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD.equals(settingsSubScreenKey)
+                && settingsSubScreenExtra != null && !settingsSubScreenExtra.isEmpty()) {
+            return settingsSubScreenExtra;
+        }
+        if (SettingsScreens.SOULSEEK_USER_PROFILE.equals(settingsSubScreenKey)
+                && settingsSubScreenExtra != null && !settingsSubScreenExtra.isEmpty()) {
+            return settingsSubScreenExtra;
         }
         return getString(res);
     }
@@ -3257,19 +3530,187 @@ public class MainActivity extends Activity {
     }
 
     private void addSettingsInfoParagraph(String text) {
+        TextView tv = createReachMarqueeInfoText(text, false);
+        containerSettingsItems.addView(tv);
+    }
+
+    private TextView createReachMarqueeInfoText(CharSequence text, boolean titleStyle) {
         TextView tv = new TextView(this);
         tv.setFocusable(false);
         tv.setText(text);
-        ThemeManager.applyThemedTextStyle(tv, ThemeManager.getTextColorSecondary());
+        ThemeManager.applyThemedTextStyle(tv, titleStyle
+                ? ThemeManager.getTextColorPrimary()
+                : ThemeManager.getTextColorSecondary());
         tv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
-                getResources().getDimension(R.dimen.y1_menu_text_size) * 0.85f);
+                getResources().getDimension(R.dimen.y1_menu_text_size)
+                        * (titleStyle ? 1.0f : 0.85f));
+        if (titleStyle) {
+            tv.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
+        }
+        tv.setSingleLine(false);
+        tv.setMaxLines(titleStyle ? 2 : 6);
+        enableMarquee(tv);
+        tv.setSelected(true);
         int pad = (int) (12 * getResources().getDisplayMetrics().density);
         tv.setPadding(pad, pad, pad, pad);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.setMargins(0, 4, 0, 8);
         tv.setLayoutParams(lp);
-        containerSettingsItems.addView(tv);
+        return tv;
+    }
+
+    private void addReachUnavailableSettingsBanner() {
+        containerSettingsItems.addView(createReachMarqueeInfoText(
+                reachUnavailableDetailText(ReachPeerConnectivity.reason()), false));
+        containerSettingsItems.addView(createReachMarqueeInfoText(
+                getString(R.string.reach_unavailable_server_ok), false));
+    }
+
+    private String reachUnavailableDetailText(String reason) {
+        if (ReachPeerConnectivity.REASON_MOBILE.equals(reason)) {
+            return getString(R.string.reach_unavailable_mobile);
+        }
+        if (ReachPeerConnectivity.REASON_NO_GATEWAY.equals(reason)) {
+            return getString(R.string.reach_unavailable_gateway);
+        }
+        if (ReachPeerConnectivity.REASON_PORT_LOST.equals(reason)) {
+            return getString(R.string.reach_unavailable_port_lost);
+        }
+        if (ReachPeerConnectivity.REASON_NAT_FAILED.equals(reason)) {
+            return getString(R.string.reach_unavailable_nat);
+        }
+        return getString(R.string.reach_unavailable_body);
+    }
+
+    private void applyReachPeerConnectivityState(ReachPeerConnectivity.State state, String reason) {
+        boolean peerOk = state != ReachPeerConnectivity.State.UNAVAILABLE;
+        ConnectivityHelper.setReachPeerOk(peerOk);
+        updateSoulseekSharePolicy();
+        buildHomeMenu();
+        if (currentScreenState == STATE_BROWSER && currentBrowserMode == BROWSER_ROOT) {
+            buildFileBrowserUI();
+        }
+        if (currentScreenState == STATE_SOULSEEK && !peerOk) {
+            boolean busy = soulseekActiveDownload != null
+                    || (soulseekClient != null && soulseekClient.isTransferActive());
+            if (busy) {
+                Toast.makeText(this, getString(R.string.reach_peer_lost_toast), Toast.LENGTH_LONG).show();
+            } else if (isSoulseekUiActive()) {
+                buildReachUnavailableUI();
+            }
+        }
+        if (currentScreenState == STATE_SETTINGS && SettingsScreens.isSoulseek(settingsSubScreenKey)) {
+            if (SettingsScreens.SOULSEEK.equals(settingsSubScreenKey)) {
+                buildSoulseekSettingsUI();
+            } else {
+                refreshSettingsPreview(settingsSubScreenKey);
+            }
+        }
+    }
+
+    private void buildReachUnavailableUI() {
+        soulseekUiMode = SOULSEEK_UI_UNAVAILABLE;
+        prepareSoulseekBrowserChrome();
+        browserStatusTitle = getString(R.string.reach_unavailable_title);
+        updateStatusBarTitle();
+        containerBrowserItems.removeAllViews();
+        if (tvBrowserPath != null) {
+            tvBrowserPath.setText(getString(R.string.reach_unavailable_title));
+        }
+        Button back = createListButton(soulseekReturnScreen == STATE_MENU
+                ? getString(R.string.soulseek_back_home) : getString(R.string.soulseek_back_settings));
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                returnFromSoulseek();
+            }
+        });
+        containerBrowserItems.addView(back);
+        containerBrowserItems.addView(createReachMarqueeInfoText(
+                getString(R.string.reach_unavailable_title), true));
+        containerBrowserItems.addView(createReachMarqueeInfoText(
+                reachUnavailableDetailText(ReachPeerConnectivity.reason()), false));
+        containerBrowserItems.addView(createReachMarqueeInfoText(
+                getString(R.string.reach_unavailable_body), false));
+        containerBrowserItems.addView(createReachMarqueeInfoText(
+                getString(R.string.reach_unavailable_server_ok), false));
+        if (soulseekMessagingEnabled) {
+            Button messages = createListButton(getString(R.string.soulseek_messages));
+            messages.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    currentScreenState = STATE_SETTINGS;
+                    layoutBrowserMode.setVisibility(View.GONE);
+                    layoutSettingsMode.setVisibility(View.VISIBLE);
+                    buildSoulseekMessagesUI();
+                }
+            });
+            containerBrowserItems.addView(messages);
+        }
+        Button connection = createListButton(getString(R.string.soulseek_menu_connection));
+        connection.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                currentScreenState = STATE_SETTINGS;
+                layoutBrowserMode.setVisibility(View.GONE);
+                layoutSettingsMode.setVisibility(View.VISIBLE);
+                buildSoulseekConnectionInfoUI();
+            }
+        });
+        containerBrowserItems.addView(connection);
+        back.requestFocus();
+    }
+
+    private boolean requireReachPeerConnectivity() {
+        if (ConnectivityHelper.isReachPeerOk()
+                || ReachPeerConnectivity.state() != ReachPeerConnectivity.State.UNAVAILABLE) {
+            return true;
+        }
+        Toast.makeText(this, reachUnavailableDetailText(ReachPeerConnectivity.reason()),
+                Toast.LENGTH_LONG).show();
+        if (isSoulseekUiActive()) {
+            buildReachUnavailableUI();
+        }
+        return false;
+    }
+
+    private void sendSoulseekThankYou(final SoulseekClient.Result r) {
+        if (r == null) return;
+        sendSoulseekThankYou(r.username, r.title(), false);
+    }
+
+    private void sendSoulseekThankYou(final String peer, final String title, final boolean silent) {
+        if (peer == null || peer.trim().isEmpty()) return;
+        final String to = peer.trim();
+        final String trackTitle = title != null ? title : "";
+        final String body = getString(R.string.soulseek_thanks_message,
+                trackTitle, to, DeviceFeatures.deviceModelLabel());
+        ensureSoulseekClient().sendPrivateMessage(to, body, new SoulseekClient.MessageSendCallback() {
+            @Override
+            public void onSent() {
+                SoulseekMessaging.append(MainActivity.this, prefs, new SoulseekMessaging.Message(
+                        0, (int) (System.currentTimeMillis() / 1000L), to, body, false));
+                if (!silent) {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            Toast.makeText(MainActivity.this,
+                                    getString(R.string.soulseek_thanks_sent, to),
+                                    Toast.LENGTH_SHORT).show();
+                        }
+                    });
+                }
+            }
+
+            @Override
+            public void onError(String reason) {
+                // fail silently for silent mode; no toast on error for non-silent either
+            }
+        });
     }
 
     private int soulseekListenPortOrZero() {
@@ -3364,14 +3805,14 @@ public class MainActivity extends Activity {
 
     private void clearThemeGalleryPreview() {
         themeGalleryPreviewGen++;
+        stopSettingsPreviewVerticalMarquee();
         if (storagePieView != null) storagePieView.setVisibility(View.GONE);
         if (tvSettingsPreviewTitle != null) {
             tvSettingsPreviewTitle.setText("");
             tvSettingsPreviewTitle.setVisibility(View.GONE);
         }
         if (tvSettingsPreviewState != null) {
-            tvSettingsPreviewState.setText("");
-            tvSettingsPreviewState.setVisibility(View.GONE);
+            applySettingsPreviewStateText("", false);
         }
         if (ivSettingsPreviewIcon != null) {
             ivSettingsPreviewIcon.setImageDrawable(null);
@@ -3391,8 +3832,7 @@ public class MainActivity extends Activity {
         enableMarquee(tvSettingsPreviewTitle);
         ThemeManager.applyThemedTextStyle(tvSettingsPreviewTitle, ThemeManager.getTextColorPrimary());
         if (tvSettingsPreviewState != null) {
-            tvSettingsPreviewState.setVisibility(View.VISIBLE);
-            tvSettingsPreviewState.setText(author);
+            applySettingsPreviewStateText(author, false);
             ThemeManager.applyThemedTextStyle(tvSettingsPreviewState, ThemeManager.getTextColorSecondary());
         }
         if (storagePieView != null) storagePieView.setVisibility(View.GONE);
@@ -3799,22 +4239,34 @@ public class MainActivity extends Activity {
 
     private void toggleWebServer() {
         if (isServerRunning) {
-            if (webServer != null)
-                webServer.stopServer();
-            isServerRunning = false;
+            stopWebServer();
         } else {
-            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
-            if (wm == null || !ConnectivityHelper.hasLocalNetwork(this)) {
-                Toast.makeText(this, getString(R.string.toast_network_required), Toast.LENGTH_SHORT).show();
-                return;
-            }
-            webServer = new SolarWebServer(getApplicationContext(), rootFolder);
-            webServer.start();
-            isServerRunning = true;
+            startWebServerIfNeeded();
         }
     }
 
+    private void startWebServerIfNeeded() {
+        if (isServerRunning) return;
+        if (!ConnectivityHelper.hasLocalNetwork(this)) {
+            Toast.makeText(this, getString(R.string.toast_network_required), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        webServer = new SolarWebServer(getApplicationContext(), rootFolder);
+        webServer.start();
+        isServerRunning = true;
+        android.util.Log.i("DeezerDbg", "webserver started ip=" + webServer.getLocalIpAddress());
+    }
+
+    private void stopWebServer() {
+        if (webServer != null) webServer.stopServer();
+        isServerRunning = false;
+    }
+
     private void updateWebServerUI() {
+        if (currentScreenState == STATE_DEEZER_SETUP) {
+            updateDeezerSetupUI();
+            return;
+        }
         if (isServerRunning) {
             tvServerStatus.setText(getString(R.string.webserver_running));
             ThemeManager.applyThemedTextStyle(tvServerStatus, ThemeManager.getItemTextColorNormal());
@@ -3831,6 +4283,59 @@ public class MainActivity extends Activity {
         if (tvWebserverHint != null) {
             ThemeManager.applyThemedTextStyle(tvWebserverHint, ThemeManager.getHintTextColor());
         }
+    }
+
+    private void updateDeezerSetupUI() {
+        if (btnServerToggle != null) btnServerToggle.setVisibility(View.GONE);
+        if (isServerRunning) {
+            tvServerStatus.setText(getString(R.string.deezer_setup_running));
+            ThemeManager.applyThemedTextStyle(tvServerStatus, ThemeManager.getItemTextColorNormal());
+            String ip = webServer != null ? webServer.getLocalIpAddress() : ConnectivityHelper.localIpv4(this);
+            if (ip == null) ip = "---";
+            tvServerIp.setText(getString(R.string.deezer_setup_ip_format, ip));
+            ThemeManager.applyThemedTextStyle(tvServerIp, ThemeManager.getItemTextColorNormal());
+        } else {
+            tvServerStatus.setText(getString(R.string.deezer_setup_stopped));
+            styleSecondaryLabel(tvServerStatus);
+            tvServerIp.setText(getString(R.string.deezer_setup_ip_format, "---"));
+            styleSecondaryLabel(tvServerIp);
+        }
+        if (tvWebserverHint != null) {
+            tvWebserverHint.setText(getString(R.string.deezer_setup_hint));
+            ThemeManager.applyThemedTextStyle(tvWebserverHint, ThemeManager.getHintTextColor());
+        }
+    }
+
+    private void startWebServerForDeezerSetup() {
+        webServerStartedForDeezerSetup = false;
+        if (isServerRunning) return;
+        startWebServerIfNeeded();
+        webServerStartedForDeezerSetup = isServerRunning;
+    }
+
+    private void openDeezerSetupScreen() {
+        openDeezerSetupScreen(false);
+    }
+
+    private void openDeezerSetupScreen(boolean preserveReturn) {
+        if (!ConnectivityHelper.hasLocalNetwork(this)) {
+            Toast.makeText(this, getString(R.string.toast_requires_wifi), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (preserveReturn) {
+            screenBackReturnTo = currentScreenState;
+            changeScreen(STATE_DEEZER_SETUP);
+        } else {
+            openScreenWithReturn(STATE_DEEZER_SETUP);
+        }
+    }
+
+    private void returnFromDeezerSetup() {
+        if (webServerStartedForDeezerSetup && isServerRunning) {
+            stopWebServer();
+        }
+        webServerStartedForDeezerSetup = false;
+        returnFromAuxScreen();
     }
 
     private void updateMainMenuBackground() {
@@ -3943,7 +4448,7 @@ public class MainActivity extends Activity {
                 }
             }
 
-            if (isFullWidthMenus) {
+            if (isFullWidthMenus || settingsBrowseFullWidth) {
                 mask = null;
             }
 
@@ -4044,10 +4549,346 @@ public class MainActivity extends Activity {
     private int y1ActiveRowWidthPx() {
         if (isFullWidthMenus && screenWidthPx > 0) return screenWidthPx;
         if (currentScreenState == STATE_SETTINGS) {
+            if (settingsBrowseFullWidth && screenWidthPx > 0) {
+                return screenWidthPx;
+            }
+            if (soulseekConversationHost != null
+                    && soulseekConversationHost.getVisibility() == View.VISIBLE
+                    && screenWidthPx > 0) {
+                return screenWidthPx;
+            }
             return settingsMenuWidthPx > 0 ? settingsMenuWidthPx : y1RowWidthPx;
         }
         if (currentScreenState == STATE_MENU) return y1RowWidthPx;
         return listRowWidthPx;
+    }
+
+    private void configureReachListView(ListView list) {
+        if (list == null) return;
+        list.setDivider(null);
+        list.setSelector(new android.graphics.drawable.ColorDrawable(0));
+        list.setItemsCanFocus(true);
+        list.setChoiceMode(ListView.CHOICE_MODE_SINGLE);
+        list.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
+        list.setScrollingCacheEnabled(false);
+        list.setSmoothScrollbarEnabled(true);
+    }
+
+    private void focusFirstReachBrowseDataRow() {
+        if (listReachBrowse == null) return;
+        android.widget.ListAdapter ad = listReachBrowse.getAdapter();
+        if (ad instanceof ReachInterestsAdapter) {
+            ReachInterestsAdapter ia = (ReachInterestsAdapter) ad;
+            int first = ia.firstSelectablePosition();
+            if (first >= 0) {
+                int pos = reachBrowseHeaderOffset() + first;
+                FocusScrollHelper.focusListPosition(listReachBrowse, pos);
+                return;
+            }
+        }
+        if (ad == null || ad.getCount() == 0) {
+            if (!reachBrowseHeaderViews.isEmpty()) {
+                int headerIdx = 0;
+                if (SettingsScreens.SOULSEEK_CHAT_ROOMS.equals(settingsSubScreenKey)
+                        && reachBrowseHeaderViews.size() >= 2) {
+                    headerIdx = 1;
+                }
+                focusReachBrowseHeaderIndex(headerIdx);
+                return;
+            }
+            listReachBrowse.requestFocus();
+            return;
+        }
+        int pos = reachBrowseHeaderOffset();
+        FocusScrollHelper.focusListPosition(listReachBrowse, pos);
+    }
+
+    private int indexOfReachBrowseHeader(View v) {
+        if (v == null) return -1;
+        for (int i = 0; i < reachBrowseHeaderViews.size(); i++) {
+            View h = reachBrowseHeaderViews.get(i);
+            if (h == v || isViewDescendantOf(v, h)) return i;
+        }
+        return -1;
+    }
+
+    private boolean focusReachBrowseHeaderIndex(int idx) {
+        if (idx < 0 || idx >= reachBrowseHeaderViews.size()) return false;
+        View h = reachBrowseHeaderViews.get(idx);
+        if (h == null || !h.isFocusable()) return false;
+        boolean ok = h.requestFocus();
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("headerIdx", idx);
+            d.put("headerCount", reachBrowseHeaderViews.size());
+            d.put("focused", ok);
+            d.put("screen", settingsSubScreenKey);
+            DebugAgentLog.log(this, "MainActivity.focusReachBrowseHeaderIndex",
+                    "header focus", "H-CHAT", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        return ok;
+    }
+
+    private int conversationRowWidthPx() {
+        return messagingRowWidthPx();
+    }
+
+    private int messagingRowWidthPx() {
+        if (isFullWidthMenus || settingsBrowseFullWidth) {
+            return screenWidthPx > 0 ? screenWidthPx : y1ActiveRowWidthPx();
+        }
+        return settingsMenuWidthPx > 0 ? settingsMenuWidthPx : y1RowWidthPx;
+    }
+
+    private static boolean isReachBrowseScreen(String key) {
+        return SettingsScreens.SOULSEEK_CHAT_ROOMS.equals(key)
+                || SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD.equals(key)
+                || SettingsScreens.SOULSEEK_MESSAGES.equals(key)
+                || SettingsScreens.SOULSEEK_MESSAGES_THREAD.equals(key)
+                || SettingsScreens.SOULSEEK_FIND_REACH.equals(key)
+                || SettingsScreens.SOULSEEK_FIND_USER.equals(key)
+                || SettingsScreens.SOULSEEK_INTERESTS.equals(key)
+                || SettingsScreens.SOULSEEK_USER_PROFILE.equals(key);
+    }
+
+    private void applyReachBrowseLayoutMode() {
+        settingsBrowseFullWidth = isReachBrowseScreen(settingsSubScreenKey);
+        applyFullWidthMenusLayout();
+    }
+
+    /** @deprecated use applyReachBrowseLayoutMode */
+    private void applyMessagingLayoutMode() {
+        applyReachBrowseLayoutMode();
+    }
+
+    private void showReachBrowseList(boolean show) {
+        if (settingsScrollView != null) {
+            settingsScrollView.setVisibility(show ? View.GONE : View.VISIBLE);
+        }
+        if (listReachBrowse != null) {
+            listReachBrowse.setVisibility(show ? View.VISIBLE : View.GONE);
+            if (show) {
+                listReachBrowse.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
+            }
+        }
+        if (soulseekConversationHost != null && show) {
+            soulseekConversationHost.setVisibility(View.GONE);
+        }
+        if (show) {
+            stopSettingsPreviewVerticalMarquee();
+            if (settingsPreviewPane != null) {
+                settingsPreviewPane.setVisibility(View.GONE);
+            }
+        } else if (settingsPreviewPane != null && !isFullWidthMenus && !settingsAboutFullWidth
+                && !settingsBrowseFullWidth) {
+            settingsPreviewPane.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private void clearReachBrowseList() {
+        if (listReachBrowse == null) return;
+        listReachBrowse.setAdapter(null);
+        int headers = listReachBrowse.getHeaderViewsCount();
+        for (int i = headers - 1; i >= 0; i--) {
+            listReachBrowse.removeHeaderView(listReachBrowse.getChildAt(i));
+        }
+        // removeHeaderView needs the actual view reference — track headers instead
+    }
+
+    private final java.util.ArrayList<View> reachBrowseHeaderViews = new java.util.ArrayList<View>();
+
+    private void resetReachBrowseHeaders() {
+        if (listReachBrowse == null) return;
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("adapterAttached", listReachBrowse.getAdapter() != null);
+            d.put("headerCount", reachBrowseHeaderViews.size());
+            d.put("listHeaderViews", listReachBrowse.getHeaderViewsCount());
+            DebugAgentLog.log(this, "MainActivity.resetReachBrowseHeaders", "before reset",
+                    "H-B", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        listReachBrowse.setAdapter(null);
+        for (View h : reachBrowseHeaderViews) {
+            try {
+                listReachBrowse.removeHeaderView(h);
+            } catch (Exception e) {
+                // #region agent log
+                try {
+                    org.json.JSONObject d = new org.json.JSONObject();
+                    d.put("error", e.getClass().getSimpleName());
+                    d.put("msg", e.getMessage() != null ? e.getMessage() : "");
+                    DebugAgentLog.log(this, "MainActivity.resetReachBrowseHeaders",
+                            "removeHeaderView failed", "H-B", d);
+                } catch (Exception ignored) {}
+                // #endregion
+            }
+        }
+        reachBrowseHeaderViews.clear();
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("listHeaderViewsAfter", listReachBrowse.getHeaderViewsCount());
+            DebugAgentLog.log(this, "MainActivity.resetReachBrowseHeaders", "after reset",
+                    "H-B", d);
+        } catch (Exception ignored) {}
+        // #endregion
+    }
+
+    private void addReachBrowseHeader(View header) {
+        if (listReachBrowse == null || header == null) return;
+        header.setLayoutParams(new android.widget.AbsListView.LayoutParams(
+                android.widget.AbsListView.LayoutParams.MATCH_PARENT,
+                android.widget.AbsListView.LayoutParams.WRAP_CONTENT));
+        listReachBrowse.addHeaderView(header, null, false);
+        reachBrowseHeaderViews.add(header);
+    }
+
+    private int reachBrowseHeaderOffset() {
+        return listReachBrowse != null ? listReachBrowse.getHeaderViewsCount() : 0;
+    }
+
+    private int reachBrowseAdapterIndex(int listPosition) {
+        return listPosition - reachBrowseHeaderOffset();
+    }
+
+    private void applyReachBrowseAdapterSelection(int listPosition) {
+        if (listReachBrowse == null) return;
+        int adapterIndex = reachBrowseAdapterIndex(listPosition);
+        android.widget.ListAdapter ad = listReachBrowse.getAdapter();
+        if (ad instanceof ReachChatRoomsAdapter) {
+            ((ReachChatRoomsAdapter) ad).setSelectedPosition(adapterIndex);
+        } else if (ad instanceof ReachInboxAdapter) {
+            ((ReachInboxAdapter) ad).setSelectedPosition(adapterIndex);
+        } else if (ad instanceof ReachUsersAdapter) {
+            ((ReachUsersAdapter) ad).setSelectedPosition(adapterIndex);
+        } else if (ad instanceof ReachInterestsAdapter) {
+            ((ReachInterestsAdapter) ad).setSelectedPosition(adapterIndex);
+        }
+    }
+
+    private void onReachBrowseListItemSelected(int listPosition) {
+        if (listReachBrowse == null) return;
+        int adapterIndex = reachBrowseAdapterIndex(listPosition);
+        if (adapterIndex < 0) return;
+        android.widget.ListAdapter ad = listReachBrowse.getAdapter();
+        if (ad instanceof ReachInterestsAdapter) {
+            ReachInterestsAdapter ia = (ReachInterestsAdapter) ad;
+            if (!ia.isSelectable(adapterIndex)) return;
+        }
+        applyReachBrowseAdapterSelection(listPosition);
+        if (ad instanceof ReachChatRoomsAdapter) {
+            ReachChatRoomsAdapter ca = (ReachChatRoomsAdapter) ad;
+            if (ca.isShowMorePosition(adapterIndex)) {
+                ca.showMore();
+                return;
+            }
+        }
+        if (ad instanceof ReachInboxAdapter) {
+            String peer = ((ReachInboxAdapter) ad).peerAt(adapterIndex);
+            if (peer != null) watchSoulseekPeer(peer);
+        } else if (ad instanceof ReachUsersAdapter) {
+            ReachDirectoryUser u = ((ReachUsersAdapter) ad).userAt(adapterIndex);
+            if (u != null) watchSoulseekPeer(u.username);
+        }
+    }
+
+    private boolean isReachBrowseListActive() {
+        return currentScreenState == STATE_SETTINGS
+                && listReachBrowse != null
+                && listReachBrowse.getVisibility() == View.VISIBLE
+                && listReachBrowse.getAdapter() != null;
+    }
+
+    private boolean moveReachBrowseListFocus(int delta) {
+        if (!isReachBrowseListActive() || delta == 0) return false;
+        int headerIdx = indexOfReachBrowseHeader(getCurrentFocus());
+        if (headerIdx >= 0) {
+            int nextHeader = headerIdx + (delta < 0 ? -1 : 1);
+            if (nextHeader >= 0 && nextHeader < reachBrowseHeaderViews.size()) {
+                return focusReachBrowseHeaderIndex(nextHeader);
+            }
+            if (delta > 0) {
+                android.widget.ListAdapter ad = listReachBrowse.getAdapter();
+                int adapterRows = ad != null ? ad.getCount() : 0;
+                if (adapterRows > 0) {
+                    int headerCount = reachBrowseHeaderOffset();
+                    int next = headerCount;
+                    if (ad instanceof ReachInterestsAdapter) {
+                        ReachInterestsAdapter ia = (ReachInterestsAdapter) ad;
+                        int maxPos = headerCount + adapterRows - 1;
+                        while (next <= maxPos && !ia.isSelectable(next - headerCount)) next++;
+                    } else {
+                        int maxPos = headerCount + adapterRows - 1;
+                        while (next <= maxPos && !ad.isEnabled(next - headerCount)) next++;
+                    }
+                    if (next <= headerCount + adapterRows - 1) {
+                        applyReachBrowseAdapterSelection(next);
+                        FocusScrollHelper.smoothScrollListToPosition(listReachBrowse, next);
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        android.widget.ListAdapter ad = listReachBrowse.getAdapter();
+        if (ad == null) return false;
+        int adapterRows = ad.getCount();
+        int headerCount = reachBrowseHeaderOffset();
+        if (adapterRows <= 0) {
+            if (!reachBrowseHeaderViews.isEmpty()) {
+                int idx = delta < 0 ? reachBrowseHeaderViews.size() - 1 : 0;
+                return focusReachBrowseHeaderIndex(idx);
+            }
+            return false;
+        }
+        int pos = listReachBrowse.getSelectedItemPosition();
+        if (pos < headerCount) pos = headerCount;
+        int next = pos + (delta < 0 ? -1 : 1);
+        int maxPos = headerCount + adapterRows - 1;
+        if (delta < 0 && next < headerCount) {
+            return focusReachBrowseHeaderIndex(reachBrowseHeaderViews.size() - 1);
+        }
+        if (ad instanceof ReachInterestsAdapter) {
+            ReachInterestsAdapter ia = (ReachInterestsAdapter) ad;
+            while (next >= headerCount && next <= maxPos) {
+                int adapterIndex = next - headerCount;
+                if (ia.isSelectable(adapterIndex)) break;
+                next += (delta < 0 ? -1 : 1);
+            }
+        } else {
+            while (next >= headerCount && next <= maxPos && !ad.isEnabled(next - headerCount)) {
+                next += (delta < 0 ? -1 : 1);
+            }
+        }
+        if (next < headerCount || next > maxPos) return false;
+        applyReachBrowseAdapterSelection(next);
+        FocusScrollHelper.smoothScrollListToPosition(listReachBrowse, next);
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("delta", delta);
+            d.put("next", next);
+            d.put("adapterRows", adapterRows);
+            d.put("screen", settingsSubScreenKey);
+            DebugAgentLog.log(this, "MainActivity.moveReachBrowseListFocus",
+                    "adapter row focus", "H-CHAT", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        return true;
+    }
+
+    private void debouncedRoomListUpdate(final java.util.List<SoulseekWire.RoomEntry> rooms) {
+        pendingRoomListSnapshot = rooms;
+        soulseekUiHandler.removeCallbacks(roomListDebounceRunnable);
+        soulseekUiHandler.postDelayed(roomListDebounceRunnable, 300);
+    }
+
+    private int conversationRowHeightPx() {
+        return ReachMessageRow.measureListRowHeight(this);
     }
 
     private void applyStatusBarTheme() {
@@ -4218,6 +5059,7 @@ public class MainActivity extends Activity {
 
     private void buildHomeMenu() {
         if (containerHomeMenuItems == null) return;
+        final int buildGen = ++homeMenuBuildGen;
         containerHomeMenuItems.removeAllViews();
         final boolean online = ConnectivityHelper.isOnline(this);
         final boolean onLan = ConnectivityHelper.hasLocalNetwork(this);
@@ -4246,6 +5088,7 @@ public class MainActivity extends Activity {
         int totalRows = homeMenuEntries.size() + (showMore ? 1 : 0);
         if (focusedHomeMenuIndex >= totalRows) {
             focusedHomeMenuIndex = Math.max(0, totalRows - 1);
+            if (menuScroll != null) menuScroll.scrollTo(0, 0);
         }
         for (int i = 0; i < homeMenuEntries.size(); i++) {
             addHomeMenuRow(homeMenuEntries.get(i), i);
@@ -4257,6 +5100,16 @@ public class MainActivity extends Activity {
                 : (int) getResources().getDimension(R.dimen.y1_menu_height);
         applyMenuPanelBackground(menuListHost, y1RowWidthPx, panelH,
                 (int) getResources().getDimension(R.dimen.y1_menu_height));
+        if (buildGen != homeMenuBuildGen) return;
+        int childCount = containerHomeMenuItems.getChildCount();
+        if (childCount != totalRows) {
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("expected", totalRows);
+                d.put("actual", childCount);
+                DebugAgentLog.log(this, "MainActivity.buildHomeMenu", "row count mismatch", "H-HOME", d);
+            } catch (Exception ignored) {}
+        }
         scrollHomeMenuToIndex(focusedHomeMenuIndex);
         nowPlayingHomeMenuVisible = shouldShowNowPlayingHome();
     }
@@ -4384,16 +5237,19 @@ public class MainActivity extends Activity {
     private void scrollHomeMenuToIndex(int index) {
         if (containerHomeMenuItems == null || containerHomeMenuItems.getChildCount() == 0) return;
         if (index < 0 || index >= containerHomeMenuItems.getChildCount()) return;
+        final int buildGen = homeMenuBuildGen;
         final View row = containerHomeMenuItems.getChildAt(index);
         if (row == null) return;
         row.post(new Runnable() {
             @Override
             public void run() {
+                if (buildGen != homeMenuBuildGen) return;
                 View target = getHomeMenuRow(index);
                 if (target != null) {
                     target.requestFocus();
                     if (menuScroll != null) {
                         menuScroll.requestChildFocus(containerHomeMenuItems, target);
+                        FocusScrollHelper.scrollToChildBottom(menuScroll, target);
                     }
                 }
                 refreshHomeMenuRowStyles();
@@ -4415,8 +5271,6 @@ public class MainActivity extends Activity {
 
     private void updateHomeMenuPreview(int index) {
         if (isFullWidthMenus || index < 0 || index >= homeMenuEntries.size()) return;
-        boolean anyWidgetActive = isWidgetClockOn || isWidgetBatteryOn || isWidgetAlbumOn;
-        if (anyWidgetActive) return;
 
         String id = homeMenuEntries.get(index).id;
         if (HomeMenuConfig.ID_NOW_PLAYING.equals(id)) {
@@ -4555,7 +5409,10 @@ public class MainActivity extends Activity {
             }
         } else if (HomeMenuConfig.ID_SOULSEEK.equals(id)) {
             if (!requireInternet(R.string.toast_internet_required)) return;
-            openSoulseekScreen();
+            openGetMusicScreen();
+        } else if (HomeMenuConfig.ID_DEEZER.equals(id)) {
+            if (!requireInternet(R.string.toast_internet_required)) return;
+            openDeezerScreen();
         } else if (HomeMenuConfig.ID_THEMES.equals(id) || HomeMenuConfig.ID_GET_THEMES.equals(id)) {
             openThemesScreen(null);
         } else if (HomeMenuConfig.ID_MORE.equals(id)) {
@@ -4596,27 +5453,70 @@ public class MainActivity extends Activity {
             case STATE_STORAGE: return getString(R.string.status_storage);
             case STATE_WEBSERVER: return getString(R.string.status_pc_upload);
             case STATE_PODCASTS: return getString(R.string.status_podcasts);
-            case STATE_SOULSEEK: return getString(R.string.status_soulseek);
+            case STATE_SOULSEEK:
+                return browserStatusTitle != null && isGetMusicMultiSource()
+                        ? browserStatusTitle : getString(R.string.status_soulseek);
+            case STATE_DEEZER: return getString(R.string.status_deezer);
+            case STATE_DEEZER_SETUP: return getString(R.string.status_deezer_setup);
             case STATE_APPS: return getString(R.string.status_apps);
             case STATE_MORE: return getString(R.string.path_more);
             default: return getString(R.string.status_home);
         }
     }
 
-    private String getKeyboardStatusBarTitle() {
+    private String getKeyboardScreenTitle() {
         if (keyboardPurpose == KEYBOARD_WIFI) {
-            return getString(R.string.status_wifi_keyboard, targetWifiSsid);
+            return getString(R.string.keyboard_target_wifi, targetWifiSsid);
         }
         if (keyboardPurpose == KEYBOARD_SOULSEEK_USER) {
             return getString(R.string.keyboard_soulseek_username);
         }
+        if (keyboardPurpose == KEYBOARD_SOULSEEK_PASS) {
+            return getString(R.string.keyboard_soulseek_password);
+        }
         if (keyboardPurpose == KEYBOARD_SOULSEEK_SEARCH) {
             return getString(R.string.status_reach_search);
+        }
+        if (keyboardPurpose == KEYBOARD_DEEZER_SEARCH) {
+            return getString(R.string.status_deezer);
+        }
+        if (keyboardPurpose == KEYBOARD_SOULSEEK_FIND) {
+            return getString(R.string.soulseek_find_user);
+        }
+        if (keyboardPurpose == KEYBOARD_SOULSEEK_MSG) {
+            return getString(R.string.soulseek_compose_message);
+        }
+        if (keyboardPurpose == KEYBOARD_SOULSEEK_CONTACT) {
+            return getString(R.string.soulseek_add_contact);
+        }
+        if (keyboardPurpose == KEYBOARD_SOULSEEK_ROOM_WALL) {
+            return soulseekChatRoomName != null && !soulseekChatRoomName.isEmpty()
+                    ? getString(R.string.soulseek_room_wall_set) : getString(R.string.soulseek_chat_rooms);
+        }
+        if (keyboardPurpose == KEYBOARD_SOULSEEK_ROOM) {
+            return soulseekChatRoomName != null && !soulseekChatRoomName.isEmpty()
+                    ? soulseekChatRoomName : getString(R.string.soulseek_chat_rooms);
+        }
+        if (keyboardPurpose == KEYBOARD_SOULSEEK_INTEREST) {
+            return getString(R.string.keyboard_soulseek_interest);
+        }
+        if (keyboardPurpose == KEYBOARD_SOULSEEK_PEER_NOTE) {
+            return getString(R.string.soulseek_user_note_hint);
+        }
+        if (keyboardPurpose == KEYBOARD_SOULSEEK_ROOM_SEARCH) {
+            return getString(R.string.soulseek_chat_rooms_search_hint);
         }
         if (keyboardPurpose == KEYBOARD_PODCAST_SEARCH) {
             return getString(R.string.status_podcast_search);
         }
         return getString(R.string.keyboard_soulseek_password);
+    }
+
+    private String getKeyboardStatusBarTitle() {
+        if (keyboardPurpose == KEYBOARD_WIFI) {
+            return getString(R.string.status_wifi_keyboard, targetWifiSsid);
+        }
+        return getKeyboardScreenTitle();
     }
 
     private void applyThemedStatusIcon(ImageView view, String primaryKey, String secondaryKey, int fallbackRes, int fallbackTint) {
@@ -4667,8 +5567,61 @@ public class MainActivity extends Activity {
         changeScreen(state);
     }
 
+    /** adb: am start -n com.solar.launcher/.MainActivity -e open_webserver true */
+    private void handleLaunchIntentExtras() {
+        Intent intent = getIntent();
+        if (intent == null) return;
+        boolean open = intent.getBooleanExtra("open_webserver", false);
+        if (!open) {
+            String s = intent.getStringExtra("open_webserver");
+            open = s != null && ("true".equalsIgnoreCase(s) || "1".equals(s));
+        }
+        if (!open) return;
+        intent.removeExtra("open_webserver");
+        if (!ConnectivityHelper.hasLocalNetwork(this)) {
+            Toast.makeText(this, getString(R.string.toast_network_required), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        openScreenWithReturn(STATE_WEBSERVER);
+    }
+
     private void returnFromAuxScreen() {
         changeScreen(screenBackReturnTo);
+    }
+
+    /** Device test: Home → Deezer → Back without requiring network login. */
+    void deviceTestDeezerMenuRoundTrip() {
+        changeScreen(STATE_DEEZER);
+        changeScreen(STATE_MENU);
+    }
+
+    int deviceTestExpectedHomeMenuRowCount() {
+        final boolean online = ConnectivityHelper.isOnline(this);
+        final boolean onLan = ConnectivityHelper.hasLocalNetwork(this);
+        List<HomeMenuConfig.Entry> entries = HomeMenuConfig.loadVisibleForDisplay(prefs, online, onLan);
+        final boolean showNowPlaying = shouldShowNowPlayingHome();
+        if (showNowPlaying) {
+            boolean hasNowPlaying = false;
+            for (HomeMenuConfig.Entry e : entries) {
+                if (HomeMenuConfig.ID_NOW_PLAYING.equals(e.id)) {
+                    hasNowPlaying = true;
+                    break;
+                }
+            }
+            if (!hasNowPlaying) {
+                HomeMenuConfig.Entry np = HomeMenuConfig.find(HomeMenuConfig.ID_NOW_PLAYING);
+                if (np != null) entries.add(0, np);
+            }
+        }
+        java.util.Iterator<HomeMenuConfig.Entry> it = entries.iterator();
+        while (it.hasNext()) {
+            if (HomeMenuConfig.ID_NOW_PLAYING.equals(it.next().id) && !showNowPlaying) {
+                it.remove();
+            }
+        }
+        int total = entries.size();
+        if (HomeMenuConfig.shouldShowMoreTile(prefs, online, onLan)) total++;
+        return total;
     }
 
     private void changeScreen(int state) {
@@ -4730,7 +5683,7 @@ public class MainActivity extends Activity {
         currentScreenState = state;
         updateSoulseekSharePolicy();
         layoutMainMenu.setVisibility(state == STATE_MENU ? View.VISIBLE : View.GONE);
-        layoutBrowserMode.setVisibility((state == STATE_BROWSER || state == STATE_PODCASTS || state == STATE_SOULSEEK || state == STATE_APPS || state == STATE_MORE) ? View.VISIBLE : View.GONE);
+        layoutBrowserMode.setVisibility((state == STATE_BROWSER || state == STATE_PODCASTS || state == STATE_SOULSEEK || state == STATE_DEEZER || state == STATE_APPS || state == STATE_MORE) ? View.VISIBLE : View.GONE);
         layoutPlayerMode.setVisibility(state == STATE_PLAYER ? View.VISIBLE : View.GONE);
         layoutSettingsMode.setVisibility(state == STATE_SETTINGS ? View.VISIBLE : View.GONE);
         layoutBluetoothMode.setVisibility(state == STATE_BLUETOOTH ? View.VISIBLE : View.GONE);
@@ -4738,11 +5691,16 @@ public class MainActivity extends Activity {
         layoutWifiKeyboard.setVisibility(state == STATE_WIFI_KEYBOARD ? View.VISIBLE : View.GONE);
         layoutBrightnessMode.setVisibility(state == STATE_BRIGHTNESS ? View.VISIBLE : View.GONE);
         layoutStorageMode.setVisibility(state == STATE_STORAGE ? View.VISIBLE : View.GONE);
-        layoutWebServerMode.setVisibility(state == STATE_WEBSERVER ? View.VISIBLE : View.GONE);
+        layoutWebServerMode.setVisibility((state == STATE_WEBSERVER || state == STATE_DEEZER_SETUP)
+                ? View.VISIBLE : View.GONE);
         layoutVolumeOverlay.setVisibility(View.GONE);
         applyStatusBarTheme();
         if (state == STATE_MENU) {
             isPickingBackground = false;
+            settingsBrowseFullWidth = false;
+            applyFullWidthMenusLayout();
+            applyPodcastBrowserLayout();
+            if (layoutBrowserMode != null) layoutBrowserMode.setVisibility(View.GONE);
             buildHomeMenu();
             requestFirstHomeMenuFocus();
             updateHomeMenuPreview(focusedHomeMenuIndex);
@@ -4777,17 +5735,38 @@ public class MainActivity extends Activity {
                 buildPodcastSearchUI();
             }
         } else if (state == STATE_SOULSEEK) {
-            if (soulseekSearchInProgress || soulseekUiMode == SOULSEEK_UI_RESULTS) {
+            if (getMusicMode != GetMusicSources.MODE_REACH_ONLY
+                    && (getMusicSearchInProgress || soulseekUiMode == SOULSEEK_UI_RESULTS)) {
+                if (getMusicSearchInProgress || !getMusicEntries.isEmpty()) {
+                    buildGetMusicResultsUI();
+                } else {
+                    buildSoulseekSearchUI();
+                }
+            } else if (getMusicMode == GetMusicSources.MODE_REACH_ONLY
+                    && (soulseekUiMode == SOULSEEK_UI_UNAVAILABLE
+                    || (!ConnectivityHelper.isReachPeerOk()
+                            && ReachPeerConnectivity.state()
+                                    == ReachPeerConnectivity.State.UNAVAILABLE))) {
+                buildReachUnavailableUI();
+            } else if (soulseekSearchInProgress || soulseekUiMode == SOULSEEK_UI_RESULTS) {
                 buildSoulseekResultsUI();
             } else {
                 buildSoulseekSearchUI();
+            }
+        } else if (state == STATE_DEEZER) {
+            applyReachBrowseLayoutMode();
+            if (deezerScreen != null) {
+                deezerScreen.rebuildVisibleUi();
+            } else {
+                buildDeezerSearchUI();
             }
         } else if (state == STATE_APPS) {
             buildAppsLauncherUI();
         } else if (state == STATE_MORE) {
             buildMoreMenuUI();
         }
-        if (state == STATE_BROWSER || state == STATE_SOULSEEK || state == STATE_PODCASTS || state == STATE_APPS || state == STATE_MORE) {
+        if (state == STATE_BROWSER || state == STATE_SOULSEEK || state == STATE_DEEZER
+                || state == STATE_PODCASTS || state == STATE_APPS || state == STATE_MORE) {
             applyPodcastBrowserLayout();
         }
         refreshBrowserPathBreadcrumb();
@@ -4817,9 +5796,32 @@ public class MainActivity extends Activity {
         } else if (state == STATE_STORAGE) {
             loadStorageUI();
         } else if (state == STATE_WEBSERVER) {
+            if (btnServerToggle != null) btnServerToggle.setVisibility(View.VISIBLE);
+            startWebServerIfNeeded();
             updateWebServerUI();
             refreshY1ThemedActionButtons();
-            btnServerToggle.requestFocus();
+            if (btnServerToggle != null) btnServerToggle.requestFocus();
+            // Wi-Fi IP can lag behind CONNECTED on API 17 — retry bind shortly.
+            findViewById(android.R.id.content).postDelayed(new Runnable() {
+                @Override public void run() {
+                    if (!isServerRunning) {
+                        startWebServerIfNeeded();
+                        updateWebServerUI();
+                    }
+                }
+            }, 1500);
+        } else if (state == STATE_DEEZER_SETUP) {
+            startWebServerForDeezerSetup();
+            updateDeezerSetupUI();
+            refreshY1ThemedActionButtons();
+            findViewById(android.R.id.content).postDelayed(new Runnable() {
+                @Override public void run() {
+                    if (!isServerRunning) {
+                        startWebServerForDeezerSetup();
+                        updateDeezerSetupUI();
+                    }
+                }
+            }, 1500);
         }
         updateNetworkRescanLoop();
     }
@@ -4936,6 +5938,50 @@ public class MainActivity extends Activity {
                 if (row != null) onThemeBrowserRowClick(row);
                 return;
             }
+            if (currentScreenState == STATE_SETTINGS
+                    && isRoomThreadScreenActive()
+                    && soulseekConversationHost != null
+                    && soulseekConversationHost.getVisibility() == View.VISIBLE
+                    && listConversationThread != null) {
+                clickFeedback();
+                int pos = listConversationThread.getSelectedItemPosition();
+                if (pos < 0 && listConversationThread.getAdapter() != null
+                        && listConversationThread.getAdapter().getCount() > 0) {
+                    pos = listConversationThread.getAdapter().getCount() - 1;
+                }
+                if (listConversationThread.getAdapter() == null
+                        || listConversationThread.getAdapter().getCount() == 0
+                        || (pos >= 0 && isRoomNewMessagePosition(pos))) {
+                    if (SettingsScreens.SOULSEEK_CHAT_ROOM_WALL.equals(settingsSubScreenKey)) {
+                        openSoulseekRoomWallCompose();
+                    } else {
+                        openSoulseekRoomCompose();
+                    }
+                } else if (pos >= 0) {
+                    openReachRoomMessageContextMenu(pos);
+                }
+                return;
+            }
+            if (currentScreenState == STATE_SETTINGS
+                    && SettingsScreens.SOULSEEK_MESSAGES_THREAD.equals(settingsSubScreenKey)
+                    && soulseekConversationHost != null
+                    && soulseekConversationHost.getVisibility() == View.VISIBLE
+                    && listConversationThread != null) {
+                clickFeedback();
+                int pos = listConversationThread.getSelectedItemPosition();
+                if (pos < 0 && listConversationThread.getAdapter() != null
+                        && listConversationThread.getAdapter().getCount() > 0) {
+                    pos = listConversationThread.getAdapter().getCount() - 1;
+                }
+                if (listConversationThread.getAdapter() == null
+                        || listConversationThread.getAdapter().getCount() == 0
+                        || (pos >= 0 && isConversationNewMessagePosition(pos))) {
+                    openSoulseekMessageCompose(soulseekMessagePeer);
+                } else if (pos >= 0) {
+                    openReachMessageContextMenu(pos);
+                }
+                return;
+            }
             View c = getCurrentFocus();
             if (c != null) {
                 if (System.currentTimeMillis() < suppressListClickUntil) return;
@@ -5020,21 +6066,624 @@ public class MainActivity extends Activity {
         }
     }
 
+    private boolean isConversationNewMessagePosition(int position) {
+        if (listConversationThread == null
+                || !(listConversationThread.getAdapter() instanceof ConversationThreadAdapter)) {
+            return false;
+        }
+        return position == listConversationThread.getAdapter().getCount() - 1;
+    }
+
+    private String getFocusedReachPeerName() {
+        View c = getCurrentFocus();
+        if (c != null && c.getTag(ReachMessageRow.TAG_PEER) instanceof String) {
+            return ((String) c.getTag(ReachMessageRow.TAG_PEER)).trim();
+        }
+        return null;
+    }
+
+    private void openReachMessageContextMenu(int messagePosition) {
+        if (!(listConversationThread.getAdapter() instanceof ConversationThreadAdapter)) return;
+        ConversationThreadAdapter ad = (ConversationThreadAdapter) listConversationThread.getAdapter();
+        if (ad.getEntryAt(messagePosition) == null) return;
+        contextReachMessagePosition = messagePosition;
+        contextReachPeerUser = soulseekMessagePeer;
+        if (themedContextMenu != null && themedContextMenu.isShowing()) {
+            pushContextReachMessageTier(messagePosition);
+            return;
+        }
+        showThemedContextMenu();
+    }
+
+    private boolean maybeAutoOpenReachContextTier() {
+        if (isConversationThreadActive() && listConversationThread != null) {
+            int pos = listConversationThread.getSelectedItemPosition();
+            if (pos >= 0 && !isConversationNewMessagePosition(pos)) {
+                pushContextReachMessageTier(pos);
+                return true;
+            }
+        }
+        if (currentScreenState == STATE_SETTINGS
+                && SettingsScreens.SOULSEEK_MESSAGES.equals(settingsSubScreenKey)) {
+            String peer = getFocusedReachPeerName();
+            if (peer != null) {
+                pushContextReachInboxTier(peer);
+                return true;
+            }
+        }
+        if (currentScreenState == STATE_SETTINGS
+                && SettingsScreens.SOULSEEK_FIND_REACH.equals(settingsSubScreenKey)) {
+            String peer = getFocusedReachPeerName();
+            if (peer != null) {
+                pushContextReachPeerTier(peer, null);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void pushContextReachMessageTier(int messagePosition) {
+        if (!(listConversationThread.getAdapter() instanceof ConversationThreadAdapter)) return;
+        ConversationThreadAdapter ad = (ConversationThreadAdapter) listConversationThread.getAdapter();
+        if (ad.getEntryAt(messagePosition) == null) return;
+        contextReachMessagePosition = messagePosition;
+        contextReachPeerUser = soulseekMessagePeer;
+        pushContextMenuTier("reach_msg");
+        rebuildContextReachMessageTier(true);
+    }
+
+    private void pushContextReachInboxTier(final String peer) {
+        if (peer == null || peer.trim().isEmpty()) return;
+        contextReachPeerUser = peer.trim();
+        contextReachMessagePosition = -1;
+        contextReachPeerInfo = null;
+        pushContextMenuTier("reach_inbox");
+        rebuildContextReachInboxTier(true);
+    }
+
+    private void pushContextReachPeerTier(final String username,
+            final SoulseekUserDirectory.UserInfo cachedInfo) {
+        if (username == null || username.trim().isEmpty()) return;
+        contextReachPeerUser = username.trim();
+        contextReachMessagePosition = -1;
+        contextReachPeerInfo = cachedInfo;
+        pushContextMenuTier("reach_peer");
+        if (cachedInfo != null) {
+            rebuildContextReachPeerTier(true);
+        } else {
+            SoulseekUserDirectory.watch(ensureSoulseekClient(), contextReachPeerUser,
+                    new SoulseekUserDirectory.Callback() {
+                        @Override
+                        public void onUserInfo(final SoulseekUserDirectory.UserInfo info) {
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    contextReachPeerInfo = info;
+                                    if ("reach_peer".equals(contextMenuTopTier())) {
+                                        rebuildContextReachPeerTier(false);
+                                    }
+                                }
+                            });
+                        }
+
+                        @Override
+                        public void onError(final String reason) {
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    if ("reach_peer".equals(contextMenuTopTier())) {
+                                        rebuildContextReachPeerTier(false);
+                                    }
+                                }
+                            });
+                        }
+                    });
+            rebuildContextReachPeerTier(true);
+        }
+    }
+
+    private void pushContextReachReactTier(final String quoteText) {
+        if (quoteText == null || quoteText.trim().isEmpty()) return;
+        contextReachReactQuote = quoteText.trim();
+        pushContextMenuTier("reach_react");
+        rebuildContextReachReactTier(true);
+    }
+
+    private String buildReachMessageDetailText(ConversationDisplayBuilder.Entry entry) {
+        if (entry == null) return "";
+        StringBuilder detail = new StringBuilder();
+        if (entry.isReply) detail.append("↳ ");
+        detail.append(entry.displayText);
+        if (!entry.reactionLines.isEmpty()) {
+            detail.append("\n");
+            for (int i = 0; i < entry.reactionLines.size(); i++) {
+                if (i > 0) detail.append("\n");
+                detail.append(entry.reactionLines.get(i));
+            }
+        }
+        if (entry.timestamp != null && !entry.timestamp.isEmpty()) {
+            detail.append("\n").append(entry.timestamp);
+        }
+        return detail.toString();
+    }
+
+    private void rebuildContextReachMessageTier(boolean focusList) {
+        if (!(listConversationThread.getAdapter() instanceof ConversationThreadAdapter)) return;
+        ConversationThreadAdapter ad = (ConversationThreadAdapter) listConversationThread.getAdapter();
+        final ConversationDisplayBuilder.Entry entry = ad.getEntryAt(contextReachMessagePosition);
+        if (entry == null || entry.message == null) return;
+        final String quoteText = entry.displayText;
+        final String peer = soulseekMessagePeer;
+
+        java.util.ArrayList<String> labels = new java.util.ArrayList<String>();
+        java.util.ArrayList<String> states = new java.util.ArrayList<String>();
+        java.util.ArrayList<Boolean> headers = new java.util.ArrayList<Boolean>();
+        java.util.ArrayList<Runnable> actions = new java.util.ArrayList<Runnable>();
+
+        labels.add(buildReachMessageDetailText(entry));
+        states.add(null);
+        headers.add(Boolean.TRUE);
+        actions.add(null);
+
+        labels.add(getString(R.string.soulseek_reply_to_message));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                openSoulseekMessageComposeWithQuote(peer, quoteText);
+            }
+        });
+
+        labels.add(getString(R.string.soulseek_view_profile));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                openSoulseekUserProfile(peer, new Runnable() {
+                    @Override
+                    public void run() {
+                        soulseekMessagePeer = peer;
+                        buildSoulseekConversationUI(peer);
+                    }
+                });
+            }
+        });
+
+        labels.add(getString(R.string.soulseek_react_to_message));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                pushContextReachReactTier(quoteText);
+            }
+        });
+
+        labels.add(getString(R.string.soulseek_new_message));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                openSoulseekMessageCompose(peer);
+            }
+        });
+
+        labels.add(getString(R.string.soulseek_block_user));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                toggleSoulseekPeerBlocked(peer, true);
+            }
+        });
+
+        showContextMenuTierInPlace(peer != null ? peer : getString(R.string.soulseek_messages),
+                labels, states, null, headers, actions, focusList);
+    }
+
+    private void rebuildContextReachInboxTier(boolean focusList) {
+        final String peer = contextReachPeerUser;
+        if (peer == null) return;
+        SoulseekMessaging.Message last = SoulseekMessaging.lastMessageForPeer(MainActivity.this, prefs, peer);
+        String preview = "";
+        String timestamp = "";
+        if (last != null) {
+            timestamp = SoulseekMessaging.formatTimestamp(last.timestamp);
+            preview = ReachMessageFormat.previewText(last.text);
+        }
+        StringBuilder detail = new StringBuilder();
+        if (!preview.isEmpty()) detail.append(preview);
+        if (!timestamp.isEmpty()) {
+            if (detail.length() > 0) detail.append("\n");
+            detail.append(timestamp);
+        }
+        if (detail.length() == 0) detail.append(peer);
+
+        final boolean blocked = SoulseekPeerPrefs.isBlocked(prefs, peer);
+        java.util.ArrayList<String> labels = new java.util.ArrayList<String>();
+        java.util.ArrayList<String> states = new java.util.ArrayList<String>();
+        java.util.ArrayList<Boolean> headers = new java.util.ArrayList<Boolean>();
+        java.util.ArrayList<Runnable> actions = new java.util.ArrayList<Runnable>();
+
+        labels.add(detail.toString());
+        states.add(null);
+        headers.add(Boolean.TRUE);
+        actions.add(null);
+
+        labels.add(getString(R.string.soulseek_pm_open_conversation));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                soulseekMessagePeer = peer;
+                buildSoulseekConversationUI(peer);
+            }
+        });
+
+        labels.add(getString(R.string.soulseek_view_profile));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                openSoulseekUserProfile(peer, new Runnable() {
+                    @Override
+                    public void run() {
+                        buildSoulseekMessagesUI();
+                    }
+                });
+            }
+        });
+
+        labels.add(getString(R.string.soulseek_compose_message));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                openSoulseekMessageCompose(peer);
+            }
+        });
+
+        final boolean ignored = SoulseekPeerPrefs.isIgnored(prefs, peer);
+        labels.add(getString(ignored ? R.string.soulseek_unignore_user : R.string.soulseek_ignore_user));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                toggleSoulseekPeerIgnored(peer, !ignored);
+            }
+        });
+
+        labels.add(getString(blocked ? R.string.soulseek_unblock_user : R.string.soulseek_block_user));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                toggleSoulseekPeerBlocked(peer, !blocked);
+            }
+        });
+
+        showContextMenuTierInPlace(peer, labels, states, null, headers, actions, focusList);
+    }
+
+    private void rebuildContextReachPmTier(boolean focusList) {
+        final String peer = contextReachPeerUser;
+        if (peer == null) return;
+        final String body = contextReachPmBody != null ? contextReachPmBody : "";
+        final boolean ignored = SoulseekPeerPrefs.isIgnored(prefs, peer);
+        final boolean blocked = SoulseekPeerPrefs.isBlocked(prefs, peer);
+
+        java.util.ArrayList<String> labels = new java.util.ArrayList<String>();
+        java.util.ArrayList<String> states = new java.util.ArrayList<String>();
+        java.util.ArrayList<Boolean> headers = new java.util.ArrayList<Boolean>();
+        java.util.ArrayList<Runnable> actions = new java.util.ArrayList<Runnable>();
+
+        StringBuilder detail = new StringBuilder();
+        detail.append(peer);
+        if (!body.isEmpty()) detail.append("\n").append(body);
+        labels.add(detail.toString());
+        states.add(null);
+        headers.add(Boolean.TRUE);
+        actions.add(null);
+
+        labels.add(getString(R.string.soulseek_reply));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                soulseekMessagePeer = peer;
+                buildSoulseekConversationUI(peer);
+                openSoulseekMessageComposeWithQuote(peer, body);
+            }
+        });
+
+        labels.add(getString(R.string.soulseek_pm_dismiss));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+            }
+        });
+
+        labels.add(getString(ignored ? R.string.soulseek_unignore_user : R.string.soulseek_ignore_user));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                toggleSoulseekPeerIgnored(peer, !ignored);
+            }
+        });
+
+        labels.add(getString(blocked ? R.string.soulseek_unblock_user : R.string.soulseek_block_user));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                toggleSoulseekPeerBlocked(peer, !blocked);
+            }
+        });
+
+        showContextMenuTierInPlace(peer, labels, states, null, headers, actions, focusList);
+    }
+
+    private void showSoulseekPmNotification(final String fromUser, final String text) {
+        if (fromUser == null || fromUser.trim().isEmpty()) return;
+        if (SoulseekPeerPrefs.isIgnored(prefs, fromUser)) return;
+        contextReachPeerUser = fromUser.trim();
+        contextReachPmBody = text != null ? text : "";
+        if (themedContextMenu == null) return;
+        if (!themedContextMenu.isShowing()) {
+            showThemedContextMenu();
+            contextMenuTierStack.clear();
+            contextMenuTierStack.push(CONTEXT_NAV_ROOT);
+        }
+        pushContextMenuTier("reach_pm");
+        rebuildContextReachPmTier(true);
+    }
+
+    private void rebuildContextReachPeerTier(boolean focusList) {
+        final String peer = contextReachPeerUser;
+        if (peer == null) return;
+        final SoulseekUserDirectory.UserInfo info = contextReachPeerInfo;
+        final boolean hasFiles = info != null && info.files > 0;
+        final boolean blocked = SoulseekPeerPrefs.isBlocked(prefs, peer);
+        final boolean favorited = SoulseekPeerPrefs.isFavorite(prefs, peer);
+
+        StringBuilder detail = new StringBuilder();
+        String note = SoulseekPeerNotes.getNoteSync(MainActivity.this, peer);
+        if (note != null && !note.trim().isEmpty()) {
+            detail.append(getString(R.string.soulseek_user_note_label)).append("\n");
+            detail.append(note.trim()).append("\n\n");
+        }
+        if (info != null) {
+            String status = info.isOnline()
+                    ? getString(R.string.soulseek_user_online) : getString(R.string.soulseek_user_offline);
+            String filesLine = info.files > 0
+                    ? getString(R.string.soulseek_peer_files, info.files)
+                    : getString(R.string.soulseek_user_no_files);
+            detail.append(getString(R.string.soulseek_reach_status_line, peer, status, filesLine));
+        } else {
+            detail.append(peer);
+        }
+
+        java.util.ArrayList<String> labels = new java.util.ArrayList<String>();
+        java.util.ArrayList<String> states = new java.util.ArrayList<String>();
+        java.util.ArrayList<String> iconKeys = new java.util.ArrayList<String>();
+        java.util.ArrayList<Boolean> headers = new java.util.ArrayList<Boolean>();
+        java.util.ArrayList<Runnable> actions = new java.util.ArrayList<Runnable>();
+
+        String cc = info != null && info.country != null ? info.country : soulseekPeerCountryCode(peer);
+        labels.add(detail.toString());
+        states.add(null);
+        iconKeys.add(cc != null ? "flag." + cc.toLowerCase(Locale.US) : null);
+        headers.add(Boolean.TRUE);
+        actions.add(null);
+
+        if (hasFiles) {
+            labels.add(getString(R.string.soulseek_browse_user));
+            states.add(null);
+            iconKeys.add(null);
+            headers.add(Boolean.FALSE);
+            actions.add(new Runnable() {
+                @Override
+                public void run() {
+                    dismissThemedContextMenu();
+                    if (!requireReachPeerConnectivity()) return;
+                    openSoulseekBrowse(peer, "");
+                }
+            });
+        }
+        labels.add(getString(R.string.soulseek_view_profile));
+        states.add(null);
+        iconKeys.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                openSoulseekUserProfile(peer, null);
+            }
+        });
+        if (soulseekMessagingEnabled) {
+            labels.add(getString(R.string.soulseek_compose_message));
+            states.add(null);
+            iconKeys.add(null);
+            headers.add(Boolean.FALSE);
+            actions.add(new Runnable() {
+                @Override
+                public void run() {
+                    dismissThemedContextMenu();
+                    soulseekMessagePeer = peer;
+                    buildSoulseekConversationUI(peer);
+                }
+            });
+        }
+        labels.add(getString(R.string.soulseek_edit_user_note));
+        states.add(null);
+        iconKeys.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                openSoulseekPeerNoteEditor(peer);
+            }
+        });
+        labels.add(getString(blocked ? R.string.soulseek_unblock_user : R.string.soulseek_block_user));
+        states.add(null);
+        iconKeys.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                toggleSoulseekPeerBlocked(peer, !blocked);
+            }
+        });
+        labels.add(getString(favorited ? R.string.soulseek_remove_friend : R.string.soulseek_add_friend));
+        states.add(null);
+        iconKeys.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                toggleSoulseekPeerFavorite(peer, !favorited);
+            }
+        });
+
+        showContextMenuTierInPlace(peer, labels, states, iconKeys, headers, actions, focusList);
+    }
+
+    private static final String[] REACH_REACTION_EMOJIS =
+            new String[] {"\uD83D\uDC4D", "\u2764", "\uD83D\uDE02", "\uD83D\uDE2E", "\uD83D\uDE22"};
+
+    private static final String[] REACH_REACTION_LEGACY =
+            new String[] {"+1", ":)", "\u2764", "\u263A"};
+
+    private void rebuildContextReachReactTier(boolean focusList) {
+        final String quote = contextReachReactQuote;
+        final String peer = contextReachPeerUser != null ? contextReachPeerUser : soulseekMessagePeer;
+        if (quote == null || quote.isEmpty()) return;
+
+        java.util.ArrayList<String> labels = new java.util.ArrayList<String>();
+        java.util.ArrayList<String> states = new java.util.ArrayList<String>();
+        java.util.ArrayList<Boolean> headers = new java.util.ArrayList<Boolean>();
+        java.util.ArrayList<Runnable> actions = new java.util.ArrayList<Runnable>();
+
+        labels.add(quote);
+        states.add(null);
+        headers.add(Boolean.TRUE);
+        actions.add(null);
+
+        final String[] emojis = (isRoomThreadScreenActive() && soulseekChatRoomName != null)
+                ? REACH_REACTION_EMOJIS
+                : (ReachPeerCapabilities.useWireReactions(prefs, peer)
+                        ? REACH_REACTION_EMOJIS : REACH_REACTION_LEGACY);
+        final String reactAuthor = contextReachPeerUser;
+        for (final String emoji : emojis) {
+            labels.add(emoji);
+            states.add(null);
+            headers.add(Boolean.FALSE);
+            actions.add(new Runnable() {
+                @Override
+                public void run() {
+                    dismissThemedContextMenu();
+                    if (isRoomThreadScreenActive() && soulseekChatRoomName != null) {
+                        sendSoulseekRoomReaction(reactAuthor, quote, emoji);
+                    } else {
+                        sendSoulseekReaction(peer, quote, emoji);
+                    }
+                }
+            });
+        }
+
+        showContextMenuTierInPlace(getString(R.string.soulseek_react_to_message),
+                labels, states, null, headers, actions, focusList);
+    }
+
+    private void sendSoulseekReaction(final String peer, final String quoteText, final String emoji) {
+        if (peer == null || peer.trim().isEmpty() || quoteText == null || quoteText.trim().isEmpty()) {
+            return;
+        }
+        final String to = peer.trim();
+        final String quote = quoteText.trim();
+        final boolean wire = ReachPeerCapabilities.useWireReactions(prefs, to);
+        final String outbound = wire
+                ? ReachMessageFormat.formatReactionWire(quote, emoji)
+                : emoji;
+        ensureSoulseekClient().sendPrivateMessage(to, outbound, new SoulseekClient.MessageSendCallback() {
+            @Override
+            public void onSent() {
+                SoulseekMessaging.append(MainActivity.this, prefs, new SoulseekMessaging.Message(
+                        0, (int) (System.currentTimeMillis() / 1000L), to, outbound, false));
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        Toast.makeText(MainActivity.this, getString(R.string.soulseek_message_sent),
+                                Toast.LENGTH_SHORT).show();
+                        soulseekConversationFocusLastMessage = true;
+                        buildSoulseekConversationUI(to);
+                    }
+                });
+            }
+
+            @Override
+            public void onError(final String reason) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        Toast.makeText(MainActivity.this, reason, Toast.LENGTH_LONG).show();
+                        buildSoulseekConversationUI(to);
+                    }
+                });
+            }
+        });
+    }
+
+    private void restoreConversationAfterKeyboard() {
+        currentScreenState = STATE_SETTINGS;
+        if (layoutWifiKeyboard != null) layoutWifiKeyboard.setVisibility(View.GONE);
+        if (layoutSettingsMode != null) layoutSettingsMode.setVisibility(View.VISIBLE);
+        updateStatusBarTitle();
+    }
+
     private void openKeyboard() {
         typedPassword = keyboardPrefill != null ? keyboardPrefill : "";
         keyboardPrefill = null;
         keyboardIndex = 0;
         keyboardPpLongDoCase = true;
-        if (keyboardPurpose == KEYBOARD_WIFI) {
-            tvKeyboardSsid.setText(getString(R.string.keyboard_target_wifi, targetWifiSsid));
-        } else if (keyboardPurpose == KEYBOARD_SOULSEEK_USER) {
-            tvKeyboardSsid.setText(getString(R.string.keyboard_soulseek_username));
-        } else if (keyboardPurpose == KEYBOARD_SOULSEEK_SEARCH) {
-            tvKeyboardSsid.setText(getString(R.string.soulseek_search_hint));
-        } else if (keyboardPurpose == KEYBOARD_PODCAST_SEARCH) {
-            tvKeyboardSsid.setText(getString(R.string.podcasts_search_hint));
-        } else {
-            tvKeyboardSsid.setText(getString(R.string.keyboard_soulseek_password));
+        if (tvKeyboardSsid != null) {
+            tvKeyboardSsid.setText(getKeyboardScreenTitle());
+        }
+        if (tvKeyboardHint != null) {
+            tvKeyboardHint.setText(getString(R.string.keyboard_hint));
+            tvKeyboardHint.setVisibility(View.VISIBLE);
         }
         updateStatusBarTitle();
         applyKeyboardTheme();
@@ -5051,7 +6700,15 @@ public class MainActivity extends Activity {
     private boolean isSoulseekKeyboardPurpose() {
         return keyboardPurpose == KEYBOARD_SOULSEEK_USER
                 || keyboardPurpose == KEYBOARD_SOULSEEK_PASS
-                || keyboardPurpose == KEYBOARD_SOULSEEK_SEARCH;
+                || keyboardPurpose == KEYBOARD_SOULSEEK_SEARCH
+                || keyboardPurpose == KEYBOARD_SOULSEEK_FIND
+                || keyboardPurpose == KEYBOARD_SOULSEEK_MSG
+                || keyboardPurpose == KEYBOARD_SOULSEEK_CONTACT
+                || keyboardPurpose == KEYBOARD_SOULSEEK_ROOM
+                || keyboardPurpose == KEYBOARD_SOULSEEK_ROOM_WALL
+                || keyboardPurpose == KEYBOARD_SOULSEEK_INTEREST
+                || keyboardPurpose == KEYBOARD_SOULSEEK_PEER_NOTE
+                || keyboardPurpose == KEYBOARD_SOULSEEK_ROOM_SEARCH;
     }
 
     private boolean isPodcastKeyboardPurpose() {
@@ -5059,7 +6716,8 @@ public class MainActivity extends Activity {
     }
 
     private boolean isTextEntryKeyboardPurpose() {
-        return isSoulseekKeyboardPurpose() || isPodcastKeyboardPurpose();
+        return isSoulseekKeyboardPurpose() || isPodcastKeyboardPurpose()
+                || keyboardPurpose == KEYBOARD_DEEZER_SEARCH;
     }
 
     private String keyboardDisplayChar(String ch) {
@@ -5081,6 +6739,7 @@ public class MainActivity extends Activity {
 
     private void openSoulseekSearchKeyboard(String initialQuery) {
         if (!requireInternet(R.string.soulseek_wifi_required)) return;
+        getMusicMode = GetMusicSources.MODE_REACH_ONLY;
         keyboardPurpose = KEYBOARD_SOULSEEK_SEARCH;
         keyboardReturnState = STATE_SOULSEEK;
         keyboardPrefill = initialQuery != null ? initialQuery : "";
@@ -5100,13 +6759,46 @@ public class MainActivity extends Activity {
         }
         contextMenuNavPending = true;
         soulseekReturnScreen = currentScreenState;
+        getMusicMode = GetMusicSources.MODE_REACH_ONLY;
+        openSoulseekScreen(true);
         if (openKeyboard) {
-            openSoulseekScreen(true);
             openSoulseekSearchKeyboard(query.trim());
         } else {
             fetchSoulseekResults(query.trim());
-            openSoulseekScreen(true);
         }
+    }
+
+    private void openGetMusicScreen() {
+        openGetMusicScreen(false);
+    }
+
+    private void openGetMusicScreen(boolean preserveReturnState) {
+        if (!hasInternetConnection()) {
+            Toast.makeText(this, getString(R.string.toast_internet_required), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!GetMusicSources.anyAvailable(prefs, soulseekReachEnabled, deezerEnabled)) {
+            Toast.makeText(this, getString(R.string.get_music_unavailable), Toast.LENGTH_LONG).show();
+            return;
+        }
+        getMusicMode = GetMusicSources.resolveMode(prefs, soulseekReachEnabled, deezerEnabled);
+        getMusicEmbeddedInDeezer = false;
+        if (GetMusicSources.deezerConfiguredForGetMusic(prefs, deezerEnabled)
+                && !ConnectivityHelper.isDeezerLoginOk()) {
+            refreshDeezerSessionFromPrefs(false);
+        }
+        if (!preserveReturnState) {
+            soulseekReturnScreen = currentScreenState;
+            if (currentScreenState == STATE_PODCASTS) {
+                soulseekReturnPodcastUiMode = podcastUiMode;
+            }
+            if (currentScreenState == STATE_SETTINGS && SettingsScreens.isSoulseek(settingsSubScreenKey)) {
+                soulseekReturnSettingsSubKey = settingsSubScreenKey;
+            } else {
+                soulseekReturnSettingsSubKey = null;
+            }
+        }
+        changeScreen(STATE_SOULSEEK);
     }
 
     private void openSoulseekScreen() {
@@ -5115,12 +6807,24 @@ public class MainActivity extends Activity {
 
     private void openReachFromLibrary() {
         if (!hasInternetConnection()) return;
+        getMusicMode = GetMusicSources.resolveMode(prefs, soulseekReachEnabled, deezerEnabled);
+        if (!GetMusicSources.anyAvailable(prefs, soulseekReachEnabled, deezerEnabled)) {
+            Toast.makeText(this, getString(R.string.get_music_unavailable), Toast.LENGTH_LONG).show();
+            return;
+        }
         soulseekReturnScreen = STATE_BROWSER;
         soulseekReturnSettingsSubKey = null;
+        getMusicEmbeddedInDeezer = false;
         changeScreen(STATE_SOULSEEK);
     }
 
     private void openSoulseekScreen(boolean preserveReturnState) {
+        getMusicMode = GetMusicSources.MODE_REACH_ONLY;
+        getMusicEmbeddedInDeezer = false;
+        if (!soulseekReachEnabled) {
+            Toast.makeText(this, getString(R.string.soulseek_reach_disabled), Toast.LENGTH_LONG).show();
+            return;
+        }
         if (!preserveReturnState) {
             soulseekReturnScreen = currentScreenState;
             if (currentScreenState == STATE_PODCASTS) {
@@ -5136,6 +6840,15 @@ public class MainActivity extends Activity {
     }
 
     private void returnFromSoulseek() {
+        cancelGetMusicSearch();
+        getMusicEmbeddedInDeezer = false;
+        soulseekBrowseGen++;
+        soulseekBrowseReturnUiMode = -1;
+        soulseekBrowseReturnResult = null;
+        if (listVirtualSongs != null) {
+            listVirtualSongs.setVisibility(View.GONE);
+            listVirtualSongs.setAdapter(null);
+        }
         if (soulseekReturnScreen == STATE_MENU) {
             changeScreen(STATE_MENU);
         } else if (soulseekReturnScreen == STATE_PODCASTS) {
@@ -5153,6 +6866,428 @@ public class MainActivity extends Activity {
             changeScreen(soulseekReturnScreen);
         }
         soulseekReturnSettingsSubKey = null;
+    }
+
+    private final DeezerScreen.Host deezerHost = new DeezerScreen.Host() {
+        @Override public android.content.Context context() { return MainActivity.this; }
+        @Override public android.content.SharedPreferences prefs() { return prefs; }
+        @Override public File rootFolder() { return rootFolder; }
+        @Override public File deezerCacheDir() { return DeezerCache.dir(getCacheDir()); }
+        @Override public LinearLayout containerBrowserItems() { return containerBrowserItems; }
+        @Override public TextView tvBrowserPath() { return tvBrowserPath; }
+        @Override public void clickFeedback() { MainActivity.this.clickFeedback(); }
+        @Override public boolean requireInternet(int msgRes) { return MainActivity.this.requireInternet(msgRes); }
+        @Override public Button createListButton(String label) { return MainActivity.this.createListButton(label); }
+        @Override public void createBrowserSectionHeader(String title) { MainActivity.this.createBrowserSectionHeader(title); }
+        @Override public void updateStatusBarTitle(String title) {
+            browserStatusTitle = title;
+            MainActivity.this.updateStatusBarTitle();
+        }
+        @Override public void prepareBrowserChrome() { prepareSoulseekBrowserChrome(); }
+        @Override public void applyReachBrowseLayoutMode() { MainActivity.this.applyReachBrowseLayoutMode(); }
+        @Override public int y1RowHeightPx() { return y1RowHeightPx; }
+        @Override public int listRowWidthPx() { return listRowWidthPx; }
+        @Override public int y1ActiveRowWidthPx() { return MainActivity.this.y1ActiveRowWidthPx(); }
+        @Override public android.graphics.drawable.Drawable getY1RowBackground(boolean f, int w, int k) {
+            return MainActivity.this.getY1RowBackground(f, w, k);
+        }
+        @Override public int y1RowTextColorNormal(int k) { return MainActivity.this.y1RowTextColorNormal(k); }
+        @Override public int y1RowTextColorSelected(int k) { return MainActivity.this.y1RowTextColorSelected(k); }
+        @Override public int y1RowKindForScreen() { return MainActivity.this.y1RowKindForScreen(); }
+        @Override public void showFastScrollLetter(String letter) { MainActivity.this.showFastScrollLetter(letter); }
+        @Override public void enableMarquee(TextView tv) { MainActivity.this.enableMarquee(tv); }
+        @Override public void scanMediaLibraryAsync() { MainActivity.this.scanMediaLibraryAsync(); }
+        @Override public void persistPlaybackQueue() { MainActivity.this.persistPlaybackQueue(); }
+        @Override public void changeToPlayer() { changeScreen(STATE_PLAYER); }
+        @Override public void playDeezerPartial(File f, String meta, long trackId) {
+            startDeezerPlayFromPartial(f, meta, trackId);
+        }
+        @Override public void queueDeezerPartial(File f, String meta, long trackId) {
+            playback.queueDeezerAfterCurrent(f, meta, trackId);
+            persistPlaybackQueue();
+        }
+        @Override public void replaceDeezerInQueue(File oldF, File newF, String meta) {
+            playback.replaceDeezerFileInQueue(oldF, newF, meta);
+        }
+        @Override public void launchDeezerSearchFromSuggestion(String q, boolean openKeyboard) {
+            MainActivity.this.launchDeezerSearchFromSuggestion(q, openKeyboard);
+        }
+        @Override public void launchReachSearchFromSuggestion(String q, boolean openKeyboard) {
+            MainActivity.this.launchReachSearchFromSuggestion(q, openKeyboard);
+        }
+        @Override public void showSearchServicePicker(String q, boolean openKeyboard) {
+            MainActivity.this.launchGetMusicSearchFromSuggestion(q, openKeyboard);
+        }
+        @Override public void onDeezerBackFromSearch() { returnFromDeezer(); }
+        @Override public void openDeezerSearchKeyboard() { MainActivity.this.openDeezerSearchKeyboard(); }
+        @Override public boolean soulseekReachAvailable() {
+            return soulseekReachEnabled && ConnectivityHelper.isReachPeerOk();
+        }
+        @Override public boolean deezerAvailable() {
+            return deezerEnabled && ConnectivityHelper.isDeezerLoginOk();
+        }
+        @Override public String string(int res) { return getString(res); }
+        @Override public String string(int res, Object arg) { return getString(res, arg); }
+        @Override public String string(int res, Object arg1, Object arg2) {
+            return getString(res, arg1, arg2);
+        }
+        @Override public void runOnUi(Runnable r) { runOnUiThread(r); }
+        @Override public void runOnBg(Runnable r) { new Thread(r, "DeezerBg").start(); }
+        @Override public boolean getMusicEmbedded() {
+            return getMusicEmbeddedInDeezer && currentScreenState == STATE_SOULSEEK;
+        }
+        @Override public void onGetMusicBackToResults() {
+            getMusicEmbeddedInDeezer = false;
+            if (deezerScreen != null) deezerScreen.cancelSearch();
+            buildGetMusicResultsUI();
+        }
+        @Override public void onGetMusicBackToSearch() {
+            getMusicEmbeddedInDeezer = false;
+            if (deezerScreen != null) deezerScreen.cancelSearch();
+            buildSoulseekSearchUI();
+        }
+        @Override public void onDeezerDownloadProgress(int percent, File growing, long doneBytes, long totalBytes) {
+            deezerActiveDownloadPercent = percent;
+            if (totalBytes > 0) reachGrowingTotalBytes = totalBytes;
+            if (growing != null) {
+                deezerActiveGrowingFile = growing;
+                reachGrowingCacheFile = growing;
+                reachGrowingPreparedBytes = growing.length();
+            }
+            long nowUi = android.os.SystemClock.uptimeMillis();
+            boolean throttled = nowUi - deezerLastProgressUiMs < 150
+                    && totalBytes > 0 && doneBytes < totalBytes;
+            if (!throttled) {
+                deezerLastProgressUiMs = nowUi;
+                refreshStreamProgressUi();
+                if (reachPartialPlaybackStarted && reachGrowingCacheFile != null
+                        && currentScreenState == STATE_PLAYER) {
+                    updateReachPlayerBufferUi(percent, doneBytes, totalBytes);
+                    if (percent % 5 == 0 || percent >= 95) {
+                        updateReachGrowingDurationUi();
+                    }
+                }
+            }
+            // #region agent log
+            try {
+                long now = System.currentTimeMillis();
+                if ((percent != deezerProgressDebugLastPct && percent % 5 == 0)
+                        || now - deezerProgressDebugLastMs > 2000) {
+                    deezerProgressDebugLastMs = now;
+                    deezerProgressDebugLastPct = percent;
+                    org.json.JSONObject d = new org.json.JSONObject();
+                    d.put("pct", percent);
+                    d.put("done", doneBytes);
+                    d.put("total", totalBytes);
+                    d.put("partial", reachPartialPlaybackStarted);
+                    d.put("fileLen", growing != null ? growing.length() : 0);
+                    DebugAgentLog.log(MainActivity.this, "MainActivity.onDeezerDownloadProgress",
+                            "deezer progress", "H-HEAT", d);
+                }
+            } catch (Exception ignored) {}
+            // #endregion
+        }
+        @Override public void onDeezerStreamDownloadComplete(File completeFile) {
+            if (completeFile == null) return;
+            deezerActiveGrowingFile = completeFile;
+            reachGrowingCacheFile = completeFile;
+            reachGrowingTotalBytes = completeFile.length();
+            deezerActiveDownloadPercent = 100;
+            refreshStreamProgressUi();
+            if (reachPartialPlaybackStarted) {
+                updateReachGrowingDurationUi();
+                applyDeezerStreamMetadata(completeFile, false);
+                tryDeezerStreamEmbeddedArt(completeFile);
+                if (currentScreenState == STATE_PLAYER) {
+                    updateReachPlayerBufferUi(100, completeFile.length(), completeFile.length());
+                }
+                maybeExtendReachGrowingPlayback(true);
+                persistPlaybackQueue();
+            }
+            // #region agent log
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("fileLen", completeFile.length());
+                d.put("partial", reachPartialPlaybackStarted);
+                DebugAgentLog.log(MainActivity.this, "MainActivity.onDeezerStreamDownloadComplete",
+                        "deezer complete", "H-DZ-GROW", d);
+            } catch (Exception ignored) {}
+            // #endregion
+        }
+        @Override public void onDeezerStreamDownloadFailed() {
+            deezerActiveDownloadPercent = -1;
+            if (reachPartialPlaybackStarted) {
+                progressHandler.removeCallbacks(reachGrowingEdgePoll);
+            }
+        }
+        @Override public void launchGetMusicSearchFromSuggestion(String q, boolean openKeyboard) {
+            MainActivity.this.launchGetMusicSearchFromSuggestion(q, openKeyboard);
+        }
+    };
+
+    private void openDeezerScreen() {
+        openDeezerScreen(false, true);
+    }
+
+    private void openDeezerScreen(boolean preserveReturn) {
+        openDeezerScreen(preserveReturn, true);
+    }
+
+    /** @param redirectToSetupIfUnconfigured home tile sends users to PC setup when ARL is missing */
+    private void openDeezerScreen(boolean preserveReturn, boolean redirectToSetupIfUnconfigured) {
+        if (!deezerEnabled) {
+            Toast.makeText(this, getString(R.string.deezer_not_configured), Toast.LENGTH_LONG).show();
+            return;
+        }
+        DeezerAccount.migrateLegacyArl(this, prefs);
+        if (!DeezerAccount.hasArl(prefs)) {
+            if (redirectToSetupIfUnconfigured) {
+                openDeezerSetupScreen(preserveReturn);
+                return;
+            }
+        }
+        if (!preserveReturn) deezerReturnScreen = currentScreenState;
+        if (deezerScreen != null) deezerScreen.resetToSearch();
+        changeScreen(STATE_DEEZER);
+    }
+
+    private void returnFromDeezer() {
+        if (deezerScreen != null) deezerScreen.cancelSearch();
+        if (deezerReturnScreen == STATE_MENU) changeScreen(STATE_MENU);
+        else if (deezerReturnScreen == STATE_SETTINGS) changeScreen(STATE_SETTINGS);
+        else changeScreen(deezerReturnScreen);
+    }
+
+    private void openDeezerSearchKeyboard() {
+        if (!requireInternet(R.string.deezer_wifi_required)) return;
+        keyboardPurpose = KEYBOARD_DEEZER_SEARCH;
+        keyboardReturnState = STATE_DEEZER;
+        keyboardPrefill = "";
+        changeScreen(STATE_WIFI_KEYBOARD);
+    }
+
+    private void openDeezerSearchKeyboard(String initialQuery) {
+        if (!requireInternet(R.string.deezer_wifi_required)) return;
+        keyboardPurpose = KEYBOARD_DEEZER_SEARCH;
+        keyboardReturnState = STATE_DEEZER;
+        keyboardPrefill = initialQuery != null ? initialQuery : "";
+        changeScreen(STATE_WIFI_KEYBOARD);
+    }
+
+    private void finishDeezerSearchEntry() {
+        final String q = typedPassword.trim();
+        openDeezerScreen(true);
+        if (q.length() > 0 && requireInternet(R.string.deezer_wifi_required) && deezerScreen != null) {
+            deezerScreen.fetchResults(q);
+        }
+    }
+
+    /** Re-run initSession when ARL exists but username was not persisted yet. */
+    private void refreshDeezerSessionFromPrefs(final boolean rebuildSettings) {
+        if (!DeezerAccount.hasArl(prefs)) return;
+        new Thread(new Runnable() {
+            @Override public void run() {
+                boolean ok = false;
+                try {
+                    DeezerClient c = new DeezerClient(prefs);
+                    ok = c.initSession();
+                } catch (Exception ignored) {}
+                ConnectivityHelper.setDeezerLoginOk(ok);
+                if (rebuildSettings && SettingsScreens.DEEZER.equals(settingsSubScreenKey)) {
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() { buildDeezerSettingsUI(); }
+                    });
+                }
+            }
+        }, "DeezerRefresh").start();
+    }
+
+    private void launchDeezerSearchFromSuggestion(String query, boolean openKeyboard) {
+        if (query == null || query.trim().isEmpty()) return;
+        if (!requireInternet(R.string.deezer_wifi_required)) return;
+        if (!deezerEnabled) return;
+        deezerReturnScreen = currentScreenState;
+        if (openKeyboard) {
+            openDeezerScreen(true);
+            openDeezerSearchKeyboard(query.trim());
+        } else {
+            openDeezerScreen(true);
+            if (deezerScreen != null) deezerScreen.fetchResults(query.trim());
+        }
+    }
+
+    private void launchGetMusicSearchFromSuggestion(String query, boolean openKeyboard) {
+        if (query == null || query.trim().isEmpty()) return;
+        if (!GetMusicSources.anyAvailable(prefs, soulseekReachEnabled, deezerEnabled)) {
+            Toast.makeText(this, getString(R.string.get_music_unavailable), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (openKeyboard) {
+            openGetMusicSearchKeyboard(query.trim());
+            return;
+        }
+        openGetMusicScreen(true);
+        fetchGetMusicResults(query.trim());
+    }
+
+    private void launchMusicSearchFromSuggestion(String query, boolean openKeyboard) {
+        launchGetMusicSearchFromSuggestion(query, openKeyboard);
+    }
+
+    private void openGetMusicSearchKeyboard() {
+        openGetMusicSearchKeyboard("");
+    }
+
+    private void openGetMusicSearchKeyboard(String initialQuery) {
+        if (!requireInternet(R.string.toast_internet_required)) return;
+        getMusicMode = GetMusicSources.resolveMode(prefs, soulseekReachEnabled, deezerEnabled);
+        keyboardPurpose = KEYBOARD_SOULSEEK_SEARCH;
+        keyboardReturnState = STATE_SOULSEEK;
+        keyboardPrefill = initialQuery != null ? initialQuery : "";
+        changeScreen(STATE_WIFI_KEYBOARD);
+    }
+
+    private void startDeezerPlayFromPartial(File partial, String meta, long trackId) {
+        saveCurrentPodcastResume();
+        stopPodcastDownloadFully();
+        clearReachStreamAlbumArt();
+        playback.playDeezerAfterCurrent(partial, meta, trackId);
+        reachPartialPlaybackStarted = true;
+        reachGrowingCacheFile = partial;
+        reachGrowingTotalBytes = 0;
+        reachGrowingPreparedBytes = partial.length();
+        reachGrowingSeekMs = 0;
+        deezerActiveGrowingFile = partial;
+        purgeUnreferencedReachCache();
+        deezerLastProgressUiMs = 0;
+        applyDeezerStreamMetadata(partial, true);
+        playerProgress.setProgress(0);
+        tvPlayerTimeCurrent.setText("00:00");
+        tvPlayerTimeTotal.setText("00:00");
+        updateMusicTrackCountUi();
+        isPausedByHand = false;
+        playerReturnScreen = currentScreenState;
+        persistPlaybackQueue();
+        applyScreenChange(STATE_PLAYER);
+        progressHandler.post(updateProgressTask);
+        startReachFromGrowingFile(partial, 0);
+        progressHandler.postDelayed(reachGrowingEdgePoll, 150);
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("partialLen", partial.length());
+            d.put("partialStarted", reachPartialPlaybackStarted);
+            d.put("screen", currentScreenState);
+            DebugAgentLog.log(this, "MainActivity.startDeezerPlayFromPartial",
+                    "deezer partial play", "H-SCREEN", d);
+        } catch (Exception ignored) {}
+        // #endregion
+    }
+
+    private void buildDeezerSearchUI() {
+        DeezerAccount.migrateLegacyArl(this, prefs);
+        if (deezerScreen != null) {
+            deezerScreen.initSessionAsync();
+            deezerScreen.buildSearchUi();
+        }
+    }
+
+    private void buildDeezerSettingsUI() {
+        setSettingsSubScreen(SettingsScreens.DEEZER);
+        updateStatusBarTitle();
+        DeezerAccount.migrateLegacyArl(this, prefs);
+        containerSettingsItems.removeAllViews();
+        Button back = createListButton(getString(R.string.settings_deezer));
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                clickFeedback();
+                buildSettingsUI();
+            }
+        });
+        containerSettingsItems.addView(back);
+
+        LinearLayout enableRow = createSettingsRow(RowKeys.DEEZER_ENABLED, R.string.deezer_enabled, true);
+        enableRow.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                clickFeedback();
+                deezerEnabled = !deezerEnabled;
+                prefs.edit().putBoolean(DeezerAccount.PREF_ENABLED, deezerEnabled).commit();
+                ConnectivityHelper.setDeezerEnabled(deezerEnabled);
+                buildDeezerSettingsUI();
+                buildHomeMenu();
+            }
+        });
+        containerSettingsItems.addView(enableRow);
+
+        if (!deezerEnabled) {
+            if (containerSettingsItems.getChildCount() > 0) containerSettingsItems.getChildAt(0).requestFocus();
+            return;
+        }
+
+        if (DeezerAccount.hasArl(prefs)) {
+            LinearLayout includeRow = createSettingsRow(RowKeys.DEEZER_INCLUDE_GET_MUSIC,
+                    R.string.get_music_include_deezer, false);
+            includeRow.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    clickFeedback();
+                    deezerIncludeInGetMusic = !deezerIncludeInGetMusic;
+                    prefs.edit().putBoolean(DeezerAccount.PREF_INCLUDE_IN_GET_MUSIC,
+                            deezerIncludeInGetMusic).commit();
+                    refreshSettingsPreview(RowKeys.DEEZER_INCLUDE_GET_MUSIC);
+                }
+            });
+            containerSettingsItems.addView(includeRow);
+        }
+
+        Button search = createListButton(getString(R.string.deezer_search_row));
+        search.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                clickFeedback();
+                deezerReturnScreen = STATE_SETTINGS;
+                openDeezerScreen(true, false);
+            }
+        });
+        containerSettingsItems.addView(search);
+
+        Button setup = createListButton(getString(R.string.deezer_setup_pc));
+        setup.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                clickFeedback();
+                deezerReturnScreen = STATE_SETTINGS;
+                openDeezerSetupScreen(true);
+            }
+        });
+        containerSettingsItems.addView(setup);
+
+        String user = DeezerAccount.displayUser(prefs);
+        boolean hasArl = DeezerAccount.hasArl(prefs);
+        String status;
+        if (!hasArl) {
+            status = getString(R.string.deezer_account_not_logged_in);
+        } else {
+            String qual = com.solar.launcher.deezer.DeezerClient.formatQualityLabel(
+                    prefs.getString(DeezerAccount.PREF_QUALITY, "mp3"));
+            status = getString(R.string.deezer_account_status,
+                    user.isEmpty() ? "…" : user, qual);
+            if (user.isEmpty()) refreshDeezerSessionFromPrefs(true);
+        }
+        Button account = createListButton(status);
+        account.setEnabled(false);
+        containerSettingsItems.addView(account);
+
+        Button clear = createListButton(getString(R.string.deezer_clear_account));
+        clear.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                clickFeedback();
+                DeezerAccount.clear(prefs);
+                ConnectivityHelper.setDeezerLoginOk(false);
+                Toast.makeText(MainActivity.this, getString(R.string.deezer_cleared), Toast.LENGTH_SHORT).show();
+                buildDeezerSettingsUI();
+                buildHomeMenu();
+            }
+        });
+        containerSettingsItems.addView(clear);
+        if (containerSettingsItems.getChildCount() > 0) containerSettingsItems.getChildAt(0).requestFocus();
     }
 
     private void restoreSettingsAfterSoulseekAccount() {
@@ -5199,6 +7334,23 @@ public class MainActivity extends Activity {
             tvKeyboardInput.setText(typedPassword.length() == 0 ? getString(R.string.keyboard_blank_auto) : typedPassword);
         } else if (keyboardPurpose == KEYBOARD_SOULSEEK_SEARCH) {
             tvKeyboardInput.setText(typedPassword.length() == 0 ? getString(R.string.soulseek_type_search) : typedPassword);
+        } else if (keyboardPurpose == KEYBOARD_SOULSEEK_FIND) {
+            tvKeyboardInput.setText(typedPassword.length() == 0 ? getString(R.string.soulseek_find_user) : typedPassword);
+        } else if (keyboardPurpose == KEYBOARD_SOULSEEK_MSG) {
+            tvKeyboardInput.setText(typedPassword.length() == 0 ? getString(R.string.soulseek_compose_message) : typedPassword);
+        } else if (keyboardPurpose == KEYBOARD_SOULSEEK_CONTACT) {
+            tvKeyboardInput.setText(typedPassword.length() == 0 ? getString(R.string.soulseek_add_contact) : typedPassword);
+        } else if (keyboardPurpose == KEYBOARD_SOULSEEK_ROOM_WALL) {
+            tvKeyboardInput.setText(typedPassword.length() == 0
+                    ? getString(R.string.soulseek_room_wall_set) : typedPassword);
+        } else if (keyboardPurpose == KEYBOARD_SOULSEEK_ROOM) {
+            tvKeyboardInput.setText(typedPassword.length() == 0 ? getString(R.string.soulseek_room_new_message) : typedPassword);
+        } else if (keyboardPurpose == KEYBOARD_SOULSEEK_INTEREST) {
+            tvKeyboardInput.setText(typedPassword.length() == 0 ? getString(R.string.keyboard_soulseek_interest) : typedPassword);
+        } else if (keyboardPurpose == KEYBOARD_SOULSEEK_PEER_NOTE) {
+            tvKeyboardInput.setText(typedPassword.length() == 0 ? getString(R.string.soulseek_user_note_hint) : typedPassword);
+        } else if (keyboardPurpose == KEYBOARD_SOULSEEK_ROOM_SEARCH) {
+            tvKeyboardInput.setText(typedPassword.length() == 0 ? getString(R.string.soulseek_chat_rooms_search_hint) : typedPassword);
         } else if (keyboardPurpose == KEYBOARD_PODCAST_SEARCH) {
             tvKeyboardInput.setText(typedPassword.length() == 0 ? getString(R.string.podcasts_type_search) : typedPassword);
         } else {
@@ -5260,6 +7412,15 @@ public class MainActivity extends Activity {
         if (keyboardPurpose == KEYBOARD_WIFI) connectToWifi();
         else if (keyboardPurpose == KEYBOARD_SOULSEEK_USER) finishSoulseekUserEntry();
         else if (keyboardPurpose == KEYBOARD_SOULSEEK_SEARCH) finishSoulseekSearchEntry();
+        else if (keyboardPurpose == KEYBOARD_SOULSEEK_FIND) finishSoulseekFindEntry();
+        else if (keyboardPurpose == KEYBOARD_SOULSEEK_MSG) finishSoulseekMsgEntry();
+        else if (keyboardPurpose == KEYBOARD_SOULSEEK_CONTACT) finishSoulseekContactEntry();
+        else if (keyboardPurpose == KEYBOARD_SOULSEEK_ROOM_WALL) finishSoulseekRoomWallEntry();
+        else if (keyboardPurpose == KEYBOARD_SOULSEEK_ROOM) finishSoulseekRoomMsgEntry();
+        else if (keyboardPurpose == KEYBOARD_SOULSEEK_INTEREST) finishSoulseekInterestEntry();
+        else if (keyboardPurpose == KEYBOARD_SOULSEEK_PEER_NOTE) finishSoulseekPeerNoteEntry();
+        else if (keyboardPurpose == KEYBOARD_SOULSEEK_ROOM_SEARCH) finishSoulseekRoomSearchEntry();
+        else if (keyboardPurpose == KEYBOARD_DEEZER_SEARCH) finishDeezerSearchEntry();
         else if (keyboardPurpose == KEYBOARD_PODCAST_SEARCH) finishPodcastSearchEntry();
         else finishSoulseekPassEntry();
     }
@@ -5944,9 +8105,19 @@ public class MainActivity extends Activity {
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
         layout.addView(tvLeft);
 
+        final boolean toggleRow = !submenu && showInlineState && isOnOffToggleRow(rowKey);
         final TextView tvRight = new TextView(this);
         tvRight.setFocusable(false);
-        if (isFullWidthMenus && !submenu && showInlineState) {
+        final TextView tvToggleMark = new TextView(this);
+        tvToggleMark.setFocusable(false);
+        if (toggleRow) {
+            tvToggleMark.setTag("toggle_mark");
+            applyToggleMarkStyle(tvToggleMark, rowKey, false);
+            tvToggleMark.setGravity(android.view.Gravity.RIGHT);
+            tvToggleMark.setLayoutParams(new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+            layout.addView(tvToggleMark);
+        } else if (isFullWidthMenus && !submenu && showInlineState) {
             tvRight.setTag("inline_state");
             tvRight.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
             tvRight.setText(resolveSettingStateText(rowKey));
@@ -5991,11 +8162,17 @@ public class MainActivity extends Activity {
                 int rowW = y1ActiveRowWidthPx();
                 layout.setBackground(getY1RowBackground(hasFocus, rowW, Y1_ROW_MENU));
                 applyY1ListRowStyle(layout, hasFocus, tvLeft,
-                        (isFullWidthMenus && !submenu) ? tvRight : null,
+                        (isFullWidthMenus && !submenu && !toggleRow) ? tvRight : null,
                         submenu ? rowArrow : null, Y1_ROW_MENU);
+                if (toggleRow) {
+                    applyToggleMarkStyle(tvToggleMark, rowKey, hasFocus);
+                }
                 if (hasFocus && currentScreenState == STATE_SETTINGS) {
                     int idx = containerSettingsItems.indexOfChild(layout);
                     if (idx != -1) lastSettingsFocusIndex = idx;
+                    if (settingsScrollView instanceof ScrollView) {
+                        FocusScrollHelper.scrollToChildBottom((ScrollView) settingsScrollView, layout);
+                    }
                     if (isFullWidthMenus) {
                         refreshSettingsRowInline(rowKey);
                     } else {
@@ -6024,6 +8201,11 @@ public class MainActivity extends Activity {
             if (!(row instanceof LinearLayout)) continue;
             Object tag = row.getTag();
             if (!(tag instanceof String) || !rowKey.equals(tag)) continue;
+            TextView markView = (TextView) row.findViewWithTag("toggle_mark");
+            if (markView != null) {
+                applyToggleMarkStyle(markView, rowKey, row.hasFocus());
+                return;
+            }
             TextView stateView = (TextView) row.findViewWithTag("inline_state");
             if (stateView == null) return;
             String text = resolveSettingStateText(rowKey);
@@ -6073,27 +8255,36 @@ public class MainActivity extends Activity {
         }
         if (settingsMenuHost != null) {
             FrameLayout.LayoutParams slp = (FrameLayout.LayoutParams) settingsMenuHost.getLayoutParams();
-            boolean settingsWide = isFullWidthMenus || settingsAboutFullWidth;
+            boolean settingsWide = isFullWidthMenus || settingsAboutFullWidth || settingsBrowseFullWidth;
             slp.width = settingsWide
                     ? FrameLayout.LayoutParams.MATCH_PARENT : settingsMenuWidthPx;
-            slp.height = isFullWidthMenus ? fullMenuH : defaultSettingsH;
+            slp.height = settingsWide && screenHeightPx > statusH
+                    ? screenHeightPx - statusH
+                    : (isFullWidthMenus ? fullMenuH : defaultSettingsH);
             slp.leftMargin = settingsWide ? 0 : menuLeft;
             settingsMenuHost.setLayoutParams(slp);
         }
         if (settingsPreviewPane != null) {
-            boolean hidePreview = isFullWidthMenus || settingsAboutFullWidth;
+            boolean hidePreview = isFullWidthMenus || settingsAboutFullWidth || settingsBrowseFullWidth;
             settingsPreviewPane.setVisibility(hidePreview ? View.GONE : View.VISIBLE);
         }
         updateHomeMenuPreviewVisibility();
-        int settingsPanelH = (isFullWidthMenus || settingsAboutFullWidth) && screenHeightPx > 0
+        int settingsPanelH = (isFullWidthMenus || settingsAboutFullWidth || settingsBrowseFullWidth) && screenHeightPx > 0
                 ? screenHeightPx - (int) getResources().getDimension(R.dimen.y1_status_bar_height)
                 : (int) getResources().getDimension(R.dimen.y1_settings_menu_height);
         applyMenuPanelBackground(menuListHost, y1RowWidthPx, menuListHeightPx,
                 (int) getResources().getDimension(R.dimen.y1_menu_height));
-        applyMenuPanelBackground(settingsMenuHost,
-                (isFullWidthMenus || settingsAboutFullWidth) && screenWidthPx > 0 ? screenWidthPx : settingsMenuWidthPx,
-                settingsPanelH,
-                (int) getResources().getDimension(R.dimen.y1_settings_menu_height));
+        if (settingsMenuHost != null) {
+            if (settingsBrowseFullWidth) {
+                settingsMenuHost.setBackgroundColor(0x00000000);
+            } else {
+                applyMenuPanelBackground(settingsMenuHost,
+                        (isFullWidthMenus || settingsAboutFullWidth) && screenWidthPx > 0
+                                ? screenWidthPx : settingsMenuWidthPx,
+                        settingsPanelH,
+                        (int) getResources().getDimension(R.dimen.y1_settings_menu_height));
+            }
+        }
         updateScreenBackground(currentScreenState);
         applyPodcastBrowserLayout();
         applySettingsListLayout();
@@ -6135,6 +8326,7 @@ public class MainActivity extends Activity {
         boolean wideBrowser = isFullWidthMenus
                 || currentScreenState == STATE_BROWSER
                 || currentScreenState == STATE_SOULSEEK
+                || currentScreenState == STATE_DEEZER
                 || (currentScreenState == STATE_PODCASTS && !podcastDual)
                 || (currentScreenState == STATE_APPS && !appsDual);
 
@@ -6148,7 +8340,8 @@ public class MainActivity extends Activity {
             blp.height = FrameLayout.LayoutParams.MATCH_PARENT;
             blp.leftMargin = 0;
             if (!isFullWidthMenus && (currentScreenState == STATE_PODCASTS
-                    || currentScreenState == STATE_BROWSER || currentScreenState == STATE_SOULSEEK)) {
+                    || currentScreenState == STATE_BROWSER || currentScreenState == STATE_SOULSEEK
+                    || currentScreenState == STATE_DEEZER)) {
                 listRowWidthPx = (int) (getResources().getDimension(R.dimen.y1_screen_width)
                         - 20 * getResources().getDisplayMetrics().density);
             }
@@ -6694,9 +8887,9 @@ public class MainActivity extends Activity {
             return AppVersion.displayLabel(this);
         }
         if (RowKeys.NOW_PLAYING_ALBUM_BLUR.equals(rowKey)) return stateOnOff(playerAlbumBlurEnabled);
-        if (RowKeys.WIDGET_CLOCK.equals(rowKey)) return stateOnOff(isWidgetClockOn);
-        if (RowKeys.WIDGET_BATTERY.equals(rowKey)) return stateOnOff(isWidgetBatteryOn);
-        if (RowKeys.WIDGET_ALBUM.equals(rowKey)) return stateOnOff(isWidgetAlbumOn);
+        if (RowKeys.WIDGET_CLOCK.equals(rowKey)) return stateOnOff(false);
+        if (RowKeys.WIDGET_BATTERY.equals(rowKey)) return stateOnOff(false);
+        if (RowKeys.WIDGET_ALBUM.equals(rowKey)) return stateOnOff(false);
         if (RowKeys.LANGUAGE.equals(rowKey)) {
             return LocaleHelper.displayLabel(this, prefs.getString(LocaleHelper.PREF_LOCALE, LocaleHelper.LOCALE_SYSTEM));
         }
@@ -6726,15 +8919,18 @@ public class MainActivity extends Activity {
             if (RowKeys.SOULSEEK_ACCOUNT.equals(rowKey)) {
                 return SoulseekAccount.displayLabel(SoulseekAccount.load(prefs));
             }
-            if (RowKeys.SOULSEEK_SEARCH.equals(rowKey)) return getString(R.string.soulseek_preview_search);
-            if (RowKeys.SOULSEEK_CONNECTION.equals(rowKey)) return soulseekSharingStatusLabel();
-            if (RowKeys.SOULSEEK_ABOUT.equals(rowKey)) return getString(R.string.soulseek_preview_about);
-            if (RowKeys.SOULSEEK_REGENERATE.equals(rowKey)) return getString(R.string.soulseek_preview_regenerate);
             if (RowKeys.SOULSEEK_HIDE_HIGH_BITRATE.equals(rowKey)) return stateOnOff(soulseekHideHighBitrate);
             if (RowKeys.SOULSEEK_SHARING.equals(rowKey)) return stateOnOff(soulseekSharingEnabled);
+            if (RowKeys.SOULSEEK_REACH_ENABLED.equals(rowKey)) return stateOnOff(soulseekReachEnabled);
+            if (RowKeys.SOULSEEK_INCLUDE_GET_MUSIC.equals(rowKey)) return stateOnOff(soulseekIncludeInGetMusic);
+            if (RowKeys.SOULSEEK_MESSAGING.equals(rowKey)) return stateOnOff(soulseekMessagingEnabled);
         }
         if (RowKeys.SOULSEEK_ACCOUNT.equals(rowKey) && SettingsScreens.isSoulseek(settingsSubScreenKey)) {
             return SoulseekAccount.displayLabel(SoulseekAccount.load(prefs));
+        }
+        if (SettingsScreens.DEEZER.equals(settingsSubScreenKey)) {
+            if (RowKeys.DEEZER_ENABLED.equals(rowKey)) return stateOnOff(deezerEnabled);
+            if (RowKeys.DEEZER_INCLUDE_GET_MUSIC.equals(rowKey)) return stateOnOff(deezerIncludeInGetMusic);
         }
         if (RowKeys.DT_YEAR.equals(rowKey)) return String.valueOf(dtYear);
         if (RowKeys.DT_MONTH.equals(rowKey)) return String.format(Locale.US, "%02d", dtMonth);
@@ -6765,6 +8961,147 @@ public class MainActivity extends Activity {
         // ponytail: Reach blurb only in Reach settings sub-panes — home preview uses appReach icon
         if (RowKeys.SOULSEEK.equals(rowKey)) return "";
         return "";
+    }
+
+    private String resolveSoulseekSettingsPreviewText(String rowKey) {
+        if (!SettingsScreens.isSoulseek(settingsSubScreenKey) || rowKey == null) return null;
+        if (SettingsScreens.SOULSEEK.equals(settingsSubScreenKey)) {
+            if (RowKeys.SOULSEEK_REACH_ENABLED.equals(rowKey)) {
+                if (!soulseekReachEnabled) {
+                    return getString(R.string.soulseek_reach_disabled_hint);
+                }
+                return getString(R.string.soulseek_reach_enabled) + "\n\n" + stateOnOff(true);
+            }
+            if (RowKeys.SOULSEEK_INCLUDE_GET_MUSIC.equals(rowKey)) {
+                return getString(R.string.get_music_include_reach_hint) + "\n\n"
+                        + stateOnOff(soulseekIncludeInGetMusic);
+            }
+            if (RowKeys.SOULSEEK_SHARING.equals(rowKey)) {
+                return getString(R.string.soulseek_sharing_hint) + "\n\n" + stateOnOff(soulseekSharingEnabled);
+            }
+            if (RowKeys.SOULSEEK_MESSAGING.equals(rowKey)) {
+                String hint = getString(R.string.soulseek_messaging_hint);
+                if (soulseekMessagingEnabled) {
+                    SoulseekAccount acct = SoulseekAccount.load(prefs);
+                    return hint + "\n\n" + acct.username;
+                }
+                return hint + "\n\n" + stateOnOff(false);
+            }
+            if (RowKeys.SOULSEEK_SEARCH.equals(rowKey)) {
+                if (!ConnectivityHelper.isReachPeerOk()
+                        && ReachPeerConnectivity.state()
+                                == ReachPeerConnectivity.State.UNAVAILABLE) {
+                    return getString(R.string.reach_unavailable_settings_hint);
+                }
+                return getString(R.string.soulseek_preview_search);
+            }
+            if (RowKeys.SOULSEEK_CONNECTION.equals(rowKey)) {
+                String base = soulseekListenPortLabel()
+                        + "\n\n" + soulseekNatStatusLabel();
+                if (!ConnectivityHelper.isReachPeerOk()
+                        && ReachPeerConnectivity.state()
+                                == ReachPeerConnectivity.State.UNAVAILABLE) {
+                    return base + "\n\n" + reachUnavailableDetailText(ReachPeerConnectivity.reason())
+                            + "\n\n" + getString(R.string.reach_unavailable_server_ok);
+                }
+                return soulseekSharingStatusLabel()
+                        + "\n\n" + base
+                        + "\n\n" + getString(R.string.soulseek_port_forward_hint);
+            }
+            if (RowKeys.SOULSEEK_ABOUT.equals(rowKey)) {
+                return getString(R.string.reach_for_device, DeviceFeatures.deviceModelLabel())
+                        + " — Soulseek client. Account and sharing notes.";
+            }
+            if (RowKeys.SOULSEEK_REGENERATE.equals(rowKey)) {
+                return getString(R.string.soulseek_preview_regenerate);
+            }
+            if (RowKeys.SOULSEEK_FIND_USER.equals(rowKey)) {
+                return getString(R.string.soulseek_find_user);
+            }
+            if (RowKeys.SOULSEEK_FIND_REACH.equals(rowKey)) {
+                return getString(R.string.soulseek_find_reach_users);
+            }
+            if (RowKeys.SOULSEEK_MESSAGES.equals(rowKey)) {
+                java.util.List<String> peers = SoulseekMessaging.conversationPeers(MainActivity.this, prefs);
+                if (peers.isEmpty()) {
+                    return getString(R.string.soulseek_messages_empty_hint);
+                }
+                return getString(R.string.soulseek_messages_inbox_hint, peers.size());
+            }
+            if (RowKeys.SOULSEEK_HIDE_HIGH_BITRATE.equals(rowKey)) {
+                return stateOnOff(soulseekHideHighBitrate);
+            }
+            if (RowKeys.SOULSEEK_ACCOUNT.equals(rowKey)) {
+                return getString(R.string.soulseek_account_hint)
+                        + "\n\n" + SoulseekAccount.displayLabel(SoulseekAccount.load(prefs));
+            }
+        }
+        return null;
+    }
+
+    private void updateSoulseekConnectionInfoPreview() {
+        if (isFullWidthMenus || tvSettingsPreviewTitle == null) return;
+        tvSettingsPreviewTitle.setVisibility(View.VISIBLE);
+        tvSettingsPreviewTitle.setText(getString(R.string.soulseek_menu_connection));
+        tvSettingsPreviewTitle.setSelected(true);
+        enableMarquee(tvSettingsPreviewTitle);
+        ThemeManager.applyThemedTextStyle(tvSettingsPreviewTitle, ThemeManager.getSettingMenuTextColorSelected());
+        if (storagePieView != null) storagePieView.setVisibility(View.GONE);
+        if (ivSettingsPreviewIcon != null) ivSettingsPreviewIcon.setVisibility(View.GONE);
+        String text = getString(R.string.soulseek_info_device_ip, formatWifiIpAddress())
+                + "\n\n" + soulseekListenPortLabel()
+                + "\n\n" + soulseekNatStatusLabel()
+                + "\n\n" + soulseekSharingStatusLabel()
+                + "\n\n" + getString(R.string.soulseek_sharing_hint)
+                + "\n\n" + getString(R.string.soulseek_port_forward_hint)
+                + "\n\n" + getString(R.string.soulseek_info_nat_note);
+        applySettingsPreviewStateText(text, true);
+        ThemeManager.applyThemedTextStyle(tvSettingsPreviewState, ThemeManager.getTextColorPrimary());
+    }
+
+    private void updateSoulseekAboutInfoPreview() {
+        if (isFullWidthMenus || tvSettingsPreviewTitle == null) return;
+        tvSettingsPreviewTitle.setVisibility(View.VISIBLE);
+        tvSettingsPreviewTitle.setText(getString(R.string.soulseek_menu_about));
+        tvSettingsPreviewTitle.setSelected(true);
+        enableMarquee(tvSettingsPreviewTitle);
+        ThemeManager.applyThemedTextStyle(tvSettingsPreviewTitle, ThemeManager.getSettingMenuTextColorSelected());
+        if (storagePieView != null) storagePieView.setVisibility(View.GONE);
+        if (ivSettingsPreviewIcon != null) ivSettingsPreviewIcon.setVisibility(View.GONE);
+        String text = getString(R.string.soulseek_account_hint)
+                + "\n\n" + getString(R.string.soulseek_download_only_note);
+        applySettingsPreviewStateText(text, true);
+        ThemeManager.applyThemedTextStyle(tvSettingsPreviewState, ThemeManager.getTextColorPrimary());
+    }
+
+    private void updateSoulseekMessagesListPreview() {
+        if (isFullWidthMenus || settingsBrowseFullWidth || tvSettingsPreviewTitle == null) return;
+        tvSettingsPreviewTitle.setVisibility(View.VISIBLE);
+        tvSettingsPreviewTitle.setText(getString(R.string.soulseek_messages));
+        tvSettingsPreviewTitle.setSelected(true);
+        enableMarquee(tvSettingsPreviewTitle);
+        ThemeManager.applyThemedTextStyle(tvSettingsPreviewTitle, ThemeManager.getSettingMenuTextColorSelected());
+        if (storagePieView != null) storagePieView.setVisibility(View.GONE);
+        if (ivSettingsPreviewIcon != null) ivSettingsPreviewIcon.setVisibility(View.GONE);
+        java.util.List<String> peers = SoulseekMessaging.conversationPeers(MainActivity.this, prefs);
+        String text = peers.isEmpty()
+                ? getString(R.string.soulseek_messages_empty_hint)
+                : getString(R.string.soulseek_messages_inbox_hint, peers.size());
+        applySettingsPreviewStateText(text, true);
+        ThemeManager.applyThemedTextStyle(tvSettingsPreviewState, ThemeManager.getTextColorPrimary());
+    }
+
+    private void bindSoulseekSubscreenBackPreview(Button btnBack, final Runnable previewUpdater) {
+        if (btnBack == null || previewUpdater == null) return;
+        btnBack.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override
+            public void onFocusChange(View v, boolean hasFocus) {
+                if (hasFocus && currentScreenState == STATE_SETTINGS && !isFullWidthMenus
+                        && !settingsBrowseFullWidth) {
+                    previewUpdater.run();
+                }
+            }
+        });
     }
 
     private String homeShortcutConnectivityHint(String id) {
@@ -6807,6 +9144,27 @@ public class MainActivity extends Activity {
 
     private String stateOnOff(boolean on) {
         return getString(on ? R.string.common_on : R.string.common_off);
+    }
+
+    private boolean isOnOffToggleRow(String rowKey) {
+        if (rowKey == null) return false;
+        String state = resolveSettingStateText(rowKey);
+        return getString(R.string.common_on).equals(state)
+                || getString(R.string.common_off).equals(state);
+    }
+
+    private void applyToggleMarkStyle(TextView tv, String rowKey, boolean rowFocused) {
+        if (tv == null || rowKey == null) return;
+        String state = resolveSettingStateText(rowKey);
+        boolean on = getString(R.string.common_on).equals(state);
+        tv.setText(getString(on ? R.string.common_check : R.string.common_cross));
+        tv.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
+        tv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                getResources().getDimension(R.dimen.y1_menu_text_size));
+        ThemeManager.applyThemedTextStyle(tv, on
+                ? (rowFocused ? ThemeManager.getSettingMenuTextColorSelected()
+                        : ThemeManager.getSettingMenuTextColorNormal())
+                : ThemeManager.getTextColorSecondary());
     }
 
     private LinearLayout createSettingRow(String rowKey, int labelResId, CharSequence rightText, String iconKey) {
@@ -6911,7 +9269,7 @@ public class MainActivity extends Activity {
     private void updateSettingsPreview(String rowKey) {
         if (tvSettingsPreviewTitle == null) return;
         if (isThemeGalleryActive() || isThemeVariantPickerActive()) return;
-        if (isFullWidthMenus) {
+        if (isFullWidthMenus || settingsBrowseFullWidth) {
             if (rowKey != null && rowKey.startsWith("home.shortcut.")
                     && SettingsScreens.isHome(settingsSubScreenKey)) {
                 View focused = getCurrentFocus();
@@ -6937,10 +9295,11 @@ public class MainActivity extends Activity {
                     storagePieView.setUsedFraction(used / (float) total);
                 }
                 if (tvSettingsPreviewState != null) {
-                    tvSettingsPreviewState.setText(formatStorageLines(total, used, avail));
+                    applySettingsPreviewStateText(formatStorageLines(total, used, avail), false);
+                    ThemeManager.applyThemedTextStyle(tvSettingsPreviewState, ThemeManager.getTextColorPrimary());
                 }
             } catch (Exception e) {
-                if (tvSettingsPreviewState != null) tvSettingsPreviewState.setText("");
+                if (tvSettingsPreviewState != null) applySettingsPreviewStateText("", false);
             }
             return;
         }
@@ -7000,12 +9359,28 @@ public class MainActivity extends Activity {
                         : desc;
             }
         }
-        if (tvSettingsPreviewState != null) {
-            tvSettingsPreviewState.setText(stateText != null ? stateText : "");
-            ThemeManager.applyThemedTextStyle(tvSettingsPreviewState, ThemeManager.getTextColorPrimary());
-            tvSettingsPreviewState.setVisibility(stateText != null && !stateText.isEmpty()
-                    ? View.VISIBLE : View.GONE);
+        String soulseekPreview = resolveSoulseekSettingsPreviewText(rowKey);
+        if (soulseekPreview != null) {
+            stateText = soulseekPreview;
         }
+        String deezerPreview = resolveDeezerSettingsPreviewText(rowKey);
+        if (deezerPreview != null) {
+            stateText = deezerPreview;
+        }
+        boolean verticalMarquee = SettingsScreens.isSoulseek(settingsSubScreenKey);
+        if (tvSettingsPreviewState != null) {
+            applySettingsPreviewStateText(stateText != null ? stateText : "", verticalMarquee);
+            ThemeManager.applyThemedTextStyle(tvSettingsPreviewState, ThemeManager.getTextColorPrimary());
+        }
+    }
+
+    private String resolveDeezerSettingsPreviewText(String rowKey) {
+        if (!SettingsScreens.DEEZER.equals(settingsSubScreenKey) || rowKey == null) return null;
+        if (RowKeys.DEEZER_INCLUDE_GET_MUSIC.equals(rowKey)) {
+            return getString(R.string.get_music_include_deezer_hint) + "\n\n"
+                    + stateOnOff(deezerIncludeInGetMusic);
+        }
+        return null;
     }
 
     private String formatStorageLines(long total, long used, long avail) {
@@ -7268,6 +9643,22 @@ public class MainActivity extends Activity {
 
     /** Wheel up/down in settings lists — walks {@link #containerSettingsItems} rows directly. */
     private boolean moveSettingsListFocus(int delta) {
+        // #region agent log
+        if (isConversationThreadActive()) {
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("delta", delta);
+                d.put("settingsItems", containerSettingsItems != null
+                        ? containerSettingsItems.getChildCount() : -1);
+                View foc = getCurrentFocus();
+                d.put("focusClass", foc != null ? foc.getClass().getSimpleName() : "null");
+                d.put("listSel", listConversationThread.getSelectedItemPosition());
+                d.put("listHasFocus", listConversationThread.hasFocus());
+                DebugAgentLog.log(this, "MainActivity.moveSettingsListFocus",
+                        "wheel during conversation", "H3-H5", d);
+            } catch (Exception ignored) {}
+        }
+        // #endregion
         if (containerSettingsItems == null || delta == 0) return false;
         View focused = getCurrentFocus();
         int currentIdx = -1;
@@ -7321,6 +9712,7 @@ public class MainActivity extends Activity {
             case STATE_BROWSER:
             case STATE_PODCASTS:
             case STATE_SOULSEEK:
+            case STATE_DEEZER:
             case STATE_APPS:
             case STATE_MORE:
                 if (layoutBrowserMode == null || layoutBrowserMode.getVisibility() != View.VISIBLE) {
@@ -7336,6 +9728,13 @@ public class MainActivity extends Activity {
                 return isViewDescendantOf(focused, layoutBrowserMode);
             default:
                 return true;
+        }
+    }
+
+    private void scrollBrowserRowIntoView(View row, ViewGroup parent) {
+        if (row == null || parent != containerBrowserItems || scrollViewBrowser == null) return;
+        if (scrollViewBrowser instanceof android.widget.ScrollView) {
+            FocusScrollHelper.scrollToChildBottom((android.widget.ScrollView) scrollViewBrowser, row);
         }
     }
 
@@ -7892,6 +10291,24 @@ public class MainActivity extends Activity {
                 || zone == ThemedContextMenu.FocusZone.OPTIONS_TITLE;
     }
 
+    private static boolean isReachContextTier(String tier) {
+        return "reach_msg".equals(tier) || "reach_inbox".equals(tier)
+                || "reach_peer".equals(tier) || "reach_react".equals(tier)
+                || "reach_pm".equals(tier);
+    }
+
+    /** Pop one Reach sub-tier (react → message → root). */
+    private void popReachContextTier() {
+        if (contextMenuTierStack.size() > 1) {
+            contextMenuTierStack.removeLast();
+        }
+        restoreContextMenuTierState(true);
+        if (themedContextMenu != null) {
+            themedContextMenu.setSubmenuTierOpen(!CONTEXT_NAV_ROOT.equals(contextMenuTopTier()));
+            themedContextMenu.requestOverlayFocus();
+        }
+    }
+
     /** A tab tier is open (wifi / bt / queue) — not the root action list. */
     private boolean hasContextActiveTier() {
         if (contextMenuInQueueTier) return true;
@@ -7904,6 +10321,8 @@ public class MainActivity extends Activity {
         if (themedContextMenu == null) return;
         if (contextMenuInQueueTier) {
             leaveContextQueueListFocus();
+        } else if (isReachContextTier(contextMenuTopTier())) {
+            popReachContextTier();
         } else {
             deactivateContextNetworkTier();
             themedContextMenu.focusQuickBarAtReturn();
@@ -7935,6 +10354,7 @@ public class MainActivity extends Activity {
         if (themedContextMenu != null) {
             themedContextMenu.exitMediaSliderTab();
             themedContextMenu.setSubmenuTierOpen(false);
+            themedContextMenu.setScrollableDetailHeader(false);
         }
         restoreContextMenuRootOptions(true);
     }
@@ -7959,6 +10379,26 @@ public class MainActivity extends Activity {
         }
         if ("bt".equals(tier)) {
             refreshContextBluetoothTier(focusList);
+            return;
+        }
+        if ("reach_msg".equals(tier)) {
+            rebuildContextReachMessageTier(focusList);
+            return;
+        }
+        if ("reach_inbox".equals(tier)) {
+            rebuildContextReachInboxTier(focusList);
+            return;
+        }
+        if ("reach_peer".equals(tier)) {
+            rebuildContextReachPeerTier(focusList);
+            return;
+        }
+        if ("reach_react".equals(tier)) {
+            rebuildContextReachReactTier(focusList);
+            return;
+        }
+        if ("reach_pm".equals(tier)) {
+            rebuildContextReachPmTier(focusList);
             return;
         }
         restoreContextMenuRootOptions(focusList);
@@ -8126,12 +10566,12 @@ public class MainActivity extends Activity {
         actions.add(new Runnable() {
             @Override public void run() {
                 toggleWifiFromContextMenu();
-                refreshContextWifiTier(false);
+                refreshContextWifiTierImmediate(false, true);
             }
         });
 
         final String focusedSsid = wifiContextSsidFromLabel(focusLabel);
-        if (focusedSsid != null && isWifiNetworkSaved(focusedSsid)) {
+        if (isWifiPowerOn() && focusedSsid != null && isWifiNetworkSaved(focusedSsid)) {
             headers.add(Boolean.FALSE);
             labels.add(getString(R.string.context_action_forget_wifi));
             states.add(focusedSsid);
@@ -8144,7 +10584,7 @@ public class MainActivity extends Activity {
             });
         }
 
-        if (!connected.isEmpty()) {
+        if (isWifiPowerOn() && !connected.isEmpty()) {
             headers.add(Boolean.TRUE);
             labels.add(getString(R.string.context_wifi_connected));
             states.add(null);
@@ -8164,7 +10604,7 @@ public class MainActivity extends Activity {
             }
         }
 
-        if (!scanned.isEmpty()) {
+        if (isWifiPowerOn() && !scanned.isEmpty()) {
             headers.add(Boolean.TRUE);
             labels.add(getString(R.string.status_wifi_networks));
             states.add(null);
@@ -8552,19 +10992,27 @@ public class MainActivity extends Activity {
             }
         } else if (item.kind == PlayQueue.ItemKind.REACH_STREAM) {
             base = item.reachMeta != null ? item.reachMeta : getString(R.string.status_soulseek);
+        } else if (item.kind == PlayQueue.ItemKind.DEEZER_STREAM) {
+            base = item.deezerMeta != null ? item.deezerMeta : getString(R.string.status_deezer);
         } else if (item.kind == PlayQueue.ItemKind.PODCAST_EPISODE && item.episode != null) {
             base = item.episode.title;
         } else {
             base = "";
         }
-        return maybePrefixReachDownloadProgress(item, base);
+        return maybePrefixStreamDownloadProgress(item, base);
+    }
+
+    private String maybePrefixStreamDownloadProgress(PlayQueue.QueueItem item, String base) {
+        if (item == null || item.file == null || base == null) return base != null ? base : "";
+        if (item.kind != PlayQueue.ItemKind.REACH_STREAM
+                && item.kind != PlayQueue.ItemKind.DEEZER_STREAM
+                && !isStreamTempFile(item.file)) return base;
+        int pct = streamDownloadPercentForFile(item.file);
+        return reachProgressPrefix(pct) + stripReachProgressPrefix(base);
     }
 
     private String maybePrefixReachDownloadProgress(PlayQueue.QueueItem item, String base) {
-        if (item == null || item.file == null || base == null) return base != null ? base : "";
-        if (item.kind != PlayQueue.ItemKind.REACH_STREAM && !isReachTempFile(item.file)) return base;
-        int pct = reachDownloadPercentForFile(item.file);
-        return reachProgressPrefix(pct) + stripReachProgressPrefix(base);
+        return maybePrefixStreamDownloadProgress(item, base);
     }
 
     private String reachProgressPrefix(int pct) {
@@ -8582,6 +11030,32 @@ public class MainActivity extends Activity {
             return title.substring(close + 2);
         }
         return title;
+    }
+
+    private int streamDownloadPercentForFile(File file) {
+        if (file == null) return -1;
+        if (DeezerCache.isTempFile(getCacheDir(), file)) {
+            if (isActiveReachDownloadFile(file)) {
+                if (deezerActiveDownloadPercent >= 0) {
+                    return Math.min(100, deezerActiveDownloadPercent);
+                }
+                if (deezerScreen != null && deezerScreen.isDownloadActive()
+                        && deezerScreen.growingFile() != null
+                        && file.equals(deezerScreen.growingFile())) {
+                    return Math.min(100, deezerScreen.downloadPercent());
+                }
+            }
+            if (reachGrowingCacheFile != null && file.equals(reachGrowingCacheFile)
+                    && reachGrowingTotalBytes > 0) {
+                int pct = (int) (reachGrowingCacheFile.length() * 100 / reachGrowingTotalBytes);
+                return Math.min(100, pct);
+            }
+        }
+        return reachDownloadPercentForFile(file);
+    }
+
+    private boolean isStreamTempFile(File file) {
+        return isReachTempFile(file) || DeezerCache.isTempFile(getCacheDir(), file);
     }
 
     private int reachDownloadPercentForFile(File file) {
@@ -8608,10 +11082,15 @@ public class MainActivity extends Activity {
     private boolean isActiveReachDownloadFile(File file) {
         if (file == null || !reachDownloadInProgress()) return false;
         if (reachGrowingCacheFile != null && file.equals(reachGrowingCacheFile)) return true;
+        if (deezerActiveGrowingFile != null && file.equals(deezerActiveGrowingFile)) return true;
         return reachQueuePartialFile != null && file.equals(reachQueuePartialFile);
     }
 
     private void refreshReachProgressUi() {
+        refreshStreamProgressUi();
+    }
+
+    private void refreshStreamProgressUi() {
         refreshReachPlayerTitleProgress();
         refreshContextQueueTierIfOpen();
         refreshNowPlayingPreview();
@@ -8621,12 +11100,16 @@ public class MainActivity extends Activity {
         if (tvPlayerTitle == null) return;
         PlayQueue.QueueItem cur = playback.currentItem();
         if (cur == null || cur.file == null) return;
-        if (cur.kind != PlayQueue.ItemKind.REACH_STREAM && !isReachTempFile(cur.file)) return;
-        int pct = reachDownloadPercentForFile(cur.file);
+        if (cur.kind != PlayQueue.ItemKind.REACH_STREAM
+                && cur.kind != PlayQueue.ItemKind.DEEZER_STREAM
+                && !isStreamTempFile(cur.file)) return;
+        int pct = streamDownloadPercentForFile(cur.file);
         if (pct < 0 && !reachPartialPlaybackStarted) return;
         String base = stripReachProgressPrefix(tvPlayerTitle.getText().toString());
         if (base.isEmpty()) {
-            if (cur.reachMeta != null && !cur.reachMeta.isEmpty()) base = cur.reachMeta;
+            if (cur.kind == PlayQueue.ItemKind.DEEZER_STREAM && cur.deezerMeta != null
+                    && !cur.deezerMeta.isEmpty()) base = cur.deezerMeta;
+            else if (cur.reachMeta != null && !cur.reachMeta.isEmpty()) base = cur.reachMeta;
             else {
                 String n = cur.file.getName();
                 int dot = n.lastIndexOf('.');
@@ -8646,6 +11129,12 @@ public class MainActivity extends Activity {
             return getString(R.string.home_menu_music);
         }
         if (item.kind == PlayQueue.ItemKind.REACH_STREAM) return getString(R.string.status_soulseek);
+        if (item.kind == PlayQueue.ItemKind.DEEZER_STREAM) {
+            int pct = item.file != null ? streamDownloadPercentForFile(item.file) : -1;
+            if (pct >= 0 && pct < 100) return getString(R.string.deezer_downloading, pct);
+            if (item.deezerMeta != null && item.deezerMeta.length() > 0) return item.deezerMeta;
+            return getString(R.string.status_deezer);
+        }
         if (item.kind == PlayQueue.ItemKind.PODCAST_EPISODE) {
             return item.podcastShowTitle != null ? item.podcastShowTitle : getString(R.string.home_menu_podcasts);
         }
@@ -9311,8 +11800,7 @@ public class MainActivity extends Activity {
             String connected = info != null && info.getSSID() != null ? info.getSSID().replace("\"", "") : "";
             if (ssid != null && ssid.equals(connected)) return "ON";
         } catch (Exception ignored) {}
-        boolean secure = capabilities != null && !isWifiNetworkOpen(capabilities);
-        return secure ? "Secured" : "Open";
+        return "";
     }
 
     private BluetoothDevice bluetoothDeviceByAddress(String addr) {
@@ -9368,6 +11856,7 @@ public class MainActivity extends Activity {
         }
         contextMenuInVolumeSlider = false;
         if (themedContextMenu != null) themedContextMenu.exitMediaSliderTab();
+        themedContextMenu.setScrollableDetailHeader(isReachContextTier(contextMenuTopTier()));
         themedContextMenu.replaceListContent(title, arr, icons, states, headerFlags,
                 new ThemedContextMenu.Listener() {
                     @Override
@@ -9590,6 +12079,7 @@ public class MainActivity extends Activity {
             themedContextMenu.focusOptionsList();
         }
         contextMenuOpenedAtMs = System.currentTimeMillis();
+        maybeAutoOpenReachContextTier();
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
@@ -9650,7 +12140,7 @@ public class MainActivity extends Activity {
                 addContextAction(getString(R.string.context_action_open_reach), new Runnable() {
                     @Override
                     public void run() {
-                        openSoulseekScreen();
+                        openGetMusicScreen();
                     }
                 });
             } else if (HomeMenuConfig.ID_APPS.equals(homeId)) {
@@ -9708,11 +12198,31 @@ public class MainActivity extends Activity {
             });
             if (!playback.musicPlaylist().isEmpty()) {
                 final File currentTrack = playback.musicPlaylist().get(playback.musicIndex());
-                if (ReachCache.isTempFile(getCacheDir(), currentTrack)) {
+                PlayQueue.QueueItem curItem = playback.currentItem();
+                if (curItem != null && curItem.kind == PlayQueue.ItemKind.REACH_STREAM
+                        && ReachCache.isTempFile(getCacheDir(), currentTrack)) {
+                    final String thankPeer = resolveReachPeerForFile(currentTrack);
+                    final String thankTitle = resolveReachTitleForFile(currentTrack);
+                    if (thankPeer != null && !thankPeer.isEmpty()) {
+                        addContextAction(getString(R.string.soulseek_save_and_thanks), new Runnable() {
+                            @Override
+                            public void run() {
+                                saveReachTrackToLibraryWithThanks(currentTrack, thankPeer, thankTitle);
+                            }
+                        });
+                    }
                     addContextAction(getString(R.string.soulseek_add_to_library), new Runnable() {
                         @Override
                         public void run() {
                             saveReachTrackToLibrary(currentTrack);
+                        }
+                    });
+                } else if (curItem != null && curItem.kind == PlayQueue.ItemKind.DEEZER_STREAM
+                        && DeezerCache.isTempFile(getCacheDir(), currentTrack)) {
+                    addContextAction(getString(R.string.soulseek_add_to_library), new Runnable() {
+                        @Override
+                        public void run() {
+                            saveStreamTrackToLibrary(currentTrack);
                         }
                     });
                 }
@@ -10028,12 +12538,66 @@ public class MainActivity extends Activity {
                 addContextAction(getString(R.string.soulseek_new_search_with, recent), new Runnable() {
                     @Override
                     public void run() {
-                        openSoulseekSearchKeyboard(recent);
+                        if (isGetMusicMultiSource()) {
+                            openGetMusicSearchKeyboard(recent);
+                        } else {
+                            openSoulseekSearchKeyboard(recent);
+                        }
                     }
                 });
             }
         }
         if (currentScreenState == STATE_SOULSEEK && soulseekUiMode == SOULSEEK_UI_RESULTS) {
+            if (isGetMusicMultiSource()) {
+                final MusicSearchEntry entry = getMusicFocusedEntry();
+                if (entry != null && entry.source == MusicSearchEntry.Source.DEEZER && entry.deezer != null) {
+                    final DeezerResult dr = entry.deezer;
+                    addContextAction(getString(R.string.deezer_play), new Runnable() {
+                        @Override public void run() {
+                            startGetMusicDeezerTransfer(dr, DeezerScreen.ACTION_PLAY);
+                        }
+                    });
+                    addContextAction(getString(R.string.deezer_save), new Runnable() {
+                        @Override public void run() {
+                            startGetMusicDeezerTransfer(dr, DeezerScreen.ACTION_SAVE);
+                        }
+                    });
+                    addContextAction(getString(R.string.deezer_add_to_queue), new Runnable() {
+                        @Override public void run() {
+                            startGetMusicDeezerTransfer(dr, DeezerScreen.ACTION_QUEUE);
+                        }
+                    });
+                } else if (entry != null && entry.reach != null) {
+                    final SoulseekClient.Result r = entry.reach;
+                    addContextAction(getString(R.string.soulseek_play), new Runnable() {
+                        @Override public void run() {
+                            startSoulseekTransfer(r, SOULSEEK_ACTION_PLAY);
+                        }
+                    });
+                    addContextAction(getString(R.string.soulseek_save), new Runnable() {
+                        @Override public void run() {
+                            startSoulseekTransfer(r, SOULSEEK_ACTION_SAVE);
+                        }
+                    });
+                    addContextAction(getString(R.string.soulseek_add_to_queue), new Runnable() {
+                        @Override public void run() {
+                            startSoulseekTransfer(r, SOULSEEK_ACTION_QUEUE);
+                        }
+                    });
+                    final String resultPeer = r.username;
+                    addContextAction(getString(R.string.soulseek_view_profile), new Runnable() {
+                        @Override public void run() {
+                            dismissThemedContextMenu();
+                            openSoulseekUserProfile(resultPeer, new Runnable() {
+                                @Override public void run() {
+                                    changeScreen(STATE_SOULSEEK);
+                                    buildGetMusicResultsUI();
+                                }
+                            });
+                        }
+                    });
+                }
+            } else {
             final SoulseekClient.Result r = soulseekFocusedResult();
             if (r != null) {
                 addContextAction(getString(R.string.soulseek_play), new Runnable() {
@@ -10052,6 +12616,20 @@ public class MainActivity extends Activity {
                     @Override
                     public void run() {
                         startSoulseekTransfer(r, SOULSEEK_ACTION_QUEUE);
+                    }
+                });
+                final String resultPeer = r.username;
+                addContextAction(getString(R.string.soulseek_view_profile), new Runnable() {
+                    @Override
+                    public void run() {
+                        dismissThemedContextMenu();
+                        openSoulseekUserProfile(resultPeer, new Runnable() {
+                            @Override
+                            public void run() {
+                                changeScreen(STATE_SOULSEEK);
+                                buildSoulseekResultsUI();
+                            }
+                        });
                     }
                 });
                 addContextSectionHeader(getString(R.string.soulseek_find_more));
@@ -10079,12 +12657,17 @@ public class MainActivity extends Activity {
                     }
                 });
             }
+            }
         }
         if (currentScreenState == STATE_SOULSEEK && soulseekUiMode == SOULSEEK_UI_DOWNLOAD) {
             addContextAction(getString(R.string.context_action_cancel_download), new Runnable() {
                 @Override
                 public void run() {
-                    cancelSoulseekDownload();
+                    if (getMusicEmbeddedInDeezer && deezerScreen != null && deezerScreen.isDownloadActive()) {
+                        deezerScreen.handleBackPress();
+                    } else {
+                        cancelSoulseekDownload();
+                    }
                 }
             });
         }
@@ -10209,8 +12792,15 @@ public class MainActivity extends Activity {
     }
 
     private void queueReachTrackAfterCurrent(File track, String meta) {
+        queueReachTrackAfterCurrent(track, meta, null);
+    }
+
+    private void queueReachTrackAfterCurrent(File track, String meta, String peer) {
         if (track == null || !track.isFile()) return;
-        playback.queueReachAfterCurrent(track, meta != null ? meta : track.getName());
+        playback.queueReachAfterCurrent(track, meta != null ? meta : track.getName(), peer);
+        if (peer != null && !peer.isEmpty()) {
+            ReachTrackProvenance.record(prefs, track.getAbsolutePath(), peer);
+        }
         persistPlaybackQueue();
         refreshContextQueueTierIfOpen();
         refreshReachProgressUi();
@@ -10387,6 +12977,160 @@ public class MainActivity extends Activity {
         clickFeedback();
     }
 
+    private boolean isSoulseekSharingRejectionMessage(String text) {
+        if (text == null || text.isEmpty()) return false;
+        String lower = text.toLowerCase(Locale.US);
+        return lower.contains("not sharing") || lower.contains("not shared")
+                || lower.contains("upload denied") || lower.contains("share")
+                || lower.contains("files");
+    }
+
+    private void showReachDownloadMessageInterstitial(final String peer, final String messageText) {
+        dismissThemedContextMenu();
+        String body = messageText != null ? messageText : "";
+        if (isSoulseekSharingRejectionMessage(body)
+                || isSoulseekSharingRejectionMessage(soulseekDownloadFailureReason)) {
+            body = body + "\n\n" + getString(R.string.soulseek_sharing_reciprocity_hint);
+        }
+        final SoulseekClient.Result active = soulseekActiveDownload;
+        final int pendingAction = soulseekPendingAction;
+        String[] labels = active != null
+                ? new String[] {
+                    getString(R.string.soulseek_pm_open_conversation),
+                    getString(R.string.soulseek_pm_dismiss),
+                    getString(R.string.soulseek_pm_retry_download)
+                }
+                : new String[] {
+                    getString(R.string.soulseek_pm_open_conversation),
+                    getString(R.string.soulseek_pm_dismiss)
+                };
+        ViewGroup root = (ViewGroup) findViewById(android.R.id.content);
+        int margin = (int) (10 * getResources().getDisplayMetrics().density);
+        int panelW = screenWidthPx > margin * 2 ? screenWidthPx - margin * 2 : y1ActiveRowWidthPx();
+        themedContextMenu.show(root, peer, body, labels, null, null,
+                new boolean[labels.length],
+                new ThemedContextMenu.Listener() {
+                    @Override
+                    public void onSelected(final int index) {
+                        suppressListClickUntil = System.currentTimeMillis() + CONTEXT_MENU_CLICK_SUPPRESS_MS;
+                        dismissThemedContextMenu();
+                        if (index == 0) {
+                            clickFeedback();
+                            soulseekMessagePeer = peer;
+                            buildSoulseekConversationUI(peer);
+                        } else if (index == 2 && active != null) {
+                            clickFeedback();
+                            startSoulseekTransfer(active, pendingAction > 0
+                                    ? pendingAction : SOULSEEK_ACTION_PLAY);
+                        }
+                    }
+                }, y1RowHeightPx, panelW, false, true);
+        clickFeedback();
+    }
+
+    private void watchSoulseekPeer(final String username) {
+        if (username == null || username.trim().isEmpty()) return;
+        final String key = username.trim().toLowerCase(Locale.US);
+        if (soulseekPeerCountry.containsKey(key)) {
+            return;
+        }
+        synchronized (soulseekPeerWatchInFlight) {
+            if (soulseekPeerWatchInFlight.contains(key)) {
+                return;
+            }
+            soulseekPeerWatchInFlight.add(key);
+        }
+        ReachDbExecutor.run(new Runnable() {
+            @Override
+            public void run() {
+                ReachDatabase.PeerCacheEntry cached =
+                        ReachDatabase.getInstance(MainActivity.this).getPeerCacheSync(key);
+                if (cached != null && cached.isFresh()) {
+                    if (cached.country != null && !cached.country.isEmpty()) {
+                        soulseekPeerCountry.put(key, cached.country);
+                    }
+                    soulseekPeerSharedFiles.put(key, cached.files);
+                    synchronized (soulseekPeerWatchInFlight) {
+                        soulseekPeerWatchInFlight.remove(key);
+                    }
+                    return;
+                }
+                SoulseekUserDirectory.watch(ensureSoulseekClient(), username,
+                        new SoulseekUserDirectory.Callback() {
+                    @Override
+                    public void onUserInfo(SoulseekUserDirectory.UserInfo info) {
+                        synchronized (soulseekPeerWatchInFlight) {
+                            soulseekPeerWatchInFlight.remove(key);
+                        }
+                        if (info == null) return;
+                        soulseekPeerSharedFiles.put(key, info.files);
+                        if (info.country != null && !info.country.isEmpty()) {
+                            soulseekPeerCountry.put(key, info.country);
+                        }
+                        ReachDatabase.getInstance(MainActivity.this).putPeerCache(
+                                username, info.country, info.files, info.isOnline());
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                refreshSoulseekPeerCountryUi(username);
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onError(String reason) {
+                        synchronized (soulseekPeerWatchInFlight) {
+                            soulseekPeerWatchInFlight.remove(key);
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    private String soulseekPeerCountryCode(String username) {
+        if (username == null) return null;
+        return soulseekPeerCountry.get(username.trim().toLowerCase(Locale.US));
+    }
+
+    private void applySoulseekCountryFlag(android.widget.TextView tv, String country) {
+        if (tv == null) return;
+        android.graphics.drawable.Drawable flag = SoulseekCountryFlags.loadFlagDrawable(this, country);
+        if (flag != null) {
+            int pad = (int) (4 * getResources().getDisplayMetrics().density);
+            flag.setBounds(0, 0, flag.getIntrinsicWidth(), flag.getIntrinsicHeight());
+            tv.setCompoundDrawables(flag, null, null, null);
+            tv.setCompoundDrawablePadding(pad);
+        } else {
+            tv.setCompoundDrawables(null, null, null, null);
+        }
+    }
+
+    private void refreshSoulseekPeerCountryUi(String username) {
+        if (username == null) return;
+        String cc = soulseekPeerCountryCode(username);
+        if (currentScreenState == STATE_SOULSEEK && soulseekUiMode == SOULSEEK_UI_RESULTS) {
+            refreshSoulseekResultRowsForPeer(username);
+        }
+    }
+
+    private void refreshSoulseekResultRowsForPeer(String username) {
+        if (containerBrowserItems == null || username == null) return;
+        String key = username.trim().toLowerCase(Locale.US);
+        for (int i = 0; i < containerBrowserItems.getChildCount(); i++) {
+            View child = containerBrowserItems.getChildAt(i);
+            if (child instanceof Button) {
+                Object tag = child.getTag();
+                if (tag instanceof SoulseekClient.Result) {
+                    SoulseekClient.Result r = (SoulseekClient.Result) tag;
+                    if (r.username != null && r.username.toLowerCase(Locale.US).equals(key)) {
+                        applySoulseekCountryFlag((Button) child, soulseekPeerCountryCode(r.username));
+                    }
+                }
+            }
+        }
+    }
+
     private void addContextAction(String label, Runnable action) {
         addContextAction(label, null, null, action);
     }
@@ -10430,6 +13174,20 @@ public class MainActivity extends Activity {
             return (SoulseekClient.Result) c.getTag();
         }
         return null;
+    }
+
+    private MusicSearchEntry getMusicFocusedEntry() {
+        View c = getCurrentFocus();
+        if (c == null || !(c.getTag() instanceof MusicSearchEntry)) return null;
+        MusicSearchEntry e = (MusicSearchEntry) c.getTag();
+        if (e.deezer != null || e.reach != null) return e;
+        return null;
+    }
+
+    private void startGetMusicDeezerTransfer(final DeezerResult r, final int action) {
+        getMusicEmbeddedInDeezer = true;
+        soulseekUiMode = SOULSEEK_UI_DOWNLOAD;
+        if (deezerScreen != null) deezerScreen.startTransfer(r, action);
     }
 
     private String soulseekFocusedRecentQuery() {
@@ -10488,6 +13246,19 @@ public class MainActivity extends Activity {
             } else {
                 returnFromAuxScreen();
             }
+            return;
+        }
+        if (currentScreenState == STATE_DEEZER_SETUP) {
+            new AlertDialog.Builder(MainActivity.this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                    .setTitle(getString(R.string.deezer_setup_dialog_title))
+                    .setMessage(getString(R.string.deezer_setup_dialog_message))
+                    .setPositiveButton(getString(R.string.deezer_setup_stop_exit), new DialogInterface.OnClickListener() {
+                        public void onClick(DialogInterface dialog, int which) {
+                            returnFromDeezerSetup();
+                        }
+                    })
+                    .setNegativeButton(getString(R.string.deezer_setup_stay), null)
+                    .show();
             return;
         }
         if (currentScreenState == STATE_BROWSER) {
@@ -10578,32 +13349,54 @@ public class MainActivity extends Activity {
             return;
         }
         if (currentScreenState == STATE_SOULSEEK) {
-            if (soulseekUiMode == SOULSEEK_UI_DOWNLOAD) {
+            if (getMusicEmbeddedInDeezer && deezerScreen != null && deezerScreen.isDownloadActive()) {
+                deezerScreen.handleBackPress();
+                return;
+            }
+            if (getMusicEmbeddedInDeezer && deezerScreen != null
+                    && deezerScreen.uiMode() == DeezerScreen.UI_ACTION) {
+                deezerScreen.handleBackPress();
+                return;
+            }
+                    if (soulseekUiMode == SOULSEEK_UI_DOWNLOAD) {
                 if (soulseekDownloadUiFailed) {
                     soulseekDownloadUiFailed = false;
                     soulseekFailedResult = null;
-                    buildSoulseekResultsUI();
+                    if (isGetMusicMultiSource()) buildGetMusicResultsUI();
+                    else buildSoulseekResultsUI();
                 } else if (soulseekBailWithoutConfirm()) {
                     cancelSoulseekDownloadSilent();
                     soulseekDownloadStalled = false;
-                    buildSoulseekResultsUI();
+                    if (isGetMusicMultiSource()) buildGetMusicResultsUI();
+                    else buildSoulseekResultsUI();
                 } else if (hasActiveReachDownload() && !reachPartialPlaybackStarted) {
                     confirmStopReachDownload(new Runnable() {
                         @Override
                         public void run() {
-                            if (currentScreenState == STATE_SOULSEEK) buildSoulseekResultsUI();
+                            if (currentScreenState == STATE_SOULSEEK) {
+                                if (isGetMusicMultiSource()) buildGetMusicResultsUI();
+                                else buildSoulseekResultsUI();
+                            }
                         }
                     });
                 } else {
                     cancelSoulseekDownload();
                 }
             } else if (soulseekUiMode == SOULSEEK_UI_ACTION) {
-                buildSoulseekResultsUI();
+                if (isGetMusicMultiSource()) buildGetMusicResultsUI();
+                else buildSoulseekResultsUI();
+            } else if (soulseekUiMode == SOULSEEK_UI_BROWSE) {
+                exitSoulseekBrowse();
             } else if (soulseekUiMode == SOULSEEK_UI_RESULTS) {
+                if (isGetMusicMultiSource()) cancelGetMusicSearch();
                 buildSoulseekSearchUI();
             } else {
                 returnFromSoulseek();
             }
+            return;
+        }
+        if (currentScreenState == STATE_DEEZER && deezerScreen != null) {
+            deezerScreen.handleBackPress();
             return;
         }
         if (currentScreenState == STATE_APPS) {
@@ -10638,11 +13431,38 @@ public class MainActivity extends Activity {
         if (event.getRepeatCount() == 0) {
             backKeyDownTime = System.currentTimeMillis();
             backLongPressHandled = false;
+            backForceQuitHandled = false;
+            backForceQuitHintShown = false;
             backKeyHeld = true;
             clockHandler.removeCallbacks(backLongPressRunnable);
+            clockHandler.removeCallbacks(backForceQuitRunnable);
+            clockHandler.removeCallbacks(backForceQuitHintRunnable);
             clockHandler.postDelayed(backLongPressRunnable, BACK_LONG_PRESS_MS);
+            clockHandler.postDelayed(backForceQuitHintRunnable, BACK_FORCE_QUIT_HINT_MS);
+            clockHandler.postDelayed(backForceQuitRunnable, BACK_FORCE_QUIT_MS);
         }
         return true;
+    }
+
+    private void performForceQuit() {
+        try {
+            persistPlaybackQueue();
+        } catch (Exception ignored) {}
+        try {
+            if (webServer != null) webServer.stop();
+        } catch (Exception ignored) {}
+        try {
+            if (soulseekClient != null) soulseekClient.shutdown();
+        } catch (Exception ignored) {}
+        try {
+            if (mediaPlayer != null) {
+                mediaPlayer.stop();
+                mediaPlayer.release();
+                mediaPlayer = null;
+            }
+        } catch (Exception ignored) {}
+        finishAffinity();
+        android.os.Process.killProcess(android.os.Process.myPid());
     }
 
     private int podcastEpisodeFocusIndex() {
@@ -10720,6 +13540,7 @@ public class MainActivity extends Activity {
     }
     private void buildSettingsUI() {
         final int targetFocusIndex = lastSettingsFocusIndex;
+        showSoulseekConversationPanel(false);
         setSettingsAboutFullWidth(false);
         setThemesListVisible(false);
         clearThemeGalleryPreview();
@@ -10998,9 +13819,16 @@ public class MainActivity extends Activity {
                 buildSoulseekSettingsUI();
             }
         });
-        if (ConnectivityHelper.shouldShowMenuItem(this, HomeMenuConfig.ID_SOULSEEK)) {
-            containerSettingsItems.addView(btnSoulseekMenu);
-        }
+        containerSettingsItems.addView(btnSoulseekMenu);
+
+        LinearLayout btnDeezerMenu = createSettingsRow(RowKeys.DEEZER, R.string.settings_deezer, true);
+        btnDeezerMenu.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                clickFeedback();
+                buildDeezerSettingsUI();
+            }
+        });
+        containerSettingsItems.addView(btnDeezerMenu);
 
         LinearLayout btnLibraryBrowse = createSettingsRow(RowKeys.LIBRARY_BROWSE, R.string.settings_library_browse, true);
         libraryBrowseSettingsMenuFocusIndex = containerSettingsItems.getChildCount();
@@ -11475,8 +14303,12 @@ public class MainActivity extends Activity {
     }
 
     private void buildSoulseekSettingsUI() {
+        showSoulseekConversationPanel(false);
+        showReachBrowseList(false);
+        resetReachBrowseHeaders();
         setSettingsSubScreen(SettingsScreens.SOULSEEK);
         updateStatusBarTitle();
+        applyReachBrowseLayoutMode();
         containerSettingsItems.removeAllViews();
 
         Button btnBack = createListButton(getString(R.string.common_cancel_back));
@@ -11491,17 +14323,73 @@ public class MainActivity extends Activity {
         });
         containerSettingsItems.addView(btnBack);
 
-        LinearLayout btnSearch = createSettingsRow(RowKeys.SOULSEEK_SEARCH, R.string.soulseek_search_row, true);
-        btnSearch.setOnClickListener(new View.OnClickListener() {
+        LinearLayout btnReachEnabled = createSettingsRow(RowKeys.SOULSEEK_REACH_ENABLED,
+                R.string.soulseek_reach_enabled, false);
+        btnReachEnabled.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 clickFeedback();
-                openSoulseekScreen();
+                soulseekReachEnabled = !soulseekReachEnabled;
+                prefs.edit().putBoolean(SoulseekAccount.PREF_REACH_ENABLED, soulseekReachEnabled).commit();
+                ConnectivityHelper.setReachEnabled(soulseekReachEnabled);
+                if (!soulseekReachEnabled && soulseekClient != null) {
+                    soulseekClient.shutdown();
+                    soulseekClient = null;
+                }
+                buildHomeMenu();
+                if (currentScreenState == STATE_SETTINGS && settingsSubScreenKey == null) {
+                    buildSettingsUI();
+                }
+                updateSoulseekSharePolicy();
+                refreshSettingsPreview(RowKeys.SOULSEEK_REACH_ENABLED);
             }
         });
-        containerSettingsItems.addView(btnSearch);
+        containerSettingsItems.addView(btnReachEnabled);
 
-        SoulseekAccount skAccount = SoulseekAccount.load(prefs);
+        if (!soulseekReachEnabled) {
+            if (containerSettingsItems.getChildCount() > 1) {
+                containerSettingsItems.getChildAt(1).requestFocus();
+            }
+            refreshSettingsPreview(RowKeys.SOULSEEK_REACH_ENABLED);
+            return;
+        }
+
+        final boolean peerOk = ConnectivityHelper.isReachPeerOk()
+                || ReachPeerConnectivity.state() != ReachPeerConnectivity.State.UNAVAILABLE;
+
+        if (peerOk) {
+            LinearLayout btnIncludeGetMusic = createSettingsRow(RowKeys.SOULSEEK_INCLUDE_GET_MUSIC,
+                    R.string.get_music_include_reach, false);
+            btnIncludeGetMusic.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    soulseekIncludeInGetMusic = !soulseekIncludeInGetMusic;
+                    prefs.edit().putBoolean(SoulseekAccount.PREF_INCLUDE_IN_GET_MUSIC,
+                            soulseekIncludeInGetMusic).commit();
+                    refreshSettingsPreview(RowKeys.SOULSEEK_INCLUDE_GET_MUSIC);
+                }
+            });
+            containerSettingsItems.addView(btnIncludeGetMusic);
+        }
+
+        if (!peerOk) {
+            addReachUnavailableSettingsBanner();
+        }
+
+        if (peerOk) {
+            LinearLayout btnSearch = createSettingsRow(RowKeys.SOULSEEK_SEARCH, R.string.soulseek_search_row, true);
+            btnSearch.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    openSoulseekScreen();
+                }
+            });
+            containerSettingsItems.addView(btnSearch);
+        }
+
+        SoulseekAccount skAccount = SoulseekAccount.load(prefs, MainActivity.this);
         LinearLayout btnAccount = createSettingRow(RowKeys.SOULSEEK_ACCOUNT, R.string.soulseek_account_row, SoulseekAccount.displayLabel(skAccount));
         btnAccount.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -11532,46 +14420,144 @@ public class MainActivity extends Activity {
         });
         containerSettingsItems.addView(btnAbout);
 
-        LinearLayout btnSharing = createSettingsRow(RowKeys.SOULSEEK_SHARING,
-                R.string.soulseek_share_library, false);
-        btnSharing.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                clickFeedback();
-                soulseekSharingEnabled = !soulseekSharingEnabled;
-                prefs.edit().putBoolean(SoulseekAccount.PREF_SHARING_ENABLED, soulseekSharingEnabled).commit();
-                updateSoulseekSharePolicy();
-                if (soulseekClient != null) {
-                    soulseekClient.refreshShareAnnouncement();
+        if (peerOk) {
+            LinearLayout btnSharing = createSettingsRow(RowKeys.SOULSEEK_SHARING,
+                    R.string.soulseek_share_library, false);
+            btnSharing.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    soulseekSharingEnabled = !soulseekSharingEnabled;
+                    prefs.edit().putBoolean(SoulseekAccount.PREF_SHARING_ENABLED, soulseekSharingEnabled).commit();
+                    updateSoulseekSharePolicy();
+                    if (soulseekClient != null) {
+                        soulseekClient.refreshShareAnnouncement();
+                    }
+                    refreshSettingsPreview(RowKeys.SOULSEEK_SHARING);
                 }
-                refreshSettingsPreview(RowKeys.SOULSEEK_SHARING);
-            }
-        });
-        containerSettingsItems.addView(btnSharing);
+            });
+            containerSettingsItems.addView(btnSharing);
+        }
 
-        LinearLayout btnHideHighBitrate = createSettingsRow(RowKeys.SOULSEEK_HIDE_HIGH_BITRATE,
-                R.string.soulseek_hide_high_bitrate, false);
-        btnHideHighBitrate.setOnClickListener(new View.OnClickListener() {
+        LinearLayout btnMessaging = createSettingsRow(RowKeys.SOULSEEK_MESSAGING,
+                R.string.soulseek_allow_messaging, false);
+        btnMessaging.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 clickFeedback();
-                soulseekHideHighBitrate = !soulseekHideHighBitrate;
-                prefs.edit().putBoolean(SoulseekAccount.PREF_HIDE_HIGH_BITRATE, soulseekHideHighBitrate).commit();
-                refreshSettingsPreview(RowKeys.SOULSEEK_HIDE_HIGH_BITRATE);
+                soulseekMessagingEnabled = !soulseekMessagingEnabled;
+                prefs.edit().putBoolean(SoulseekAccount.PREF_MESSAGING_ENABLED, soulseekMessagingEnabled).commit();
+                if (soulseekClient != null) {
+                    soulseekClient.setMessagingEnabled(soulseekMessagingEnabled);
+                }
+                buildSoulseekSettingsUI();
             }
         });
-        containerSettingsItems.addView(btnHideHighBitrate);
+        containerSettingsItems.addView(btnMessaging);
+
+        if (peerOk) {
+            LinearLayout btnFindUser = createSettingsRow(RowKeys.SOULSEEK_FIND_USER,
+                    R.string.soulseek_find_user, true);
+            btnFindUser.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    buildSoulseekFindUserUI();
+                }
+            });
+            containerSettingsItems.addView(btnFindUser);
+        }
+
+        if (peerOk && ReachDirectoryClient.isConfigured()) {
+            LinearLayout btnFindReach = createSettingsRow(RowKeys.SOULSEEK_FIND_REACH,
+                    R.string.soulseek_find_reach_users, true);
+            btnFindReach.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    buildSoulseekFindReachUsersUI();
+                }
+            });
+            containerSettingsItems.addView(btnFindReach);
+        }
+
+        if (peerOk) {
+            LinearLayout btnMessages = createSettingsRow(RowKeys.SOULSEEK_MESSAGES,
+                    R.string.soulseek_messages, true);
+            btnMessages.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    buildSoulseekMessagesUI();
+                }
+            });
+            containerSettingsItems.addView(btnMessages);
+        }
+
+        if (peerOk) {
+            LinearLayout btnChatRooms = createSettingsRow(RowKeys.SOULSEEK_CHAT_ROOMS,
+                    R.string.soulseek_chat_rooms, true);
+            btnChatRooms.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    buildSoulseekChatRoomsUI();
+                }
+            });
+            containerSettingsItems.addView(btnChatRooms);
+        }
+
+        if (peerOk && ConnectivityHelper.isReachLoginOk()) {
+            LinearLayout btnInterests = createSettingsRow(RowKeys.SOULSEEK_INTERESTS,
+                    R.string.soulseek_interests, true);
+            btnInterests.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    buildSoulseekInterestsUI();
+                }
+            });
+            containerSettingsItems.addView(btnInterests);
+        }
+
+        if (peerOk) {
+            LinearLayout btnHideHighBitrate = createSettingsRow(RowKeys.SOULSEEK_HIDE_HIGH_BITRATE,
+                    R.string.soulseek_hide_high_bitrate, false);
+            btnHideHighBitrate.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    soulseekHideHighBitrate = !soulseekHideHighBitrate;
+                    prefs.edit().putBoolean(SoulseekAccount.PREF_HIDE_HIGH_BITRATE, soulseekHideHighBitrate).commit();
+                    refreshSettingsPreview(RowKeys.SOULSEEK_HIDE_HIGH_BITRATE);
+                }
+            });
+            containerSettingsItems.addView(btnHideHighBitrate);
+        }
 
         Button btnSoulseekRegen = createListButton(getString(R.string.soulseek_regenerate_account));
+        btnSoulseekRegen.setTag(RowKeys.SOULSEEK_REGENERATE);
+        btnSoulseekRegen.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override
+            public void onFocusChange(View v, boolean hasFocus) {
+                if (hasFocus && currentScreenState == STATE_SETTINGS && !isFullWidthMenus) {
+                    updateSettingsPreview(RowKeys.SOULSEEK_REGENERATE);
+                }
+            }
+        });
         btnSoulseekRegen.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 clickFeedback();
-                SoulseekAccount.resetToAuto(prefs);
+                SoulseekAccount.resetToAuto(prefs, MainActivity.this);
                 if (soulseekClient != null) {
                     soulseekClient.shutdown();
                     soulseekClient = null;
                 }
+                ConnectivityHelper.setReachLoginOk(true);
+                ReachPeerConnectivity.reset();
+                ConnectivityHelper.setReachPeerOk(true);
+                updateSoulseekSharePolicy();
                 Toast.makeText(MainActivity.this, getString(R.string.soulseek_auto_account), Toast.LENGTH_LONG).show();
                 buildSoulseekSettingsUI();
             }
@@ -11581,9 +14567,2674 @@ public class MainActivity extends Activity {
         if (containerSettingsItems.getChildCount() > 1) {
             containerSettingsItems.getChildAt(1).requestFocus();
         }
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("messagingEnabled", soulseekMessagingEnabled);
+            d.put("peerOk", peerOk);
+            d.put("reachEnabled", soulseekReachEnabled);
+            d.put("versionName", BuildConfig.VERSION_NAME);
+            d.put("versionCode", BuildConfig.VERSION_CODE);
+            DebugAgentLog.log(this, "MainActivity.buildSoulseekSettingsUI",
+                    "reach settings built", "F", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        applyMessagingLayoutMode();
+    }
+
+    private void buildSoulseekFindUserUI() {
+        showSoulseekConversationPanel(false);
+        showReachBrowseList(false);
+        setSettingsSubScreen(SettingsScreens.SOULSEEK_FIND_USER);
+        updateStatusBarTitle();
+        applyReachBrowseLayoutMode();
+        containerSettingsItems.removeAllViews();
+        resetReachBrowseHeaders();
+
+        Button btnBack = createListButton(getString(R.string.soulseek_back_settings));
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildSoulseekSettingsUI();
+            }
+        });
+        containerSettingsItems.addView(btnBack);
+
+        Button btnLookup = createListButton(getString(R.string.soulseek_find_user));
+        btnLookup.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                keyboardPurpose = KEYBOARD_SOULSEEK_FIND;
+                keyboardReturnState = STATE_SETTINGS;
+                keyboardReturnSettingsSubKey = SettingsScreens.SOULSEEK_FIND_USER;
+                typedPassword = "";
+                changeScreen(STATE_WIFI_KEYBOARD);
+            }
+        });
+        containerSettingsItems.addView(btnLookup);
+        btnLookup.requestFocus();
+    }
+
+    private void showSoulseekUserLookupResult(final SoulseekUserDirectory.UserInfo info) {
+        showSoulseekConversationPanel(false);
+        setSettingsSubScreen(SettingsScreens.SOULSEEK_FIND_USER);
+        updateStatusBarTitle();
+        populateReachUserActionsPanel(info.username, info, new Runnable() {
+            @Override
+            public void run() {
+                buildSoulseekFindUserUI();
+            }
+        }, R.string.soulseek_back_settings);
+    }
+
+    private void buildSoulseekFindReachUsersUI() {
+        showSoulseekConversationPanel(false);
+        showReachBrowseList(false);
+        setSettingsSubScreen(SettingsScreens.SOULSEEK_FIND_REACH);
+        updateStatusBarTitle();
+        applyReachBrowseLayoutMode();
+        containerSettingsItems.removeAllViews();
+        resetReachBrowseHeaders();
+
+        Button btnBack = createListButton(getString(R.string.soulseek_back_settings));
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildSoulseekSettingsUI();
+            }
+        });
+        containerSettingsItems.addView(btnBack);
+
+        Button loading = createListButton(getString(R.string.soulseek_reach_users_interest_loading));
+        loading.setEnabled(false);
+        containerSettingsItems.addView(loading);
+
+        final int gen = ++soulseekReachFindReachGen;
+        final SoulseekAccount self = SoulseekAccount.load(prefs, MainActivity.this);
+        SoulseekClient client = ensureSoulseekClient();
+        if (client == null) {
+            containerSettingsItems.removeAllViews();
+            containerSettingsItems.addView(btnBack);
+            addSettingsInfoParagraph(getString(R.string.soulseek_reach_users_failed, "Offline"));
+            return;
+        }
+        client.searchUsersByInterest("reach client", new SoulseekClient.InterestUsersCallback() {
+            @Override
+            public void onUsers(final java.util.List<String> usernames) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (gen != soulseekReachFindReachGen) return;
+                        java.util.ArrayList<ReachDirectoryUser> users =
+                                new java.util.ArrayList<ReachDirectoryUser>();
+                        if (usernames != null) {
+                            for (String u : usernames) {
+                                if (u == null || u.trim().isEmpty()) continue;
+                                if (self.username != null
+                                        && u.equalsIgnoreCase(self.username)) continue;
+                                users.add(new ReachDirectoryUser(u.trim(),
+                                        DeviceFeatures.deviceModelLabel(), 0, 0));
+                            }
+                        }
+                        if (users.isEmpty() && ReachDirectoryClient.isConfigured()) {
+                            fetchReachUsersDirectoryFallback(gen, btnBack, self.username);
+                        } else {
+                            renderSoulseekFindReachUsers(users);
+                        }
+                    }
+                });
+            }
+
+            @Override
+            public void onError(final String reason) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (gen != soulseekReachFindReachGen) return;
+                        if (ReachDirectoryClient.isConfigured()) {
+                            fetchReachUsersDirectoryFallback(gen, btnBack, self.username);
+                        } else {
+                            containerSettingsItems.removeAllViews();
+                            containerSettingsItems.addView(btnBack);
+                            addSettingsInfoParagraph(
+                                    getString(R.string.soulseek_reach_users_failed, reason));
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    private void fetchReachUsersDirectoryFallback(final int gen, final Button btnBack,
+            final String selfUser) {
+        ReachDirectoryClient.fetchUsersAsync(selfUser, new ReachDirectoryClient.UsersCallback() {
+            @Override
+            public void onUsers(final java.util.List<ReachDirectoryUser> users) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (gen != soulseekReachFindReachGen) return;
+                        renderSoulseekFindReachUsers(users);
+                    }
+                });
+            }
+
+            @Override
+            public void onError(final String reason) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (gen != soulseekReachFindReachGen) return;
+                        containerSettingsItems.removeAllViews();
+                        containerSettingsItems.addView(btnBack);
+                        addSettingsInfoParagraph(getString(R.string.soulseek_reach_users_failed, reason));
+                    }
+                });
+            }
+        });
+    }
+
+    private void renderSoulseekFindReachUsers(final java.util.List<ReachDirectoryUser> users) {
+        applyReachBrowseLayoutMode();
+        resetReachBrowseHeaders();
+        containerSettingsItems.removeAllViews();
+
+        Button btnBack = createListButton(getString(R.string.soulseek_back_settings));
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildSoulseekSettingsUI();
+            }
+        });
+
+        if (users == null || users.isEmpty()) {
+            showReachBrowseList(false);
+            containerSettingsItems.addView(btnBack);
+            addSettingsInfoParagraph(getString(R.string.soulseek_reach_users_empty));
+            return;
+        }
+
+        showReachBrowseList(true);
+        addReachBrowseHeader(btnBack);
+
+        final int rowW = messagingRowWidthPx();
+        reachUsersAdapter = new ReachUsersAdapter(this, new ReachUsersAdapter.Listener() {
+            @Override
+            public void onUserSelected(ReachDirectoryUser user) {
+                clickFeedback();
+                soulseekMessagePeer = user.username;
+                buildSoulseekConversationUI(user.username);
+            }
+
+            @Override
+            public void onShowMore() {}
+
+            @Override
+            public String countryCodeForUser(String username) {
+                return soulseekPeerCountryCode(username);
+            }
+
+            @Override
+            public String previewForUser(String username, String basePreview) {
+                return basePreview;
+            }
+        });
+        reachUsersAdapter.setRowWidthPx(rowW);
+        reachUsersAdapter.setUsers(users);
+        if (listReachBrowse != null) {
+            listReachBrowse.setAdapter(reachUsersAdapter);
+            listReachBrowse.setOnItemSelectedListener(
+                    new android.widget.AdapterView.OnItemSelectedListener() {
+                @Override
+                public void onItemSelected(android.widget.AdapterView<?> parent, View view,
+                        int position, long id) {
+                    onReachBrowseListItemSelected(position);
+                }
+
+                @Override
+                public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+            });
+            listReachBrowse.post(new Runnable() {
+                @Override
+                public void run() {
+                    if (reachUsersAdapter.getCount() > 0) {
+                        focusFirstReachBrowseDataRow();
+                    }
+                }
+            });
+        }
+    }
+
+    private void addSoulseekFindReachUserRow(final ReachDirectoryUser user) {
+        final int rowW = conversationRowWidthPx();
+        final String username = user.username;
+        String preview = getString(R.string.soulseek_reach_user_badge, user.device);
+        final int rowH = ReachMessageRow.measureListRowHeight(this, true);
+        final FrameLayout row = ReachMessageRow.create(this, rowH);
+        row.setTag(ReachMessageRow.TAG_PEER, username);
+        row.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, rowH));
+        watchSoulseekPeer(user.username);
+        ReachMessageRow.bindInboxRow(this, row, username, preview, "", false, rowW, rowH,
+                soulseekPeerCountryCode(username));
+        row.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                soulseekMessagePeer = username;
+                buildSoulseekConversationUI(username);
+            }
+        });
+        row.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override
+            public void onFocusChange(View v, boolean hasFocus) {
+                ReachMessageRow.bindInboxRow(MainActivity.this, row, username, preview, "",
+                        hasFocus, rowW, rowH, soulseekPeerCountryCode(username));
+                if (hasFocus) refreshReachUserRowStatus(row, username, preview, rowW, rowH);
+            }
+        });
+        containerSettingsItems.addView(row);
+    }
+
+    private void refreshReachUserRowStatus(final FrameLayout row, final String username,
+            final String basePreview, final int rowW, final int rowH) {
+        SoulseekUserDirectory.watch(ensureSoulseekClient(), username,
+                new SoulseekUserDirectory.Callback() {
+                    @Override
+                    public void onUserInfo(SoulseekUserDirectory.UserInfo info) {
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                String status = info != null && info.isOnline()
+                                        ? getString(R.string.soulseek_user_online)
+                                        : getString(R.string.soulseek_user_offline);
+                                String preview = basePreview + " · " + status;
+                                if (info != null && info.files > 0) {
+                                    preview += " · " + getString(R.string.soulseek_peer_files, info.files);
+                                    soulseekPeerSharedFiles.put(username.toLowerCase(Locale.US), info.files);
+                                    if (info.country != null && !info.country.isEmpty()) {
+                                        soulseekPeerCountry.put(username.toLowerCase(Locale.US), info.country);
+                                    }
+                                }
+                                ReachMessageRow.bindInboxRow(MainActivity.this, row, username, preview,
+                                        "", row.hasFocus(), rowW, rowH, soulseekPeerCountryCode(username));
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onError(String reason) {
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                String preview = basePreview + " · "
+                                        + getString(R.string.soulseek_user_offline);
+                                ReachMessageRow.bindInboxRow(MainActivity.this, row, username, preview,
+                                        "", row.hasFocus(), rowW, rowH, soulseekPeerCountryCode(username));
+                            }
+                        });
+                    }
+                });
+    }
+
+    private void openReachUserActionsFromList(final String username) {
+        showSoulseekConversationPanel(false);
+        setSettingsSubScreen(SettingsScreens.SOULSEEK_FIND_REACH);
+        updateStatusBarTitle();
+        containerSettingsItems.removeAllViews();
+        Button loadingBack = createListButton(getString(R.string.soulseek_back_find_reach));
+        loadingBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildSoulseekFindReachUsersUI();
+            }
+        });
+        containerSettingsItems.addView(loadingBack);
+        TextView loading = new TextView(this);
+        loading.setText(getString(R.string.soulseek_user_lookup_loading, username));
+        loading.setTypeface(ThemeManager.getCustomFont());
+        containerSettingsItems.addView(loading);
+
+        final int gen = ++soulseekReachUserActionsGen;
+        SoulseekUserDirectory.watch(ensureSoulseekClient(), username, new SoulseekUserDirectory.Callback() {
+            @Override
+            public void onUserInfo(final SoulseekUserDirectory.UserInfo info) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (gen != soulseekReachUserActionsGen) return;
+                        populateReachUserActionsPanel(username, info, new Runnable() {
+                            @Override
+                            public void run() {
+                                buildSoulseekFindReachUsersUI();
+                            }
+                        }, R.string.soulseek_back_find_reach);
+                    }
+                });
+            }
+
+            @Override
+            public void onError(final String reason) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (gen != soulseekReachUserActionsGen) return;
+                        containerSettingsItems.removeAllViews();
+                        containerSettingsItems.addView(loadingBack);
+                        addSettingsInfoParagraph(getString(R.string.soulseek_user_lookup_failed,
+                                username, reason));
+                    }
+                });
+            }
+        });
+    }
+
+    private void populateReachUserActionsPanel(final String username,
+            final SoulseekUserDirectory.UserInfo info, final Runnable onBack, final int backResId) {
+        containerSettingsItems.removeAllViews();
+        Button btnBack = createListButton(getString(backResId));
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                onBack.run();
+            }
+        });
+        containerSettingsItems.addView(btnBack);
+
+        String status = info != null && info.isOnline()
+                ? getString(R.string.soulseek_user_online) : getString(R.string.soulseek_user_offline);
+        String filesLine = info != null && info.files > 0
+                ? getString(R.string.soulseek_peer_files, info.files)
+                : getString(R.string.soulseek_user_no_files);
+        TextView tv = new TextView(this);
+        tv.setText(getString(R.string.soulseek_reach_status_line, username, status, filesLine));
+        tv.setTypeface(ThemeManager.getCustomFont());
+        applySoulseekCountryFlag(tv, info != null ? info.country : soulseekPeerCountryCode(username));
+        containerSettingsItems.addView(tv);
+
+        if (info != null) {
+            soulseekPeerSharedFiles.put(info.username.toLowerCase(Locale.US), info.files);
+            if (info.country != null && !info.country.isEmpty()) {
+                soulseekPeerCountry.put(info.username.toLowerCase(Locale.US), info.country);
+            }
+        }
+        appendReachPeerActionButtons(containerSettingsItems, username, info, true);
+
+        Button btnProfile = createListButton(getString(R.string.soulseek_view_profile));
+        btnProfile.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                openSoulseekUserProfile(username, onBack);
+            }
+        });
+        containerSettingsItems.addView(btnProfile);
+
+        if (containerSettingsItems.getChildCount() > 1) {
+            containerSettingsItems.getChildAt(1).requestFocus();
+        }
+    }
+
+    private void appendReachPeerActionButtons(ViewGroup host, final String username,
+            final SoulseekUserDirectory.UserInfo info, boolean includeBrowse) {
+        if (username == null || username.trim().isEmpty()) return;
+        final String peer = username.trim();
+        final boolean hasFiles = info != null && info.files > 0;
+
+        if (includeBrowse) {
+            Button btnBrowse = createListButton(getString(R.string.soulseek_browse_user));
+            btnBrowse.setEnabled(hasFiles);
+            btnBrowse.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    if (!requireReachPeerConnectivity()) return;
+                    openSoulseekBrowse(peer, "");
+                }
+            });
+            host.addView(btnBrowse);
+        }
+
+        if (soulseekMessagingEnabled) {
+            Button btnMsg = createListButton(getString(R.string.soulseek_compose_message));
+            btnMsg.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    soulseekMessagePeer = peer;
+                    buildSoulseekConversationUI(peer);
+                }
+            });
+            host.addView(btnMsg);
+        }
+
+        Button btnNote = createListButton(getString(R.string.soulseek_edit_user_note));
+        btnNote.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                openSoulseekPeerNoteEditor(peer);
+            }
+        });
+        host.addView(btnNote);
+
+        final boolean ignored = SoulseekPeerPrefs.isIgnored(prefs, peer);
+        Button btnIgnore = createListButton(getString(ignored
+                ? R.string.soulseek_unignore_user : R.string.soulseek_ignore_user));
+        btnIgnore.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                toggleSoulseekPeerIgnored(peer, !ignored);
+            }
+        });
+        host.addView(btnIgnore);
+
+        final boolean blocked = SoulseekPeerPrefs.isBlocked(prefs, peer);
+        Button btnBlock = createListButton(getString(blocked
+                ? R.string.soulseek_unblock_user : R.string.soulseek_block_user));
+        btnBlock.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                toggleSoulseekPeerBlocked(peer, !blocked);
+            }
+        });
+        host.addView(btnBlock);
+
+        final boolean favorited = SoulseekPeerPrefs.isFavorite(prefs, peer);
+        Button btnFriend = createListButton(getString(favorited
+                ? R.string.soulseek_remove_friend : R.string.soulseek_add_friend));
+        btnFriend.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                toggleSoulseekPeerFavorite(peer, !favorited);
+            }
+        });
+        host.addView(btnFriend);
+    }
+
+    private void toggleSoulseekPeerBlocked(final String peer, final boolean block) {
+        SoulseekPeerPrefs.setBlocked(prefs, peer, block);
+        SoulseekClient client = ensureSoulseekClient();
+        if (client != null) {
+            if (block) client.banPeer(peer);
+            else client.unbanPeer(peer);
+        }
+        Toast.makeText(this, getString(block
+                ? R.string.soulseek_user_blocked : R.string.soulseek_user_unblocked, peer),
+                Toast.LENGTH_SHORT).show();
+    }
+
+    private void toggleSoulseekPeerIgnored(final String peer, final boolean ignore) {
+        SoulseekPeerPrefs.setIgnored(prefs, peer, ignore);
+        SoulseekClient client = ensureSoulseekClient();
+        if (client != null) {
+            if (ignore) client.ignorePeer(peer);
+            else client.unignorePeer(peer);
+        }
+        Toast.makeText(this, getString(ignore
+                ? R.string.soulseek_user_ignored : R.string.soulseek_user_unignored, peer),
+                Toast.LENGTH_SHORT).show();
+    }
+
+    private void toggleSoulseekPeerFavorite(final String peer, final boolean favorite) {
+        SoulseekPeerPrefs.setFavorite(prefs, peer, favorite);
+        SoulseekClient client = ensureSoulseekClient();
+        if (client != null) {
+            if (favorite) client.addFavoritePeer(peer);
+            else client.removeFavoritePeer(peer);
+        }
+        Toast.makeText(this, getString(favorite
+                ? R.string.soulseek_user_favorited : R.string.soulseek_user_unfavorited, peer),
+                Toast.LENGTH_SHORT).show();
+    }
+
+    private void buildSoulseekInterestsUI() {
+        showSoulseekConversationPanel(false);
+        showReachBrowseList(false);
+        setSettingsSubScreen(SettingsScreens.SOULSEEK_INTERESTS);
+        updateStatusBarTitle();
+        applyReachBrowseLayoutMode();
+        containerSettingsItems.removeAllViews();
+        resetReachBrowseHeaders();
+        showReachBrowseList(true);
+
+        Button btnBack = createListButton(getString(R.string.soulseek_back_settings));
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildSoulseekSettingsUI();
+            }
+        });
+        addReachBrowseHeader(btnBack);
+
+        Button btnAddLike = createListButton(getString(R.string.soulseek_add_interest_like));
+        btnAddLike.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                soulseekInterestAddLike = true;
+                openSoulseekInterestKeyboard();
+            }
+        });
+        addReachBrowseHeader(btnAddLike);
+
+        Button btnAddDislike = createListButton(getString(R.string.soulseek_add_interest_dislike));
+        btnAddDislike.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                soulseekInterestAddLike = false;
+                openSoulseekInterestKeyboard();
+            }
+        });
+        addReachBrowseHeader(btnAddDislike);
+
+        ensureReachInterestsAdapter();
+        reachInterestsAdapter.setRowWidthPx(messagingRowWidthPx());
+        reachInterestsAdapter.setData(
+                SoulseekInterests.loadUserLikes(prefs),
+                SoulseekInterests.loadDislikes(prefs),
+                getString(R.string.soulseek_interests_likes),
+                getString(R.string.soulseek_interests_dislikes));
+        if (listReachBrowse != null) {
+            listReachBrowse.setAdapter(reachInterestsAdapter);
+            listReachBrowse.setOnItemSelectedListener(
+                    new android.widget.AdapterView.OnItemSelectedListener() {
+                @Override
+                public void onItemSelected(android.widget.AdapterView<?> parent, View view,
+                        int position, long id) {
+                    onReachBrowseListItemSelected(position);
+                }
+
+                @Override
+                public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+            });
+            listReachBrowse.post(new Runnable() {
+                @Override
+                public void run() {
+                    focusFirstReachBrowseDataRow();
+                }
+            });
+        }
+    }
+
+    private void ensureReachInterestsAdapter() {
+        if (reachInterestsAdapter != null) return;
+        reachInterestsAdapter = new ReachInterestsAdapter(this, new ReachInterestsAdapter.Listener() {
+            @Override
+            public void onInterestSelected(String interest, boolean isLike) {
+                clickFeedback();
+                showSoulseekInterestRowMenu(interest, isLike);
+            }
+        });
+    }
+
+    private void openSoulseekInterestKeyboard() {
+        keyboardPurpose = KEYBOARD_SOULSEEK_INTEREST;
+        keyboardReturnState = STATE_SETTINGS;
+        keyboardReturnSettingsSubKey = SettingsScreens.SOULSEEK_INTERESTS;
+        typedPassword = "";
+        changeScreen(STATE_WIFI_KEYBOARD);
+    }
+
+    private void finishSoulseekInterestEntry() {
+        String text = typedPassword != null ? typedPassword.trim() : "";
+        changeScreen(STATE_SETTINGS);
+        restoreSoulseekSettingsScreen(SettingsScreens.SOULSEEK_INTERESTS);
+        if (text.isEmpty()) return;
+        if (soulseekInterestAddLike) {
+            if (SoulseekInterests.addLike(prefs, text)) {
+                SoulseekClient client = ensureSoulseekClient();
+                if (client != null) client.addLike(text);
+            }
+        } else {
+            if (SoulseekInterests.addHate(prefs, text)) {
+                SoulseekClient client = ensureSoulseekClient();
+                if (client != null) client.addHate(text);
+            }
+        }
+        buildSoulseekInterestsUI();
+    }
+
+    private void showSoulseekInterestRowMenu(final String interest, final boolean isLike) {
+        java.util.ArrayList<String> labels = new java.util.ArrayList<String>();
+        java.util.ArrayList<String> states = new java.util.ArrayList<String>();
+        java.util.ArrayList<Boolean> headers = new java.util.ArrayList<Boolean>();
+        java.util.ArrayList<Runnable> actions = new java.util.ArrayList<Runnable>();
+
+        labels.add(interest);
+        states.add(null);
+        headers.add(Boolean.TRUE);
+        actions.add(null);
+
+        labels.add(getString(R.string.soulseek_interest_remove));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                if (isLike) {
+                    SoulseekInterests.removeLike(prefs, interest);
+                    SoulseekClient c = ensureSoulseekClient();
+                    if (c != null) c.removeLike(interest);
+                } else {
+                    SoulseekInterests.removeHate(prefs, interest);
+                    SoulseekClient c = ensureSoulseekClient();
+                    if (c != null) c.removeHate(interest);
+                }
+                buildSoulseekInterestsUI();
+            }
+        });
+
+        if (isLike) {
+            labels.add(getString(R.string.soulseek_interest_move_to_dislikes));
+            states.add(null);
+            headers.add(Boolean.FALSE);
+            actions.add(new Runnable() {
+                @Override
+                public void run() {
+                    dismissThemedContextMenu();
+                    SoulseekInterests.moveToHate(prefs, interest);
+                    SoulseekClient c = ensureSoulseekClient();
+                    if (c != null) {
+                        c.removeLike(interest);
+                        c.addHate(interest);
+                    }
+                    buildSoulseekInterestsUI();
+                }
+            });
+        } else {
+            labels.add(getString(R.string.soulseek_interest_move_to_likes));
+            states.add(null);
+            headers.add(Boolean.FALSE);
+            actions.add(new Runnable() {
+                @Override
+                public void run() {
+                    dismissThemedContextMenu();
+                    SoulseekInterests.moveToLike(prefs, interest);
+                    SoulseekClient c = ensureSoulseekClient();
+                    if (c != null) {
+                        c.removeHate(interest);
+                        c.addLike(interest);
+                    }
+                    buildSoulseekInterestsUI();
+                }
+            });
+        }
+
+        if (requireReachPeerConnectivity()) {
+            labels.add(getString(R.string.soulseek_interest_search, interest));
+            states.add(null);
+            headers.add(Boolean.FALSE);
+            actions.add(new Runnable() {
+                @Override
+                public void run() {
+                    dismissThemedContextMenu();
+                    launchReachSearchFromSuggestion(interest, true);
+                }
+            });
+        }
+
+        showContextMenuTierInPlace(interest, labels, states, headers, actions, true);
+    }
+
+    private void addReachInterestFromTerm(final String term, final boolean like) {
+        if (term == null || term.trim().isEmpty()) return;
+        if (like) {
+            if (SoulseekInterests.addLike(prefs, term)) {
+                SoulseekClient c = ensureSoulseekClient();
+                if (c != null) c.addLike(term);
+            }
+        } else {
+            if (SoulseekInterests.addHate(prefs, term)) {
+                SoulseekClient c = ensureSoulseekClient();
+                if (c != null) c.addHate(term);
+            }
+        }
+        Toast.makeText(this, term, Toast.LENGTH_SHORT).show();
+    }
+
+    private void openSoulseekUserProfile(final String username, final Runnable onBack) {
+        if (username == null || username.trim().isEmpty()) return;
+        soulseekProfileOnBack = onBack != null ? onBack : new Runnable() {
+            @Override
+            public void run() {
+                buildSoulseekSettingsUI();
+            }
+        };
+        if (currentScreenState != STATE_SETTINGS) {
+            changeScreen(STATE_SETTINGS);
+        }
+        buildSoulseekUserProfileUI(username.trim());
+    }
+
+    private void buildSoulseekUserProfileUI(final String username) {
+        showSoulseekConversationPanel(false);
+        showReachBrowseList(false);
+        setSettingsSubScreen(SettingsScreens.SOULSEEK_USER_PROFILE, username);
+        updateStatusBarTitle();
+        applyReachBrowseLayoutMode();
+        containerSettingsItems.removeAllViews();
+        resetReachBrowseHeaders();
+
+        Button btnBack = createListButton(getString(R.string.soulseek_back_settings));
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                if (soulseekProfileOnBack != null) soulseekProfileOnBack.run();
+            }
+        });
+        containerSettingsItems.addView(btnBack);
+
+        TextView header = new TextView(this);
+        header.setText(username);
+        header.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
+        applySoulseekCountryFlag(header, soulseekPeerCountryCode(username));
+        containerSettingsItems.addView(header);
+        watchSoulseekPeer(username);
+
+        appendReachPeerActionButtons(containerSettingsItems, username, null, true);
+
+        applySettingsPreviewCappedText(getString(R.string.soulseek_profile_bio_loading));
+        if (settingsPreviewPane != null && !isFullWidthMenus) {
+            settingsPreviewPane.setVisibility(View.VISIBLE);
+        }
+
+        loadSoulseekUserProfileData(username);
+        if (containerSettingsItems.getChildCount() > 1) {
+            containerSettingsItems.getChildAt(1).requestFocus();
+        }
+    }
+
+    private void loadSoulseekUserProfileData(final String username) {
+        final int gen = ++soulseekProfileLoadGen;
+        SoulseekPeerProfileCache.Entry cached = SoulseekPeerProfileCache.get(username);
+        if (cached != null) {
+            renderSoulseekUserProfileData(username, cached.bio, cached.likes, cached.dislikes, gen);
+            return;
+        }
+        final SoulseekClient client = ensureSoulseekClient();
+        SoulseekProfileSession.fetchBio(client, username, new SoulseekProfileSession.BioCallback() {
+            @Override
+            public void onBio(final String description) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (gen != soulseekProfileLoadGen) return;
+                        final java.util.List<String> likes = new java.util.ArrayList<String>();
+                        final java.util.List<String> dislikes = new java.util.ArrayList<String>();
+                        if (client != null) {
+                            client.requestUserInterests(username,
+                                    new SoulseekClient.UserInterestsCallback() {
+                                        @Override
+                                        public void onInterests(String user,
+                                                java.util.List<String> lk,
+                                                java.util.List<String> dk) {
+                                            runOnUiThread(new Runnable() {
+                                                @Override
+                                                public void run() {
+                                                    if (gen != soulseekProfileLoadGen) return;
+                                                    likes.addAll(lk);
+                                                    dislikes.addAll(dk);
+                                                    finishProfileRender(description, likes, dislikes);
+                                                }
+                                            });
+                                        }
+
+                                        @Override
+                                        public void onError(String reason) {
+                                            runOnUiThread(new Runnable() {
+                                                @Override
+                                                public void run() {
+                                                    if (gen != soulseekProfileLoadGen) return;
+                                                    finishProfileRender(description, likes, dislikes);
+                                                }
+                                            });
+                                        }
+                                    });
+                        } else {
+                            finishProfileRender(description, likes, dislikes);
+                        }
+                    }
+
+                    private void finishProfileRender(String bio,
+                            java.util.List<String> lk, java.util.List<String> dk) {
+                        SoulseekPeerProfileCache.put(username, bio, lk, dk);
+                        renderSoulseekUserProfileData(username, bio, lk, dk, gen);
+                    }
+                });
+            }
+
+            @Override
+            public void onError(String reason) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (gen != soulseekProfileLoadGen) return;
+                        renderSoulseekUserProfileData(username, "", null, null, gen);
+                    }
+                });
+            }
+        });
+    }
+
+    private void renderSoulseekUserProfileData(final String username, final String bio,
+            final java.util.List<String> likes, final java.util.List<String> dislikes,
+            final int gen) {
+        if (gen != soulseekProfileLoadGen) return;
+        if (!SettingsScreens.SOULSEEK_USER_PROFILE.equals(settingsSubScreenKey)) return;
+
+        String bioText = bio != null && !bio.trim().isEmpty()
+                ? bio.trim() : getString(R.string.soulseek_profile_no_bio);
+        applySettingsPreviewCappedText(formatProfileNoteAndBio(username, bioText));
+
+        containerSettingsItems.removeAllViews();
+        Button btnBack = createListButton(getString(R.string.soulseek_back_settings));
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                if (soulseekProfileOnBack != null) soulseekProfileOnBack.run();
+            }
+        });
+        containerSettingsItems.addView(btnBack);
+
+        TextView header = new TextView(this);
+        header.setText(username);
+        header.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
+        applySoulseekCountryFlag(header, soulseekPeerCountryCode(username));
+        containerSettingsItems.addView(header);
+
+        appendReachPeerActionButtons(containerSettingsItems, username, null, true);
+
+        addSettingsInfoParagraph(getString(R.string.soulseek_interests_likes));
+        if (likes != null && !likes.isEmpty()) {
+            for (String item : likes) {
+                addSettingsInfoParagraph("• " + item);
+            }
+        } else {
+            addSettingsInfoParagraph(getString(R.string.soulseek_profile_interests_unavailable));
+        }
+        addSettingsInfoParagraph(getString(R.string.soulseek_interests_dislikes));
+        if (dislikes != null && !dislikes.isEmpty()) {
+            for (String item : dislikes) {
+                addSettingsInfoParagraph("• " + item);
+            }
+        }
+        if (containerSettingsItems.getChildCount() > 1) {
+            containerSettingsItems.getChildAt(1).requestFocus();
+        }
+    }
+
+    private final Runnable reachDirectoryHeartbeatRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (ConnectivityHelper.isReachLoginOk() && soulseekReachEnabled) {
+                SoulseekAccount account = SoulseekAccount.load(prefs, MainActivity.this);
+                ReachDirectoryClient.registerAsync(MainActivity.this, account.username);
+            }
+            clockHandler.postDelayed(this, REACH_DIRECTORY_HEARTBEAT_MS);
+        }
+    };
+
+    private void scheduleReachDirectoryHeartbeat() {
+        if (!ReachDirectoryClient.isConfigured()) return;
+        clockHandler.removeCallbacks(reachDirectoryHeartbeatRunnable);
+        clockHandler.postDelayed(reachDirectoryHeartbeatRunnable, REACH_DIRECTORY_HEARTBEAT_MS);
+    }
+
+    private void registerReachDirectoryPresence() {
+        if (!ReachDirectoryClient.isConfigured() || !ConnectivityHelper.isReachLoginOk()) return;
+        SoulseekAccount account = SoulseekAccount.load(prefs, MainActivity.this);
+        ReachDirectoryClient.registerAsync(MainActivity.this, account.username);
+        scheduleReachDirectoryHeartbeat();
+    }
+
+    private void buildSoulseekMessagesUI() {
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("subKey", settingsSubScreenKey);
+            DebugAgentLog.log(this, "MainActivity.buildSoulseekMessagesUI", "enter", "H-A", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        showSoulseekConversationPanel(false);
+        showReachBrowseList(false);
+        setSettingsSubScreen(SettingsScreens.SOULSEEK_MESSAGES);
+        updateStatusBarTitle();
+        applyReachBrowseLayoutMode();
+        containerSettingsItems.removeAllViews();
+        resetReachBrowseHeaders();
+        showReachBrowseList(true);
+
+        Button btnBack = createListButton(getString(R.string.soulseek_back_settings));
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildSoulseekSettingsUI();
+            }
+        });
+        addReachBrowseHeader(btnBack);
+
+        Button btnNew = createListButton(getString(R.string.soulseek_new_message));
+        btnNew.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                keyboardPurpose = KEYBOARD_SOULSEEK_CONTACT;
+                keyboardReturnState = STATE_SETTINGS;
+                keyboardReturnSettingsSubKey = SettingsScreens.SOULSEEK_MESSAGES;
+                typedPassword = "";
+                changeScreen(STATE_WIFI_KEYBOARD);
+            }
+        });
+        addReachBrowseHeader(btnNew);
+
+        ensureReachInboxAdapter();
+        loadReachInboxData();
+    }
+
+    private void ensureReachInboxAdapter() {
+        final int rowW = messagingRowWidthPx();
+        if (reachInboxAdapter == null) {
+            reachInboxAdapter = new ReachInboxAdapter(this, new ReachInboxAdapter.Listener() {
+                @Override
+                public void onPeerSelected(String peer) {
+                    clickFeedback();
+                    soulseekMessagePeer = peer;
+                    buildSoulseekConversationUI(peer);
+                }
+
+                @Override
+                public String countryCodeForPeer(String peer) {
+                    return soulseekPeerCountryCode(peer);
+                }
+            });
+        }
+        reachInboxAdapter.setRowWidthPx(rowW);
+        reachInboxAdapter.setLoading(getString(R.string.soulseek_messages_loading));
+        if (listReachBrowse != null) {
+            listReachBrowse.setAdapter(reachInboxAdapter);
+            listReachBrowse.setOnItemSelectedListener(
+                    new android.widget.AdapterView.OnItemSelectedListener() {
+                @Override
+                public void onItemSelected(android.widget.AdapterView<?> parent, View view,
+                        int position, long id) {
+                    onReachBrowseListItemSelected(position);
+                }
+
+                @Override
+                public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+            });
+            listReachBrowse.post(new Runnable() {
+                @Override
+                public void run() {
+                    focusFirstReachBrowseDataRow();
+                }
+            });
+        }
+    }
+
+    private void loadReachInboxData() {
+        final int gen = ++reachInboxLoadGen;
+        if (reachInboxAdapter != null) {
+            reachInboxAdapter.setLoading(getString(R.string.soulseek_messages_loading));
+        }
+        final android.content.Context app = getApplicationContext();
+        ReachDbExecutor.run(new Runnable() {
+            @Override
+            public void run() {
+                java.util.List<ReachDatabase.InboxRow> inbox =
+                        new java.util.ArrayList<ReachDatabase.InboxRow>();
+                String loadError = null;
+                try {
+                    ReachDatabase.getInstance(app).ensureMigrated(prefs);
+                    inbox = ReachDatabase.getInstance(app).loadInboxSync();
+                } catch (Exception e) {
+                    loadError = e.getClass().getSimpleName() + ": " + e.getMessage();
+                }
+                final java.util.List<ReachDatabase.InboxRow> inboxFinal = inbox;
+                final String errFinal = loadError;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        // #region agent log
+                        try {
+                            org.json.JSONObject d = new org.json.JSONObject();
+                            d.put("gen", gen);
+                            d.put("inboxSize", inboxFinal.size());
+                            d.put("error", errFinal != null ? errFinal : "");
+                            DebugAgentLog.log(MainActivity.this, "MainActivity.loadReachInboxData",
+                                    "ui result", errFinal != null ? "H-C" : "H-A", d);
+                        } catch (Exception ignored) {}
+                        // #endregion
+                        if (gen != reachInboxLoadGen) return;
+                        if (!SettingsScreens.SOULSEEK_MESSAGES.equals(settingsSubScreenKey)) return;
+                        if (reachInboxAdapter == null) return;
+                        if (errFinal != null) {
+                            reachInboxAdapter.setStatus(getString(R.string.soulseek_browse_failed,
+                                    errFinal));
+                            reachInboxAdapter.setRowWidthPx(messagingRowWidthPx());
+                            focusReachBrowseList(gen);
+                            return;
+                        }
+                        if (inboxFinal.isEmpty()) {
+                            reachInboxAdapter.setStatus(
+                                    getString(R.string.soulseek_messages_empty_hint));
+                        } else {
+                            reachInboxAdapter.setInbox(inboxFinal);
+                        }
+                        reachInboxAdapter.setRowWidthPx(messagingRowWidthPx());
+                        focusReachBrowseList(gen);
+                    }
+                });
+            }
+        });
+    }
+
+    private void focusReachBrowseList(final int gen) {
+        if (listReachBrowse == null) return;
+        listReachBrowse.post(new Runnable() {
+            @Override
+            public void run() {
+                if (gen != reachInboxLoadGen) return;
+                focusFirstReachBrowseDataRow();
+            }
+        });
+    }
+
+    private void addSoulseekMessagesInboxRow(final String peer) {
+        final int rowW = conversationRowWidthPx();
+        SoulseekMessaging.Message last = SoulseekMessaging.lastMessageForPeer(MainActivity.this, prefs, peer);
+        String timestamp = "";
+        String preview = "";
+        if (last != null) {
+            timestamp = SoulseekMessaging.formatTimestamp(last.timestamp);
+            preview = ReachMessageFormat.previewText(last.text);
+        }
+        final int rowH = ReachMessageRow.measureListRowHeight(this, !preview.isEmpty());
+        final FrameLayout row = ReachMessageRow.create(this, rowH);
+        row.setTag(ReachMessageRow.TAG_PEER, peer);
+        row.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, rowH));
+        final String timestampFinal = timestamp;
+        final String previewFinal = preview;
+        ReachMessageRow.bindInboxRow(this, row, peer, previewFinal, timestampFinal, false, rowW, rowH,
+                soulseekPeerCountryCode(peer));
+        row.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                soulseekMessagePeer = peer;
+                buildSoulseekConversationUI(peer);
+            }
+        });
+        row.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+            @Override
+            public void onFocusChange(View v, boolean hasFocus) {
+                ReachMessageRow.bindInboxRow(MainActivity.this, row, peer, previewFinal,
+                        timestampFinal, hasFocus, rowW, rowH, soulseekPeerCountryCode(peer));
+            }
+        });
+        containerSettingsItems.addView(row);
+        watchSoulseekPeer(peer);
+    }
+
+    private void showSoulseekConversationPanel(boolean show) {
+        if (settingsScrollView != null) {
+            settingsScrollView.setVisibility(show ? View.GONE : View.VISIBLE);
+        }
+        if (listReachBrowse != null && show) {
+            listReachBrowse.setVisibility(View.GONE);
+        }
+        if (soulseekConversationHost != null) {
+            soulseekConversationHost.setVisibility(show ? View.VISIBLE : View.GONE);
+        }
+        if (settingsPreviewPane != null && !isFullWidthMenus && !settingsBrowseFullWidth) {
+            settingsPreviewPane.setVisibility(show ? View.GONE : View.VISIBLE);
+        }
+        if (!show && listThemes != null && listThemes.getVisibility() == View.VISIBLE) {
+            if (settingsScrollView != null) settingsScrollView.setVisibility(View.GONE);
+        }
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("show", show);
+            d.put("screenWidthPx", screenWidthPx);
+            d.put("settingsMenuWidthPx", settingsMenuWidthPx);
+            d.put("conversationRowWidthPx", conversationRowWidthPx());
+            if (settingsMenuHost != null) {
+                d.put("hostWidth", settingsMenuHost.getWidth());
+                d.put("hostLpWidth", settingsMenuHost.getLayoutParams().width);
+            }
+            if (settingsPreviewPane != null) {
+                d.put("previewVis", settingsPreviewPane.getVisibility());
+            }
+            if (listConversationThread != null) {
+                d.put("listWidth", listConversationThread.getWidth());
+                d.put("listCount", listConversationThread.getAdapter() != null
+                        ? listConversationThread.getAdapter().getCount() : -1);
+            }
+            DebugAgentLog.log(this, "MainActivity.showSoulseekConversationPanel",
+                    "panel", "H1-H2", d);
+        } catch (Exception ignored) {}
+        // #endregion
+    }
+
+    private boolean isConversationThreadActive() {
+        return currentScreenState == STATE_SETTINGS
+                && soulseekConversationHost != null
+                && soulseekConversationHost.getVisibility() == View.VISIBLE
+                && listConversationThread != null
+                && (SettingsScreens.SOULSEEK_MESSAGES_THREAD.equals(settingsSubScreenKey)
+                || SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD.equals(settingsSubScreenKey)
+                || SettingsScreens.SOULSEEK_CHAT_ROOM_WALL.equals(settingsSubScreenKey));
+    }
+
+    private boolean moveConversationListFocus(int delta) {
+        if (!isConversationThreadActive() || delta == 0) return false;
+        android.widget.ListAdapter ad = listConversationThread.getAdapter();
+        if (ad == null) return false;
+        int count = ad.getCount();
+        if (count <= 0) return false;
+        int pos = listConversationThread.getSelectedItemPosition();
+        if (pos < 0) pos = 0;
+        int next = pos + (delta < 0 ? -1 : 1);
+        if (next < 0 || next >= count) return false;
+        listConversationThread.setSelection(next);
+        if (ad instanceof ConversationThreadAdapter) {
+            ((ConversationThreadAdapter) ad).setSelectedPosition(next);
+        } else if (ad instanceof RoomThreadAdapter) {
+            ((RoomThreadAdapter) ad).setSelectedPosition(next);
+        } else if (ad instanceof WallThreadAdapter) {
+            ((WallThreadAdapter) ad).setSelectedPosition(next);
+        }
+        FocusScrollHelper.smoothScrollListToPosition(listConversationThread, next);
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("runId", "post-fix");
+            d.put("from", pos);
+            d.put("to", next);
+            d.put("count", count);
+            DebugAgentLog.log(this, "MainActivity.moveConversationListFocus",
+                    "conv list wheel", "H3-fix", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        return true;
+    }
+
+    private void refreshConversationThreadList() {
+        if (listConversationThread == null || soulseekMessagePeer == null) return;
+        if (listConversationThread.getAdapter() instanceof ConversationThreadAdapter) {
+            ((ConversationThreadAdapter) listConversationThread.getAdapter()).reload();
+        }
+        final int pos = conversationLastSentMessagePosition();
+        listConversationThread.post(new Runnable() {
+            @Override
+            public void run() {
+                if (pos >= 0) {
+                    listConversationThread.setSelection(pos);
+                }
+                FocusScrollHelper.smoothScrollListToPosition(listConversationThread, Math.max(0, pos));
+            }
+        });
+    }
+
+    private void refreshSoulseekMessagesListIfVisible() {
+        if (currentScreenState != STATE_SETTINGS) return;
+        if (!SettingsScreens.SOULSEEK_MESSAGES.equals(settingsSubScreenKey)) return;
+        loadReachInboxData();
+    }
+
+    private void watchConversationPeerOnline(final String peer) {
+        if (peer == null || peer.trim().isEmpty()) return;
+        final int gen = ++soulseekConversationWatchGen;
+        SoulseekUserDirectory.watch(ensureSoulseekClient(), peer, new SoulseekUserDirectory.Callback() {
+            @Override
+            public void onUserInfo(SoulseekUserDirectory.UserInfo info) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (gen != soulseekConversationWatchGen) return;
+                        if (!peer.equalsIgnoreCase(soulseekMessagePeer)) return;
+                        soulseekConversationPeerOnline = info != null && info.isOnline();
+                        refreshConversationThreadList();
+                    }
+                });
+            }
+
+            @Override
+            public void onError(String reason) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (gen != soulseekConversationWatchGen) return;
+                        soulseekConversationPeerOnline = false;
+                        refreshConversationThreadList();
+                    }
+                });
+            }
+        });
+    }
+
+    // #region agent log
+    private static final class PerfDebug {
+        static int watchPeerCalls;
+        static int watchPeerSkipped;
+        static int convGetViewCalls;
+        static int convMeasureCalls;
+        static int convHeightCacheHits;
+        static long lastFlushMs;
+
+        static void maybeFlush(Context ctx, String trigger) {
+            long now = System.currentTimeMillis();
+            if (now - lastFlushMs < 2500) return;
+            lastFlushMs = now;
+            try {
+                org.json.JSONObject d = new org.json.JSONObject();
+                d.put("watchPeerCalls", watchPeerCalls);
+                d.put("watchPeerSkipped", watchPeerSkipped);
+                d.put("convGetViewCalls", convGetViewCalls);
+                d.put("convMeasureCalls", convMeasureCalls);
+                d.put("convHeightCacheHits", convHeightCacheHits);
+                d.put("trigger", trigger);
+                DebugAgentLog.log(ctx, "MainActivity.PerfDebug", "perf sample", "A-C", d);
+            } catch (Exception ignored) {}
+        }
+    }
+    // #endregion
+
+    private final class ConversationThreadAdapter extends android.widget.BaseAdapter {
+        private java.util.List<ConversationDisplayBuilder.Entry> entries =
+                new java.util.ArrayList<ConversationDisplayBuilder.Entry>();
+        private int[] conversationUnselectedHeights = new int[0];
+        private int selectedPosition = -1;
+
+        void setSelectedPosition(int pos) {
+            if (pos == selectedPosition) return;
+            selectedPosition = pos;
+            notifyDataSetChanged();
+        }
+
+        void reload() {
+            java.util.List<SoulseekMessaging.Message> raw =
+                    SoulseekMessaging.thread(MainActivity.this, prefs, soulseekMessagePeer);
+            SoulseekAccount acct = SoulseekAccount.load(prefs);
+            entries = ConversationDisplayBuilder.build(raw, acct.username, soulseekMessagePeer);
+            conversationUnselectedHeights = new int[entries.size()];
+            java.util.Arrays.fill(conversationUnselectedHeights, -1);
+            notifyDataSetChanged();
+        }
+
+        ConversationDisplayBuilder.Entry getEntryAt(int position) {
+            return position >= 0 && position < entries.size() ? entries.get(position) : null;
+        }
+
+        private void bindConversationRow(FrameLayout row, int position, boolean highlighted) {
+            final int rowW = conversationRowWidthPx();
+            final boolean isNewMessage = position >= entries.size();
+            final int rowH;
+            if (isNewMessage) {
+                rowH = conversationRowHeightPx();
+                ReachMessageRow.bind(MainActivity.this, row,
+                        getString(R.string.soulseek_new_message), null,
+                        false, highlighted, null, rowW, rowH, false);
+                return;
+            }
+            ConversationDisplayBuilder.Entry entry = entries.get(position);
+            if (!highlighted && position < conversationUnselectedHeights.length) {
+                int cached = conversationUnselectedHeights[position];
+                if (cached > 0) {
+                    rowH = cached;
+                    PerfDebug.convHeightCacheHits++;
+                } else {
+                    rowH = ReachMessageRow.measureConversationEntryHeight(
+                            MainActivity.this, entry, false);
+                    conversationUnselectedHeights[position] = rowH;
+                    PerfDebug.convMeasureCalls++;
+                }
+            } else {
+                rowH = ReachMessageRow.measureConversationEntryHeight(
+                        MainActivity.this, entry, highlighted);
+                PerfDebug.convMeasureCalls++;
+            }
+            SoulseekMessaging.Message m = entry.message;
+            Boolean online = m.incoming ? soulseekConversationPeerOnline : null;
+            ReachMessageRow.bindConversationEntry(MainActivity.this, row, entry,
+                    m.incoming, highlighted, online, rowW, rowH);
+        }
+
+        SoulseekMessaging.Message getMessageAt(int position) {
+            ConversationDisplayBuilder.Entry e = getEntryAt(position);
+            return e != null ? e.message : null;
+        }
+
+        @Override
+        public int getCount() {
+            return entries.size() + 1;
+        }
+
+        @Override
+        public Object getItem(int position) {
+            return getEntryAt(position);
+        }
+
+        @Override
+        public long getItemId(int position) {
+            return position;
+        }
+
+        @Override
+        public int getViewTypeCount() {
+            return 1;
+        }
+
+        @Override
+        public View getView(final int position, View convertView, ViewGroup parent) {
+            // #region agent log
+            PerfDebug.convGetViewCalls++;
+            // #endregion
+            FrameLayout row;
+            if (convertView instanceof FrameLayout) {
+                row = (FrameLayout) convertView;
+            } else {
+                row = ReachMessageRow.create(MainActivity.this, conversationRowHeightPx());
+            }
+            // #region agent log
+            if (PerfDebug.convGetViewCalls % 20 == 0) {
+                PerfDebug.maybeFlush(MainActivity.this, "convGetView");
+            }
+            // #endregion
+            final FrameLayout rowView = row;
+            ReachMessageRow.attachFocusHighlight(row, new ReachMessageRow.HighlightBind() {
+                @Override
+                public void bind(boolean highlighted) {
+                    boolean show = highlighted || position == selectedPosition;
+                    bindConversationRow(rowView, position, show);
+                }
+            });
+            return row;
+        }
+    }
+
+    private final class RoomThreadAdapter extends android.widget.BaseAdapter {
+        private java.util.List<RoomConversationDisplayBuilder.Entry> entries =
+                new java.util.ArrayList<RoomConversationDisplayBuilder.Entry>();
+        private int selectedPosition = -1;
+
+        void setSelectedPosition(int pos) {
+            if (pos == selectedPosition) return;
+            selectedPosition = pos;
+            notifyDataSetChanged();
+        }
+
+        void reload() {
+            SoulseekAccount acct = SoulseekAccount.load(prefs);
+            java.util.List<SoulseekChatRooms.RoomMessage> raw =
+                    SoulseekChatRooms.messagesForRoom(MainActivity.this, prefs, soulseekChatRoomName);
+            entries = RoomConversationDisplayBuilder.build(raw,
+                    acct.username != null ? acct.username : "");
+            notifyDataSetChanged();
+        }
+
+        RoomConversationDisplayBuilder.Entry getEntryAt(int position) {
+            return position >= 0 && position < entries.size() ? entries.get(position) : null;
+        }
+
+        private void bindRoomRow(FrameLayout row, int position, boolean highlighted) {
+            final int rowW = conversationRowWidthPx();
+            final int rowH = conversationRowHeightPx();
+            final boolean isNewMessage = position >= entries.size();
+            if (isNewMessage) {
+                ReachMessageRow.bind(MainActivity.this, row,
+                        getString(R.string.soulseek_room_new_message), null,
+                        false, highlighted, null, rowW, rowH, false);
+                return;
+            }
+            RoomConversationDisplayBuilder.Entry entry = entries.get(position);
+            SoulseekChatRooms.RoomMessage m = entry.message;
+            if (m.statusEvent) {
+                ReachMessageRow.bind(MainActivity.this, row, m.text, null,
+                        false, highlighted, null, rowW, rowH, false);
+                android.widget.TextView line1 =
+                        (android.widget.TextView) row.findViewWithTag(ReachMessageRow.TAG_LINE1);
+                if (line1 != null) {
+                    ThemeManager.applyThemedTextStyle(line1, ThemeManager.getHintTextColor());
+                }
+                return;
+            }
+            boolean incoming = m.incoming;
+            String sender = m.sender != null ? m.sender : "";
+            ReachMessageRow.bindRoomConversationEntry(MainActivity.this, row, entry, incoming,
+                    highlighted, sender, rowW, rowH, soulseekPeerCountryCode(sender));
+        }
+
+        @Override
+        public int getCount() {
+            return entries.size() + 1;
+        }
+
+        @Override
+        public Object getItem(int position) {
+            return getEntryAt(position);
+        }
+
+        @Override
+        public long getItemId(int position) {
+            return position;
+        }
+
+        @Override
+        public View getView(final int position, View convertView, ViewGroup parent) {
+            FrameLayout row;
+            if (convertView instanceof FrameLayout) {
+                row = (FrameLayout) convertView;
+            } else {
+                row = ReachMessageRow.create(MainActivity.this, conversationRowHeightPx());
+            }
+            final FrameLayout rowView = row;
+            ReachMessageRow.attachFocusHighlight(row, new ReachMessageRow.HighlightBind() {
+                @Override
+                public void bind(boolean highlighted) {
+                    boolean show = highlighted || position == selectedPosition;
+                    bindRoomRow(rowView, position, show);
+                }
+            });
+            return row;
+        }
+    }
+
+    private final class WallThreadAdapter extends android.widget.BaseAdapter {
+        private java.util.List<SoulseekRoomWall.RoomTicker> tickers =
+                new java.util.ArrayList<SoulseekRoomWall.RoomTicker>();
+        private int selectedPosition = -1;
+
+        void setSelectedPosition(int pos) {
+            if (pos == selectedPosition) return;
+            selectedPosition = pos;
+            notifyDataSetChanged();
+        }
+
+        void reload() {
+            tickers = SoulseekRoomWall.tickersForRoom(MainActivity.this, soulseekChatRoomName);
+            notifyDataSetChanged();
+        }
+
+        SoulseekRoomWall.RoomTicker getTickerAt(int position) {
+            return position >= 0 && position < tickers.size() ? tickers.get(position) : null;
+        }
+
+        private void bindWallRow(FrameLayout row, int position, boolean highlighted) {
+            final int rowW = conversationRowWidthPx();
+            final int rowH = conversationRowHeightPx();
+            final boolean isCompose = position >= tickers.size();
+            if (isCompose) {
+                SoulseekAccount acct = SoulseekAccount.load(prefs);
+                boolean hasOwn = false;
+                for (SoulseekRoomWall.RoomTicker t : tickers) {
+                    if (t.username.equalsIgnoreCase(acct.username)) {
+                        hasOwn = true;
+                        break;
+                    }
+                }
+                ReachMessageRow.bind(MainActivity.this, row,
+                        getString(hasOwn ? R.string.soulseek_room_wall_edit
+                                : R.string.soulseek_room_wall_set),
+                        null, false, highlighted, null, rowW, rowH, false);
+                return;
+            }
+            SoulseekRoomWall.RoomTicker t = tickers.get(position);
+            SoulseekAccount acct = SoulseekAccount.load(prefs);
+            boolean isSelf = t.username.equalsIgnoreCase(acct.username);
+            ReachMessageRow.bindRoomMessage(MainActivity.this, row, t.text, t.username, "",
+                    isSelf, highlighted, rowW, rowH, soulseekPeerCountryCode(t.username));
+        }
+
+        @Override
+        public int getCount() {
+            return tickers.size() + 1;
+        }
+
+        @Override
+        public Object getItem(int position) {
+            return getTickerAt(position);
+        }
+
+        @Override
+        public long getItemId(int position) {
+            return position;
+        }
+
+        @Override
+        public View getView(final int position, View convertView, ViewGroup parent) {
+            FrameLayout row;
+            if (convertView instanceof FrameLayout) {
+                row = (FrameLayout) convertView;
+            } else {
+                row = ReachMessageRow.create(MainActivity.this, conversationRowHeightPx());
+            }
+            final FrameLayout rowView = row;
+            ReachMessageRow.attachFocusHighlight(row, new ReachMessageRow.HighlightBind() {
+                @Override
+                public void bind(boolean highlighted) {
+                    boolean show = highlighted || position == selectedPosition;
+                    bindWallRow(rowView, position, show);
+                }
+            });
+            return row;
+        }
+    }
+
+    private void buildSoulseekChatRoomsUI() {
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("subKey", settingsSubScreenKey);
+            DebugAgentLog.log(this, "MainActivity.buildSoulseekChatRoomsUI", "enter", "H-A", d);
+        } catch (Exception ignored) {}
+        // #endregion
+        showSoulseekConversationPanel(false);
+        showSoulseekRoomPanel(false);
+        setSettingsSubScreen(SettingsScreens.SOULSEEK_CHAT_ROOMS);
+        updateStatusBarTitle();
+        applyReachBrowseLayoutMode();
+        containerSettingsItems.removeAllViews();
+        resetReachBrowseHeaders();
+        showReachBrowseList(true);
+
+        Button btnBack = createListButton(getString(R.string.soulseek_back_settings));
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildSoulseekSettingsUI();
+            }
+        });
+        addReachBrowseHeader(btnBack);
+
+        Button btnSearch = createListButton(getString(R.string.soulseek_chat_rooms_search));
+        btnSearch.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                openSoulseekRoomSearchKeyboard();
+            }
+        });
+        addReachBrowseHeader(btnSearch);
+
+        final int rowW = messagingRowWidthPx();
+        if (reachChatRoomsAdapter == null) {
+            reachChatRoomsAdapter = new ReachChatRoomsAdapter(this, new ReachChatRoomsAdapter.Listener() {
+                @Override
+                public void onRoomSelected(SoulseekWire.RoomEntry room) {
+                    clickFeedback();
+                    SoulseekClient client = ensureSoulseekClient();
+                    if (client != null) client.joinRoom(room.name);
+                    buildSoulseekChatRoomUI(room.name);
+                }
+
+                @Override
+                public void onShowMore() {}
+            });
+        }
+        reachChatRoomsAdapter.setRowWidthPx(rowW);
+        final String savedQuery = reachChatRoomsAdapter.getSearchQuery();
+        if (savedQuery != null && !savedQuery.isEmpty()) {
+            reachChatRoomsSearchGen++;
+            final int gen = reachChatRoomsSearchGen;
+            reachChatRoomsAdapter.setLoading(getString(R.string.soulseek_chat_rooms_loading));
+            runReachChatRoomSearch(savedQuery, gen);
+        } else {
+            applyCachedChatRoomsToAdapter(null);
+        }
+        if (listReachBrowse != null) {
+            listReachBrowse.setAdapter(reachChatRoomsAdapter);
+            listReachBrowse.setOnItemSelectedListener(
+                    new android.widget.AdapterView.OnItemSelectedListener() {
+                @Override
+                public void onItemSelected(android.widget.AdapterView<?> parent, View view,
+                        int position, long id) {
+                    onReachBrowseListItemSelected(position);
+                }
+
+                @Override
+                public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+            });
+            listReachBrowse.post(new Runnable() {
+                @Override
+                public void run() {
+                    focusFirstReachBrowseDataRow();
+                }
+            });
+        }
+        syncReachChatRoomListInBackground();
+    }
+
+    private void syncReachChatRoomListInBackground() {
+        SoulseekChatRooms.loadRoomListAsync(this, prefs,
+                new ReachDatabase.Callback<java.util.List<SoulseekWire.RoomEntry>>() {
+            @Override
+            public void onResult(java.util.List<SoulseekWire.RoomEntry> list) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (!SettingsScreens.SOULSEEK_CHAT_ROOMS.equals(settingsSubScreenKey)) return;
+                        if (reachChatRoomsAdapter == null) return;
+                        String query = reachChatRoomsAdapter.getSearchQuery();
+                        if (query != null && !query.isEmpty()) return;
+                        applyCachedChatRoomsToAdapter(list);
+                    }
+                });
+            }
+        });
+    }
+
+    private void applyCachedChatRoomsToAdapter(java.util.List<SoulseekWire.RoomEntry> rooms) {
+        if (reachChatRoomsAdapter == null) return;
+        java.util.List<SoulseekWire.RoomEntry> source = rooms;
+        if (source == null && pendingRoomListSnapshot != null) {
+            source = pendingRoomListSnapshot;
+        }
+        if (source == null) {
+            source = ReachDatabase.getInstance(this).loadRoomsSync();
+        }
+        if (source == null || source.isEmpty()) {
+            reachChatRoomsAdapter.setStatus(getString(R.string.soulseek_chat_rooms_empty));
+            return;
+        }
+        java.util.ArrayList<SoulseekWire.RoomEntry> sorted =
+                new java.util.ArrayList<SoulseekWire.RoomEntry>(source);
+        java.util.Collections.sort(sorted, new java.util.Comparator<SoulseekWire.RoomEntry>() {
+            @Override
+            public int compare(SoulseekWire.RoomEntry a, SoulseekWire.RoomEntry b) {
+                int cmp = Integer.compare(b.userCount, a.userCount);
+                if (cmp != 0) return cmp;
+                return a.name.compareToIgnoreCase(b.name);
+            }
+        });
+        int limit = Math.min(ReachChatRoomsAdapter.PAGE_SIZE, sorted.size());
+        reachChatRoomsAdapter.setRooms(sorted.subList(0, limit));
+    }
+
+    private void openSoulseekRoomSearchKeyboard() {
+        keyboardPurpose = KEYBOARD_SOULSEEK_ROOM_SEARCH;
+        keyboardReturnState = STATE_SETTINGS;
+        keyboardReturnSettingsSubKey = SettingsScreens.SOULSEEK_CHAT_ROOMS;
+        keyboardPrefill = reachChatRoomsAdapter != null
+                ? reachChatRoomsAdapter.getSearchQuery() : "";
+        typedPassword = "";
+        changeScreen(STATE_WIFI_KEYBOARD);
+    }
+
+    private void finishSoulseekRoomSearchEntry() {
+        final String query = typedPassword != null ? typedPassword.trim() : "";
+        typedPassword = "";
+        changeScreen(STATE_SETTINGS);
+        restoreSoulseekSettingsScreen(SettingsScreens.SOULSEEK_CHAT_ROOMS);
+        if (query.isEmpty()) {
+            return;
+        }
+        reachChatRoomsSearchGen++;
+        final int gen = reachChatRoomsSearchGen;
+        if (reachChatRoomsAdapter != null) {
+            reachChatRoomsAdapter.setLoading(getString(R.string.soulseek_chat_rooms_loading));
+        }
+        runReachChatRoomSearch(query, gen);
+    }
+
+    private void onConversationBackPressed() {
+        if (isRoomThreadScreenActive()) {
+            buildSoulseekChatRoomsUI();
+        } else {
+            buildSoulseekMessagesUI();
+        }
+    }
+
+    private void updateConversationBackButton() {
+        if (btnConversationBack == null) return;
+        if (SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD.equals(settingsSubScreenKey)) {
+            btnConversationBack.setText(getString(R.string.soulseek_back_chat_rooms));
+        } else {
+            btnConversationBack.setText(getString(R.string.soulseek_back_messages));
+        }
+    }
+
+    private void runReachChatRoomSearch(final String query, final int gen) {
+        ReachDbExecutor.run(new Runnable() {
+            @Override
+            public void run() {
+                final java.util.List<SoulseekWire.RoomEntry> results =
+                        ReachDatabase.getInstance(MainActivity.this)
+                                .searchRoomsSync(query, ReachChatRoomsAdapter.PAGE_SIZE, 0);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (gen != reachChatRoomsSearchGen) return;
+                        if (!SettingsScreens.SOULSEEK_CHAT_ROOMS.equals(settingsSubScreenKey)) return;
+                        if (reachChatRoomsAdapter == null) return;
+                        if (results.isEmpty()) {
+                            reachChatRoomsAdapter.setJoinByNameFallback(query);
+                        } else {
+                            reachChatRoomsAdapter.setSearchResults(query, results);
+                        }
+                        if (listReachBrowse != null) {
+                            listReachBrowse.post(new Runnable() {
+                                @Override
+                                public void run() {
+                                    if (gen != reachChatRoomsSearchGen) return;
+                                    focusFirstReachBrowseDataRow();
+                                }
+                            });
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    private void openSoulseekPeerNoteEditor(final String username) {
+        if (username == null || username.trim().isEmpty()) return;
+        soulseekPeerNoteUsername = username.trim();
+        keyboardPurpose = KEYBOARD_SOULSEEK_PEER_NOTE;
+        keyboardReturnState = STATE_SETTINGS;
+        keyboardReturnSettingsSubKey = settingsSubScreenKey;
+        keyboardPrefill = SoulseekPeerNotes.getNoteSync(this, soulseekPeerNoteUsername);
+        typedPassword = "";
+        changeScreen(STATE_WIFI_KEYBOARD);
+    }
+
+    private void finishSoulseekPeerNoteEntry() {
+        final String peer = soulseekPeerNoteUsername;
+        final String note = typedPassword != null ? typedPassword.trim() : "";
+        typedPassword = "";
+        soulseekPeerNoteUsername = null;
+        changeScreen(STATE_SETTINGS);
+        if (peer != null && !peer.isEmpty()) {
+            SoulseekPeerNotes.setNote(this, peer, note);
+            Toast.makeText(this, getString(R.string.soulseek_user_note_saved), Toast.LENGTH_SHORT).show();
+        }
+        if (SettingsScreens.SOULSEEK_USER_PROFILE.equals(settingsSubScreenKey)
+                && settingsSubScreenExtra != null) {
+            loadSoulseekUserProfileData(settingsSubScreenExtra);
+        } else if (contextReachPeerUser != null && peer != null
+                && peer.equalsIgnoreCase(contextReachPeerUser)
+                && themedContextMenu != null && themedContextMenu.isShowing()) {
+            rebuildContextReachPeerTier(true);
+        }
+    }
+
+    private void loadReachChatRoomsData() {
+        // Deprecated: chat rooms are search-first; cache sync uses syncReachChatRoomListInBackground().
+    }
+
+    private void buildSoulseekChatRoomUI(final String room) {
+        buildSoulseekChatRoomUI(room, SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD);
+    }
+
+    private void buildSoulseekRoomWallUI(final String room) {
+        buildSoulseekChatRoomUI(room, SettingsScreens.SOULSEEK_CHAT_ROOM_WALL);
+    }
+
+    private void buildSoulseekChatRoomUI(final String room, final String modeKey) {
+        if (room == null || room.trim().isEmpty()) {
+            buildSoulseekChatRoomsUI();
+            return;
+        }
+        containerSettingsItems.removeAllViews();
+        soulseekChatRoomName = room.trim();
+        setSettingsSubScreen(modeKey, soulseekChatRoomName);
+        updateStatusBarTitle();
+        applyReachBrowseLayoutMode();
+        showReachBrowseList(false);
+        showSoulseekRoomPanel(true);
+        ensureSoulseekRoomModeBar();
+        if (tvConversationTitle != null) {
+            tvConversationTitle.setText(soulseekChatRoomName);
+            tvConversationTitle.setSelected(true);
+            enableMarquee(tvConversationTitle);
+            ThemeManager.applyThemedTextStyle(tvConversationTitle, ThemeManager.getTextColorPrimary());
+        }
+        updateSoulseekRoomModeBar(modeKey);
+        final boolean wallMode = SettingsScreens.SOULSEEK_CHAT_ROOM_WALL.equals(modeKey);
+        if (listConversationThread != null) {
+            if (wallMode) {
+                WallThreadAdapter adapter = new WallThreadAdapter();
+                adapter.reload();
+                listConversationThread.setAdapter(adapter);
+                listConversationThread.setOnItemSelectedListener(
+                        new android.widget.AdapterView.OnItemSelectedListener() {
+                    @Override
+                    public void onItemSelected(android.widget.AdapterView<?> parent, View view,
+                            int position, long id) {
+                        if (view != null) view.requestFocus();
+                        adapter.setSelectedPosition(position);
+                        updateRoomWallPreview(position);
+                    }
+
+                    @Override
+                    public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+                });
+                final int focusPos = Math.max(0, adapter.getCount() - 1);
+                listConversationThread.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        listConversationThread.setSelection(focusPos);
+                        FocusScrollHelper.smoothScrollListToPosition(listConversationThread, focusPos);
+                        updateRoomWallPreview(focusPos);
+                    }
+                });
+            } else {
+                RoomThreadAdapter adapter = new RoomThreadAdapter();
+                adapter.reload();
+                listConversationThread.setAdapter(adapter);
+                listConversationThread.setOnItemSelectedListener(
+                        new android.widget.AdapterView.OnItemSelectedListener() {
+                    @Override
+                    public void onItemSelected(android.widget.AdapterView<?> parent, View view,
+                            int position, long id) {
+                        if (view != null) view.requestFocus();
+                        adapter.setSelectedPosition(position);
+                        updateChatRoomMessagePreview(position);
+                    }
+
+                    @Override
+                    public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+                });
+                final int focusPos = soulseekRoomFocusLastMessage
+                        ? Math.max(0, adapter.getCount() - 2)
+                        : Math.max(0, adapter.getCount() - 1);
+                soulseekRoomFocusLastMessage = false;
+                listConversationThread.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        listConversationThread.setSelection(focusPos);
+                        FocusScrollHelper.smoothScrollListToPosition(listConversationThread, focusPos);
+                        updateChatRoomMessagePreview(focusPos);
+                    }
+                });
+            }
+        }
+        SoulseekClient client = ensureSoulseekClient();
+        if (client != null) client.joinRoom(soulseekChatRoomName);
+        updateConversationBackButton();
+    }
+
+    private void ensureSoulseekRoomModeBar() {
+        if (soulseekConversationHost == null) return;
+        if (soulseekRoomModeBar != null) return;
+        soulseekRoomModeBar = new LinearLayout(this);
+        soulseekRoomModeBar.setOrientation(LinearLayout.HORIZONTAL);
+        int pad = (int) (4 * getResources().getDisplayMetrics().density);
+        soulseekRoomModeBar.setPadding(pad, pad, pad, pad);
+        Button btnChat = createListButton(getString(R.string.soulseek_room_mode_chat));
+        btnChat.setTag("room_mode_chat");
+        btnChat.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        btnChat.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildSoulseekChatRoomUI(soulseekChatRoomName);
+            }
+        });
+        Button btnWall = createListButton(getString(R.string.soulseek_room_mode_wall));
+        btnWall.setTag("room_mode_wall");
+        btnWall.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        btnWall.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildSoulseekRoomWallUI(soulseekChatRoomName);
+            }
+        });
+        soulseekRoomModeBar.addView(btnChat);
+        soulseekRoomModeBar.addView(btnWall);
+        int titleIdx = -1;
+        if (soulseekConversationHost instanceof android.view.ViewGroup && tvConversationTitle != null) {
+            titleIdx = ((android.view.ViewGroup) soulseekConversationHost)
+                    .indexOfChild(tvConversationTitle);
+        }
+        if (soulseekConversationHost instanceof android.view.ViewGroup) {
+            android.view.ViewGroup host = (android.view.ViewGroup) soulseekConversationHost;
+            if (titleIdx >= 0) {
+                host.addView(soulseekRoomModeBar, titleIdx + 1);
+            } else {
+                host.addView(soulseekRoomModeBar, 1);
+            }
+        }
+    }
+
+    private void updateSoulseekRoomModeBar(String modeKey) {
+        if (soulseekRoomModeBar == null) return;
+        for (int i = 0; i < soulseekRoomModeBar.getChildCount(); i++) {
+            View child = soulseekRoomModeBar.getChildAt(i);
+            if (!(child instanceof Button)) continue;
+            Button b = (Button) child;
+            Object tag = b.getTag();
+            boolean chat = SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD.equals(modeKey);
+            boolean active = ("room_mode_chat".equals(tag) && chat)
+                    || ("room_mode_wall".equals(tag) && !chat);
+            String label = b.getText().toString();
+            if (label.startsWith("✔ ")) label = label.substring(2);
+            b.setText(active ? "✔ " + label : label);
+        }
+    }
+
+    private void updateRoomWallPreview(int position) {
+        if (!SettingsScreens.SOULSEEK_CHAT_ROOM_WALL.equals(settingsSubScreenKey)) return;
+        if (listConversationThread == null
+                || !(listConversationThread.getAdapter() instanceof WallThreadAdapter)) return;
+        WallThreadAdapter ad = (WallThreadAdapter) listConversationThread.getAdapter();
+        if (position >= ad.getCount() - 1) {
+            applySettingsPreviewStateText(getString(R.string.soulseek_room_wall_set), true);
+            return;
+        }
+        SoulseekRoomWall.RoomTicker t = ad.getTickerAt(position);
+        if (t == null) return;
+        if (tvSettingsPreviewTitle != null) {
+            tvSettingsPreviewTitle.setText(t.username);
+            tvSettingsPreviewTitle.setSelected(true);
+            enableMarquee(tvSettingsPreviewTitle);
+        }
+        applySettingsPreviewStateText(t.text, true);
+    }
+
+    private void refreshRoomWallList() {
+        if (listConversationThread == null || soulseekChatRoomName == null) return;
+        if (listConversationThread.getAdapter() instanceof WallThreadAdapter) {
+            ((WallThreadAdapter) listConversationThread.getAdapter()).reload();
+        }
+    }
+
+    private void showSoulseekRoomPanel(boolean show) {
+        if (settingsScrollView != null) {
+            settingsScrollView.setVisibility(show ? View.GONE : View.VISIBLE);
+        }
+        if (soulseekConversationHost != null) {
+            soulseekConversationHost.setVisibility(show ? View.VISIBLE : View.GONE);
+        }
+        if (settingsPreviewPane != null && !isFullWidthMenus) {
+            settingsPreviewPane.setVisibility(show ? View.VISIBLE : View.GONE);
+        }
+    }
+
+    private void updateChatRoomMessagePreview(int position) {
+        if (!SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD.equals(settingsSubScreenKey)) return;
+        if (listConversationThread == null
+                || !(listConversationThread.getAdapter() instanceof RoomThreadAdapter)) return;
+        RoomThreadAdapter ad = (RoomThreadAdapter) listConversationThread.getAdapter();
+        if (position >= ad.getCount() - 1) {
+            if (tvSettingsPreviewTitle != null) {
+                tvSettingsPreviewTitle.setText(soulseekChatRoomName);
+                tvSettingsPreviewTitle.setSelected(true);
+                enableMarquee(tvSettingsPreviewTitle);
+            }
+            applySettingsPreviewStateText(getString(R.string.soulseek_room_new_message), true);
+            return;
+        }
+        RoomConversationDisplayBuilder.Entry entry = ad.getEntryAt(position);
+        if (entry == null || entry.message == null) return;
+        SoulseekChatRooms.RoomMessage m = entry.message;
+        if (tvSettingsPreviewTitle != null) {
+            tvSettingsPreviewTitle.setText(m.sender);
+            tvSettingsPreviewTitle.setSelected(true);
+            enableMarquee(tvSettingsPreviewTitle);
+        }
+        String ts = SoulseekChatRooms.formatTimestamp(m.timestamp);
+        String body = entry.displayText != null ? entry.displayText : "";
+        applySettingsPreviewStateText(ts.isEmpty() ? body : ts + "\n" + body, true);
+    }
+
+    private void refreshChatRoomThreadList() {
+        if (listConversationThread == null || soulseekChatRoomName == null) return;
+        if (listConversationThread.getAdapter() instanceof RoomThreadAdapter) {
+            ((RoomThreadAdapter) listConversationThread.getAdapter()).reload();
+        }
+    }
+
+    private boolean isRoomNewMessagePosition(int pos) {
+        if (SettingsScreens.SOULSEEK_CHAT_ROOM_WALL.equals(settingsSubScreenKey)) {
+            if (listConversationThread == null
+                    || !(listConversationThread.getAdapter() instanceof WallThreadAdapter)) {
+                return true;
+            }
+            return pos >= listConversationThread.getAdapter().getCount() - 1;
+        }
+        if (listConversationThread == null
+                || !(listConversationThread.getAdapter() instanceof RoomThreadAdapter)) {
+            return true;
+        }
+        return pos >= listConversationThread.getAdapter().getCount() - 1;
+    }
+
+    private boolean isRoomThreadScreenActive() {
+        return SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD.equals(settingsSubScreenKey)
+                || SettingsScreens.SOULSEEK_CHAT_ROOM_WALL.equals(settingsSubScreenKey);
+    }
+
+    private void openSoulseekRoomCompose() {
+        soulseekRoomReplyQuoteAuthor = "";
+        soulseekRoomReplyQuoteText = "";
+        keyboardPurpose = KEYBOARD_SOULSEEK_ROOM;
+        keyboardReturnState = STATE_SETTINGS;
+        keyboardReturnSettingsSubKey = SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD;
+        typedPassword = "";
+        changeScreen(STATE_WIFI_KEYBOARD);
+    }
+
+    private void openSoulseekRoomComposeWithQuote(final String author, final String quoteText) {
+        soulseekRoomReplyQuoteAuthor = author != null ? author.trim() : "";
+        soulseekRoomReplyQuoteText = quoteText != null ? quoteText.trim() : "";
+        keyboardPurpose = KEYBOARD_SOULSEEK_ROOM;
+        keyboardReturnState = STATE_SETTINGS;
+        keyboardReturnSettingsSubKey = SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD;
+        typedPassword = "";
+        changeScreen(STATE_WIFI_KEYBOARD);
+    }
+
+    private void openSoulseekRoomWallCompose() {
+        keyboardPurpose = KEYBOARD_SOULSEEK_ROOM_WALL;
+        keyboardReturnState = STATE_SETTINGS;
+        keyboardReturnSettingsSubKey = SettingsScreens.SOULSEEK_CHAT_ROOM_WALL;
+        typedPassword = "";
+        SoulseekAccount acct = SoulseekAccount.load(prefs);
+        for (SoulseekRoomWall.RoomTicker t : SoulseekRoomWall.tickersForRoom(this, soulseekChatRoomName)) {
+            if (t.username.equalsIgnoreCase(acct.username)) {
+                typedPassword = t.text;
+                break;
+            }
+        }
+        changeScreen(STATE_WIFI_KEYBOARD);
+    }
+
+    private void sendReachIntroToRoomIfNeeded() {
+        if (soulseekChatRoomName == null || soulseekChatRoomName.isEmpty()) return;
+        if (!ReachIntroTracker.needsIntroToRoom(prefs, soulseekChatRoomName)) return;
+        SoulseekAccount acct = SoulseekAccount.load(prefs, this);
+        String intro = ReachIntroMessage.build(this, acct.username, DeviceFeatures.deviceModelLabel());
+        SoulseekClient client = ensureSoulseekClient();
+        if (client != null) client.sayInRoom(soulseekChatRoomName, intro);
+        ReachIntroTracker.markIntroSentToRoom(prefs, soulseekChatRoomName);
+    }
+
+    private void sendReachIntroToPeerIfNeeded(final String peer) {
+        if (peer == null || peer.trim().isEmpty()) return;
+        if (!ReachIntroTracker.needsIntroToPeer(prefs, peer)) return;
+        SoulseekAccount acct = SoulseekAccount.load(prefs, this);
+        String intro = ReachIntroMessage.build(this, acct.username, DeviceFeatures.deviceModelLabel());
+        SoulseekClient client = ensureSoulseekClient();
+        if (client != null) client.sendPrivateMessage(peer, intro, null);
+        ReachIntroTracker.markIntroSentToPeer(prefs, peer);
+    }
+
+    private void finishSoulseekRoomMsgEntry() {
+        String text = typedPassword != null ? typedPassword.trim() : "";
+        typedPassword = "";
+        changeScreen(STATE_SETTINGS);
+        restoreSoulseekSettingsScreen(SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD);
+        if (text.isEmpty() || soulseekChatRoomName == null || soulseekChatRoomName.isEmpty()) {
+            buildSoulseekChatRoomUI(soulseekChatRoomName);
+            return;
+        }
+        sendReachIntroToRoomIfNeeded();
+        final String quote = soulseekRoomReplyQuoteText != null ? soulseekRoomReplyQuoteText.trim() : "";
+        final String author = soulseekRoomReplyQuoteAuthor != null ? soulseekRoomReplyQuoteAuthor.trim() : "";
+        soulseekRoomReplyQuoteText = "";
+        soulseekRoomReplyQuoteAuthor = "";
+        final String outbound = quote.isEmpty()
+                ? text
+                : ReachMessageFormat.formatRoomReplyWire(author, quote, text);
+        SoulseekClient client = ensureSoulseekClient();
+        if (client != null) client.sayInRoom(soulseekChatRoomName, outbound);
+        SoulseekAccount acct = SoulseekAccount.load(prefs, MainActivity.this);
+        SoulseekChatRooms.appendMessage(MainActivity.this, prefs, new SoulseekChatRooms.RoomMessage(
+                soulseekChatRoomName, acct.username, outbound,
+                (int) (System.currentTimeMillis() / 1000L), false));
+        soulseekRoomFocusLastMessage = true;
+        buildSoulseekChatRoomUI(soulseekChatRoomName);
+    }
+
+    private void finishSoulseekRoomWallEntry() {
+        String text = typedPassword != null ? typedPassword.trim() : "";
+        typedPassword = "";
+        changeScreen(STATE_SETTINGS);
+        restoreSoulseekSettingsScreen(SettingsScreens.SOULSEEK_CHAT_ROOM_WALL);
+        if (soulseekChatRoomName == null || soulseekChatRoomName.isEmpty()) return;
+        SoulseekClient client = ensureSoulseekClient();
+        if (client != null) client.setRoomTicker(soulseekChatRoomName, text);
+        SoulseekAccount acct = SoulseekAccount.load(prefs, this);
+        if (text.isEmpty()) {
+            SoulseekRoomWall.removeTicker(this, soulseekChatRoomName, acct.username);
+        } else {
+            SoulseekRoomWall.upsertTicker(this, soulseekChatRoomName, acct.username, text);
+        }
+        buildSoulseekRoomWallUI(soulseekChatRoomName);
+    }
+
+    private void openReachRoomMessageContextMenu(int messagePosition) {
+        contextReachRoomWallMode = SettingsScreens.SOULSEEK_CHAT_ROOM_WALL.equals(settingsSubScreenKey);
+        contextReachRoomMessagePosition = messagePosition;
+        contextReachPeerUser = null;
+        rebuildContextReachRoomMessageTier(true);
+    }
+
+    private void rebuildContextReachRoomMessageTier(boolean focusList) {
+        final String quoteText;
+        final String quoteAuthor;
+        final String profileUser;
+        if (contextReachRoomWallMode) {
+            if (!(listConversationThread.getAdapter() instanceof WallThreadAdapter)) return;
+            WallThreadAdapter ad = (WallThreadAdapter) listConversationThread.getAdapter();
+            SoulseekRoomWall.RoomTicker t = ad.getTickerAt(contextReachRoomMessagePosition);
+            if (t == null) return;
+            quoteText = t.text;
+            quoteAuthor = t.username;
+            profileUser = t.username;
+        } else {
+            if (!(listConversationThread.getAdapter() instanceof RoomThreadAdapter)) return;
+            RoomThreadAdapter ad = (RoomThreadAdapter) listConversationThread.getAdapter();
+            RoomConversationDisplayBuilder.Entry entry = ad.getEntryAt(contextReachRoomMessagePosition);
+            if (entry == null || entry.message == null || entry.message.statusEvent) return;
+            quoteText = entry.displayText;
+            quoteAuthor = entry.message.sender;
+            profileUser = entry.message.sender;
+        }
+
+        java.util.ArrayList<String> labels = new java.util.ArrayList<String>();
+        java.util.ArrayList<String> states = new java.util.ArrayList<String>();
+        java.util.ArrayList<Boolean> headers = new java.util.ArrayList<Boolean>();
+        java.util.ArrayList<Runnable> actions = new java.util.ArrayList<Runnable>();
+
+        labels.add(quoteText);
+        states.add(null);
+        headers.add(Boolean.TRUE);
+        actions.add(null);
+
+        final String authorFinal = quoteAuthor;
+        final String quoteFinal = quoteText;
+        labels.add(getString(R.string.soulseek_reply_to_message));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                openSoulseekRoomComposeWithQuote(authorFinal, quoteFinal);
+            }
+        });
+
+        labels.add(getString(R.string.soulseek_view_profile));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                openSoulseekUserProfile(profileUser, new Runnable() {
+                    @Override
+                    public void run() {
+                        if (contextReachRoomWallMode) {
+                            buildSoulseekRoomWallUI(soulseekChatRoomName);
+                        } else {
+                            buildSoulseekChatRoomUI(soulseekChatRoomName);
+                        }
+                    }
+                });
+            }
+        });
+
+        labels.add(getString(R.string.soulseek_react_to_message));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                contextReachReactQuote = quoteFinal;
+                contextReachPeerUser = authorFinal;
+                rebuildContextReachReactTier(true);
+            }
+        });
+
+        showContextMenuTierInPlace(profileUser != null ? profileUser : soulseekChatRoomName,
+                labels, states, null, headers, actions, focusList);
+    }
+
+    private void sendSoulseekRoomReaction(final String quoteAuthor, final String quoteText,
+            final String emoji) {
+        if (soulseekChatRoomName == null || soulseekChatRoomName.isEmpty()
+                || quoteText == null || quoteText.trim().isEmpty()) {
+            return;
+        }
+        final String quote = quoteText.trim();
+        final String outbound = ReachMessageFormat.formatReactionWire(quote, emoji.trim());
+        SoulseekClient client = ensureSoulseekClient();
+        if (client != null) client.sayInRoom(soulseekChatRoomName, outbound);
+        SoulseekAccount acct = SoulseekAccount.load(prefs, this);
+        SoulseekChatRooms.appendMessage(this, prefs, new SoulseekChatRooms.RoomMessage(
+                soulseekChatRoomName, acct.username, outbound,
+                (int) (System.currentTimeMillis() / 1000L), false));
+        soulseekRoomFocusLastMessage = true;
+        buildSoulseekChatRoomUI(soulseekChatRoomName);
+    }
+
+    private void buildSoulseekConversationUI(final String peer) {
+        if (peer == null || peer.trim().isEmpty()) {
+            buildSoulseekMessagesUI();
+            return;
+        }
+        containerSettingsItems.removeAllViews();
+        soulseekMessagePeer = peer.trim();
+        setSettingsSubScreen(SettingsScreens.SOULSEEK_MESSAGES_THREAD, soulseekMessagePeer);
+        updateStatusBarTitle();
+        showReachBrowseList(false);
+        showSoulseekConversationPanel(true);
+        applyReachBrowseLayoutMode();
+        if (tvConversationTitle != null) {
+            tvConversationTitle.setText(soulseekMessagePeer);
+            tvConversationTitle.setSelected(true);
+            enableMarquee(tvConversationTitle);
+            ThemeManager.applyThemedTextStyle(tvConversationTitle, ThemeManager.getTextColorPrimary());
+        }
+        soulseekConversationPeerOnline = null;
+        if (listConversationThread != null) {
+            ConversationThreadAdapter adapter = new ConversationThreadAdapter();
+            adapter.reload();
+            listConversationThread.setAdapter(adapter);
+            listConversationThread.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+                @Override
+                public void onItemSelected(android.widget.AdapterView<?> parent, View view,
+                        int position, long id) {
+                    if (view != null) view.requestFocus();
+                    adapter.setSelectedPosition(position);
+                }
+
+                @Override
+                public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+            });
+            final int focusPos = soulseekConversationFocusLastMessage
+                    ? conversationLastSentMessagePosition()
+                    : conversationNewMessagePosition();
+            soulseekConversationFocusLastMessage = false;
+            listConversationThread.post(new Runnable() {
+                @Override
+                public void run() {
+                    listConversationThread.setSelection(focusPos);
+                    FocusScrollHelper.smoothScrollListToPosition(listConversationThread, focusPos);
+                }
+            });
+        }
+        watchConversationPeerOnline(soulseekMessagePeer);
+        updateConversationBackButton();
+    }
+
+    private int conversationNewMessagePosition() {
+        if (listConversationThread == null
+                || !(listConversationThread.getAdapter() instanceof ConversationThreadAdapter)) {
+            return 0;
+        }
+        return Math.max(0, listConversationThread.getAdapter().getCount() - 1);
+    }
+
+    private int conversationLastSentMessagePosition() {
+        if (listConversationThread == null
+                || !(listConversationThread.getAdapter() instanceof ConversationThreadAdapter)) {
+            return 0;
+        }
+        int count = listConversationThread.getAdapter().getCount();
+        if (count <= 1) return 0;
+        return count - 2;
+    }
+
+    private void finishSoulseekFindEntry() {
+        final String user = typedPassword.trim();
+        typedPassword = "";
+        if (user.isEmpty()) {
+            restoreSettingsAfterSoulseekAccount();
+            return;
+        }
+        currentScreenState = STATE_SETTINGS;
+        layoutWifiKeyboard.setVisibility(View.GONE);
+        layoutSettingsMode.setVisibility(View.VISIBLE);
+        buildSoulseekFindUserUI();
+        Toast.makeText(this, getString(R.string.soulseek_searching), Toast.LENGTH_SHORT).show();
+        SoulseekUserDirectory.watch(ensureSoulseekClient(), user, new SoulseekUserDirectory.Callback() {
+            @Override
+            public void onUserInfo(final SoulseekUserDirectory.UserInfo info) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        showSoulseekUserLookupResult(info);
+                    }
+                });
+            }
+
+            @Override
+            public void onError(final String reason) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        Toast.makeText(MainActivity.this,
+                                getString(R.string.soulseek_browse_failed, reason),
+                                Toast.LENGTH_LONG).show();
+                    }
+                });
+            }
+        });
+    }
+
+    private void finishSoulseekMsgEntry() {
+        final String text = typedPassword.trim();
+        typedPassword = "";
+        final String to = soulseekKeyboardMessageTo != null ? soulseekKeyboardMessageTo.trim() : "";
+        if (text.isEmpty() || to.isEmpty()) {
+            soulseekReplyQuoteText = "";
+            restoreSettingsAfterSoulseekAccount();
+            return;
+        }
+        final String quote = soulseekReplyQuoteText != null ? soulseekReplyQuoteText.trim() : "";
+        soulseekReplyQuoteText = "";
+        final String outbound = quote.isEmpty()
+                ? text
+                : ReachMessageFormat.formatReplyWire(quote, text);
+        sendReachIntroToPeerIfNeeded(to);
+        ensureSoulseekClient().sendPrivateMessage(to, outbound, new SoulseekClient.MessageSendCallback() {
+            @Override
+            public void onSent() {
+                SoulseekMessaging.append(MainActivity.this, prefs, new SoulseekMessaging.Message(
+                        0, (int) (System.currentTimeMillis() / 1000L), to, outbound, false));
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        Toast.makeText(MainActivity.this, getString(R.string.soulseek_message_sent),
+                                Toast.LENGTH_SHORT).show();
+                        restoreConversationAfterKeyboard();
+                        soulseekConversationFocusLastMessage = true;
+                        buildSoulseekConversationUI(to);
+                    }
+                });
+            }
+
+            @Override
+            public void onError(final String reason) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        Toast.makeText(MainActivity.this, reason, Toast.LENGTH_LONG).show();
+                        restoreConversationAfterKeyboard();
+                        buildSoulseekConversationUI(to);
+                    }
+                });
+            }
+        });
+    }
+
+    private void finishSoulseekContactEntry() {
+        final String user = typedPassword.trim();
+        typedPassword = "";
+        currentScreenState = STATE_SETTINGS;
+        layoutWifiKeyboard.setVisibility(View.GONE);
+        layoutSettingsMode.setVisibility(View.VISIBLE);
+        if (user.isEmpty() || !SoulseekAccount.isValidUsername(user)) {
+            Toast.makeText(this, getString(R.string.soulseek_invalid_username), Toast.LENGTH_LONG).show();
+            buildSoulseekMessagesUI();
+            return;
+        }
+        soulseekMessagePeer = user;
+        buildSoulseekConversationUI(user);
+    }
+
+    private void openSoulseekMessageCompose(final String peer) {
+        openSoulseekMessageComposeWithQuote(peer, "");
+    }
+
+    private void openSoulseekMessageComposeWithQuote(final String peer, final String quoteText) {
+        soulseekMessagePeer = peer;
+        soulseekKeyboardMessageTo = peer;
+        soulseekReplyQuoteText = quoteText != null ? quoteText.trim() : "";
+        keyboardPurpose = KEYBOARD_SOULSEEK_MSG;
+        keyboardReturnState = STATE_SETTINGS;
+        keyboardReturnSettingsSubKey = SettingsScreens.SOULSEEK_MESSAGES_THREAD;
+        typedPassword = "";
+        changeScreen(STATE_WIFI_KEYBOARD);
+    }
+
+    private void captureSoulseekBrowseReturnState() {
+        if (soulseekUiMode == SOULSEEK_UI_BROWSE) {
+            return;
+        }
+        if (currentScreenState == STATE_SOULSEEK) {
+            soulseekBrowseReturnUiMode = soulseekUiMode;
+        } else {
+            soulseekBrowseReturnUiMode = -1;
+            soulseekBrowseReturnResult = null;
+            soulseekReturnScreen = currentScreenState;
+            if (currentScreenState == STATE_SETTINGS
+                    && SettingsScreens.isSoulseek(settingsSubScreenKey)) {
+                soulseekReturnSettingsSubKey = settingsSubScreenKey;
+            }
+        }
+    }
+
+    private void enterSoulseekBrowseShell() {
+        layoutSettingsMode.setVisibility(View.GONE);
+        layoutMainMenu.setVisibility(View.GONE);
+        layoutBrowserMode.setVisibility(View.VISIBLE);
+        currentScreenState = STATE_SOULSEEK;
+        soulseekUiMode = SOULSEEK_UI_BROWSE;
+        if (scrollViewBrowser != null) scrollViewBrowser.setVisibility(View.GONE);
+        if (listVirtualSongs != null) listVirtualSongs.setVisibility(View.VISIBLE);
+        browserStatusTitle = soulseekBrowseUser;
+        updateStatusBarTitle();
+        if (tvBrowserPath != null) {
+            String path = soulseekBrowseUser;
+            if (soulseekBrowseFolder != null && !soulseekBrowseFolder.isEmpty()) {
+                path += " / " + soulseekBrowseFolder;
+            }
+            tvBrowserPath.setText(getString(R.string.path_soulseek, path));
+        }
+    }
+
+    private void ensureSoulseekBrowseAdapter() {
+        if (soulseekBrowseAdapter != null) return;
+        soulseekBrowseAdapter = new SoulseekBrowseAdapter(this, new SoulseekBrowseAdapter.Listener() {
+            @Override
+            public void onFolderSelected(String path) {
+                clickFeedback();
+                openSoulseekBrowse(soulseekBrowseUser, path);
+            }
+
+            @Override
+            public void onFileSelected(SoulseekWire.BrowseFile file) {
+                clickFeedback();
+                SoulseekClient.Result r = new SoulseekClient.Result(
+                        soulseekBrowseUser, file.virtualPath(), file.size,
+                        0, 0, true, true, 0, 0);
+                buildSoulseekActionUI(r);
+            }
+        });
+    }
+
+    private void installSoulseekBrowseListHeader() {
+        if (listVirtualSongs == null) return;
+        if (soulseekBrowseListHeader != null) {
+            listVirtualSongs.removeHeaderView(soulseekBrowseListHeader);
+            soulseekBrowseListHeader = null;
+        }
+        Button back = createListButton(getString(R.string.soulseek_browse_back));
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                exitSoulseekBrowse();
+            }
+        });
+        soulseekBrowseListHeader = back;
+        listVirtualSongs.addHeaderView(back, null, false);
+    }
+
+    private void showSoulseekBrowseLoadingUi(final int gen, final boolean folderBrowse) {
+        enterSoulseekBrowseShell();
+        ensureSoulseekBrowseAdapter();
+        installSoulseekBrowseListHeader();
+        String loading = folderBrowse
+                ? getString(R.string.soulseek_browse_loading_folder)
+                : getString(R.string.soulseek_browse_loading_library);
+        soulseekBrowseAdapter.setLoading(loading);
+        if (listVirtualSongs != null) {
+            listVirtualSongs.setAdapter(soulseekBrowseAdapter);
+            listVirtualSongs.post(new Runnable() {
+                @Override
+                public void run() {
+                    if (gen != soulseekBrowseGen) return;
+                    listVirtualSongs.setSelection(0);
+                    listVirtualSongs.requestFocus();
+                }
+            });
+        }
+    }
+
+    private void exitSoulseekBrowse() {
+        if (soulseekBrowseFolder != null && !soulseekBrowseFolder.isEmpty()) {
+            String parent = SoulseekBrowseSession.parentFolder(soulseekBrowseFolder);
+            if (parent != null && !parent.isEmpty()
+                    && !parent.equals(soulseekBrowseFolder)) {
+                openSoulseekBrowse(soulseekBrowseUser, parent);
+            } else {
+                openSoulseekBrowse(soulseekBrowseUser, "");
+            }
+            return;
+        }
+        final int returnUiMode = soulseekBrowseReturnUiMode;
+        final SoulseekClient.Result returnResult = soulseekBrowseReturnResult;
+        soulseekBrowseReturnUiMode = -1;
+        soulseekBrowseReturnResult = null;
+        if (soulseekReturnScreen == STATE_SETTINGS && soulseekReturnSettingsSubKey != null) {
+            returnFromSoulseek();
+            return;
+        }
+        if (returnUiMode == SOULSEEK_UI_ACTION && returnResult != null) {
+            buildSoulseekActionUI(returnResult);
+            return;
+        }
+        if (returnUiMode == SOULSEEK_UI_RESULTS) {
+            buildSoulseekResultsUI();
+            return;
+        }
+        if (soulseekReturnScreen == STATE_MENU || soulseekReturnScreen == STATE_BROWSER
+                || soulseekReturnScreen == STATE_PODCASTS) {
+            returnFromSoulseek();
+            return;
+        }
+        buildSoulseekSearchUI();
+    }
+
+    private void openSoulseekBrowse(final String username, final String folder) {
+        if (!requireReachPeerConnectivity()) return;
+        if (username == null || username.trim().isEmpty()) return;
+        final boolean folderBrowse = folder != null && !folder.isEmpty();
+        if (soulseekUiMode == SOULSEEK_UI_ACTION && soulseekActionResult != null
+                && soulseekActionResult.username != null
+                && soulseekActionResult.username.equalsIgnoreCase(username.trim())) {
+            soulseekBrowseReturnResult = soulseekActionResult;
+        }
+        captureSoulseekBrowseReturnState();
+        soulseekBrowseUser = username.trim();
+        soulseekBrowseFolder = folder != null ? folder : "";
+        soulseekBrowseGen++;
+        final int gen = soulseekBrowseGen;
+        showSoulseekBrowseLoadingUi(gen, folderBrowse);
+
+        SoulseekBrowseSession.Callback cb = new SoulseekBrowseSession.Callback() {
+            @Override
+            public void onFolders(final java.util.List<SoulseekWire.BrowseFolder> folders) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (gen != soulseekBrowseGen) return;
+                        soulseekBrowseFolders.clear();
+                        if (folders != null) soulseekBrowseFolders.addAll(folders);
+                        buildSoulseekBrowseUI(gen);
+                    }
+                });
+            }
+
+            @Override
+            public void onError(final String reason) {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (gen != soulseekBrowseGen) return;
+                        handleSoulseekBrowseError(reason, folderBrowse);
+                    }
+                });
+            }
+        };
+        SoulseekClient client = ensureSoulseekClient();
+        if (client == null) {
+            handleSoulseekBrowseError("Reach offline", folderBrowse);
+            return;
+        }
+        if (soulseekBrowseFolder.isEmpty()) {
+            SoulseekBrowseSession.fetchShares(client, soulseekBrowseUser, cb);
+        } else {
+            SoulseekBrowseSession.fetchFolder(client, soulseekBrowseUser, soulseekBrowseFolder,
+                    (int) (System.currentTimeMillis() & 0x7fffffff), cb);
+        }
+    }
+
+    private void handleSoulseekBrowseError(String reason, boolean folderBrowse) {
+        String detail = reason != null ? reason : "";
+        Toast.makeText(this, getString(R.string.soulseek_browse_failed, detail),
+                Toast.LENGTH_LONG).show();
+        ensureSoulseekBrowseAdapter();
+        installSoulseekBrowseListHeader();
+        soulseekBrowseAdapter.setStatus(getString(R.string.soulseek_browse_failed, detail));
+        if (listVirtualSongs != null) {
+            listVirtualSongs.setAdapter(soulseekBrowseAdapter);
+            listVirtualSongs.requestFocus();
+        }
+    }
+
+    private void buildSoulseekBrowseUI(final int gen) {
+        if (gen != soulseekBrowseGen) return;
+        enterSoulseekBrowseShell();
+        ensureSoulseekBrowseAdapter();
+        installSoulseekBrowseListHeader();
+        soulseekBrowseAdapter.setFolders(soulseekBrowseFolders);
+        if (soulseekBrowseAdapter.getDataCount() == 0) {
+            String empty = soulseekBrowseFolder.isEmpty()
+                    ? getString(R.string.soulseek_browse_empty_library)
+                    : getString(R.string.soulseek_browse_empty_folder);
+            soulseekBrowseAdapter.setStatus(empty);
+        }
+        if (listVirtualSongs != null) {
+            listVirtualSongs.setAdapter(soulseekBrowseAdapter);
+            listVirtualSongs.post(new Runnable() {
+                @Override
+                public void run() {
+                    if (gen != soulseekBrowseGen) return;
+                    listVirtualSongs.setSelection(0);
+                    listVirtualSongs.requestFocus();
+                }
+            });
+        }
     }
 
     private void buildSoulseekConnectionInfoUI() {
+        showSoulseekConversationPanel(false);
         setSettingsSubScreen(SettingsScreens.SOULSEEK_CONNECTION);
         updateStatusBarTitle();
         containerSettingsItems.removeAllViews();
@@ -11598,16 +17249,15 @@ public class MainActivity extends Activity {
             }
         });
         containerSettingsItems.addView(btnBack);
-
-        addSettingsInfoParagraph(getString(R.string.soulseek_info_device_ip, formatWifiIpAddress()));
-        addSettingsInfoParagraph(soulseekListenPortLabel());
-        addSettingsInfoParagraph(soulseekNatStatusLabel());
-        addSettingsInfoParagraph(soulseekSharingStatusLabel());
-        addSettingsInfoParagraph(getString(R.string.soulseek_sharing_hint));
-        addSettingsInfoParagraph(getString(R.string.soulseek_port_forward_hint));
-        addSettingsInfoParagraph(getString(R.string.soulseek_info_nat_note));
+        bindSoulseekSubscreenBackPreview(btnBack, new Runnable() {
+            @Override
+            public void run() {
+                updateSoulseekConnectionInfoPreview();
+            }
+        });
 
         btnBack.requestFocus();
+        updateSoulseekConnectionInfoPreview();
     }
 
     private void setSettingsAboutFullWidth(boolean fullWidth) {
@@ -11820,6 +17470,7 @@ public class MainActivity extends Activity {
     }
 
     private void buildSoulseekAboutInfoUI() {
+        showSoulseekConversationPanel(false);
         setSettingsSubScreen(SettingsScreens.SOULSEEK_ABOUT);
         updateStatusBarTitle();
         containerSettingsItems.removeAllViews();
@@ -11834,11 +17485,15 @@ public class MainActivity extends Activity {
             }
         });
         containerSettingsItems.addView(btnBack);
-
-        addSettingsInfoParagraph(getString(R.string.soulseek_account_hint));
-        addSettingsInfoParagraph(getString(R.string.soulseek_download_only_note));
+        bindSoulseekSubscreenBackPreview(btnBack, new Runnable() {
+            @Override
+            public void run() {
+                updateSoulseekAboutInfoPreview();
+            }
+        });
 
         btnBack.requestFocus();
+        updateSoulseekAboutInfoPreview();
     }
 
     private void buildUpdateSettingsUI() {
@@ -12127,50 +17782,6 @@ public class MainActivity extends Activity {
             }
         });
         containerSettingsItems.addView(btnMoreTile);
-
-        createCategoryHeader(getString(R.string.settings_widgets_section));
-
-        final LinearLayout btnClock = createSettingsRow(RowKeys.WIDGET_CLOCK, R.string.widget_clock, false);
-        btnClock.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                clickFeedback();
-                homeScreenEditorFocusIndex = containerSettingsItems.indexOfChild(v);
-                isWidgetClockOn = !isWidgetClockOn;
-                try { prefs.edit().putBoolean("widget_clock", isWidgetClockOn).commit(); } catch (Exception e) {}
-                refreshWidgets();
-                buildHomeScreenEditorUI();
-            }
-        });
-        containerSettingsItems.addView(btnClock);
-
-        final LinearLayout btnBattery = createSettingsRow(RowKeys.WIDGET_BATTERY, R.string.widget_battery, false);
-        btnBattery.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                clickFeedback();
-                homeScreenEditorFocusIndex = containerSettingsItems.indexOfChild(v);
-                isWidgetBatteryOn = !isWidgetBatteryOn;
-                try { prefs.edit().putBoolean("widget_battery", isWidgetBatteryOn).commit(); } catch (Exception e) {}
-                refreshWidgets();
-                buildHomeScreenEditorUI();
-            }
-        });
-        containerSettingsItems.addView(btnBattery);
-
-        final LinearLayout btnAlbum = createSettingsRow(RowKeys.WIDGET_ALBUM, R.string.widget_album, false);
-        btnAlbum.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                clickFeedback();
-                homeScreenEditorFocusIndex = containerSettingsItems.indexOfChild(v);
-                isWidgetAlbumOn = !isWidgetAlbumOn;
-                try { prefs.edit().putBoolean("widget_album", isWidgetAlbumOn).commit(); } catch (Exception e) {}
-                refreshWidgets();
-                buildHomeScreenEditorUI();
-            }
-        });
-        containerSettingsItems.addView(btnAlbum);
 
         restoreHomeScreenEditorFocus(targetFocusIndex);
     }
@@ -12728,7 +18339,7 @@ public class MainActivity extends Activity {
                 }).start();
             });
             containerBrowserItems.addView(btnScan);
-            if (hasInternetConnection()) {
+            if (hasInternetConnection() && GetMusicSources.anyAvailable(prefs, soulseekReachEnabled, deezerEnabled)) {
                 Button btnGetMore = createListButton(getString(R.string.browser_get_more));
                 btnGetMore.setOnClickListener(new View.OnClickListener() {
                     @Override
@@ -13139,7 +18750,7 @@ public class MainActivity extends Activity {
 
     private boolean isMusicBrowseContextFile(File f) {
         return f != null && f.isFile() && isAudioFile(f) && !isPodcastMediaFile(f)
-                && !isReachTempFile(f);
+                && !isReachTempFile(f) && !DeezerCache.isTempFile(getCacheDir(), f);
     }
 
     private SongItem resolveSongMetadata(File f) {
@@ -13154,8 +18765,9 @@ public class MainActivity extends Activity {
         String album = "";
         String genre = "Unknown Genre";
         try {
-            title = prefs.getString("meta_title_" + path, title);
-            artist = prefs.getString("meta_artist_" + path, artist);
+            title = DeezerMetadata.title(prefs, path, title);
+            artist = DeezerMetadata.artist(prefs, path, artist);
+            album = DeezerMetadata.album(prefs, path, album);
         } catch (Exception ignored) {}
         if (artist.isEmpty()) artist = "Unknown Artist";
         if (album.isEmpty()) album = "Unknown Album";
@@ -13292,9 +18904,21 @@ public class MainActivity extends Activity {
                 }
             });
         }
-        if (ConnectivityHelper.isOnline(this) && ConnectivityHelper.isReachLoginOk()) {
+        boolean reachSearch = requireReachPeerConnectivity();
+        boolean deezerSearch = deezerEnabled && ConnectivityHelper.isDeezerLoginOk();
+        if (reachSearch || deezerSearch) {
             List<String> findLike = SoulseekSearchSuggestions.suggestionsFromId3(
                     si.title, si.artist, si.album, si.genre);
+            java.util.LinkedHashSet<String> interestTerms = new java.util.LinkedHashSet<String>();
+            interestTerms.addAll(findLike);
+            if (si.genre != null && !si.genre.trim().isEmpty()) {
+                interestTerms.add(si.genre.trim());
+            }
+            String primaryArtist = si.artist != null && !si.artist.trim().isEmpty()
+                    ? ArtistParser.primaryArtist(si.artist) : null;
+            if (primaryArtist != null && !primaryArtist.trim().isEmpty()) {
+                interestTerms.add(primaryArtist.trim());
+            }
             if (!findLike.isEmpty()) {
                 addContextSectionHeader(getString(R.string.context_find_like_this));
                 int shown = 0;
@@ -13303,7 +18927,28 @@ public class MainActivity extends Activity {
                     addContextAction(q, new Runnable() {
                         @Override
                         public void run() {
-                            launchReachSearchFromSuggestion(q, true);
+                            launchMusicSearchFromSuggestion(q, true);
+                        }
+                    });
+                    shown++;
+                }
+            }
+            if (reachSearch && !interestTerms.isEmpty()) {
+                addContextSectionHeader(getString(R.string.context_add_to_interests));
+                int shown = 0;
+                for (final String term : interestTerms) {
+                    if (shown >= FIND_LIKE_SUGGESTIONS_MAX) break;
+                    final String t = term;
+                    addContextAction(getString(R.string.context_like_interest, t), new Runnable() {
+                        @Override
+                        public void run() {
+                            addReachInterestFromTerm(t, true);
+                        }
+                    });
+                    addContextAction(getString(R.string.context_dislike_interest, t), new Runnable() {
+                        @Override
+                        public void run() {
+                            addReachInterestFromTerm(t, false);
                         }
                     });
                     shown++;
@@ -13899,7 +19544,20 @@ public class MainActivity extends Activity {
                 try {
                     final List<OpenRssClient.Podcast> raw = OpenRssClient.searchPodcasts(
                             searchTerm, searchCountry, searchGenre, 20);
-                    if (raw.isEmpty()) {
+                    final List<OpenRssClient.Podcast> deezerOnly =
+                            new java.util.ArrayList<OpenRssClient.Podcast>();
+                    if (deezerEnabled && ConnectivityHelper.isDeezerLoginOk()) {
+                        try {
+                            DeezerSearch dz = new DeezerSearch(new DeezerClient(prefs));
+                            List<DeezerSearch.DeezerPodcastShow> dzShows =
+                                    dz.searchPodcasts(searchTerm);
+                            for (DeezerSearch.DeezerPodcastShow s : dzShows) {
+                                OpenRssClient.Podcast p = DeezerPodcast.toPodcast(s);
+                                if (p != null) deezerOnly.add(p);
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                    if (raw.isEmpty() && deezerOnly.isEmpty()) {
                         runOnUiThreadSafe(new Runnable() {
                             @Override
                             public void run() {
@@ -13933,13 +19591,17 @@ public class MainActivity extends Activity {
                                 public void run() {
                                     if (gen != podcastUiGen || !isPodcastUiActive()) return;
                                     removePodcastProbeStatusRow();
+                                    for (OpenRssClient.Podcast dp : deezerOnly) {
+                                        podcastShows.add(dp);
+                                        appendPodcastShowRow(dp);
+                                    }
                                     int hidden = totalCount - playableCount;
                                     if (hidden > 0) {
                                         Toast.makeText(MainActivity.this,
                                                 getString(R.string.podcasts_filtered_unavailable, hidden),
                                                 Toast.LENGTH_SHORT).show();
                                     }
-                                    if (playableCount == 0) {
+                                    if (playableCount == 0 && deezerOnly.isEmpty()) {
                                         Toast.makeText(MainActivity.this, getString(R.string.podcasts_no_results),
                                                 Toast.LENGTH_SHORT).show();
                                         buildPodcastSearchUI();
@@ -14064,7 +19726,15 @@ public class MainActivity extends Activity {
             @Override
             public void run() {
                 try {
-                    final List<OpenRssClient.Episode> raw = OpenRssClient.fetchEpisodes(podcast.feedUrl, 40);
+                    final List<OpenRssClient.Episode> raw;
+                    if (DeezerPodcast.isDeezerFeed(podcast.feedUrl)) {
+                        long pid = DeezerPodcast.podcastIdFromFeed(podcast.feedUrl);
+                        DeezerClient dzClient = new DeezerClient(prefs);
+                        dzClient.initSession();
+                        raw = DeezerPodcast.fetchEpisodes(dzClient, pid);
+                    } else {
+                        raw = OpenRssClient.fetchEpisodes(podcast.feedUrl, 40);
+                    }
                     if (raw.isEmpty()) {
                         runOnUiThreadSafe(new Runnable() {
                             @Override
@@ -14374,27 +20044,92 @@ public class MainActivity extends Activity {
     }
 
     private SoulseekClient ensureSoulseekClient() {
+        if (!soulseekReachEnabled) return null;
         if (soulseekClient == null) {
-            SoulseekAccount account = SoulseekAccount.load(prefs);
+            ReachPeerConnectivity.reset();
+            ConnectivityHelper.setReachPeerOk(true);
+            SoulseekAccount account = SoulseekAccount.load(prefs, MainActivity.this);
             soulseekClient = new SoulseekClient(account.username, account.password, rootFolder,
-                    MainActivity.this, soulseekListener);
+                    MainActivity.this, soulseekListener, DeviceFeatures.reachClientName(),
+                    DeviceFeatures.reachUserBio(MainActivity.this));
+            soulseekClient.setSocialListener(soulseekSocialListener);
+            soulseekClient.applyBlockedPeers(SoulseekPeerPrefs.blocked(prefs));
         }
+        soulseekClient.setMessagingEnabled(soulseekMessagingEnabled);
         soulseekClient.setSharePolicy(soulseekSharePolicy);
         soulseekClient.setShareIndex(soulseekShareIndex);
         return soulseekClient;
     }
 
+    private void requestSoulseekShareRescan() {
+        soulseekShareRescanPending = true;
+        updateSoulseekSharePolicy();
+    }
+
+    private void runSoulseekShareScanIfNeeded() {
+        if (soulseekShareScanRunning) return;
+        if (!soulseekShareRescanPending && !(soulseekSharingEnabled && soulseekReachEnabled)) return;
+        soulseekShareRescanPending = false;
+        soulseekShareScanRunning = true;
+        final SoulseekAccount account = SoulseekAccount.load(prefs, MainActivity.this);
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    soulseekShareIndex.scan(account.username, rootFolder, PodcastLibrary.ROOT);
+                    SoulseekClient c = soulseekClient;
+                    try {
+                        org.json.JSONObject d = new org.json.JSONObject();
+                        d.put("files", soulseekShareIndex.fileCount());
+                        d.put("dirs", soulseekShareIndex.dirCount());
+                        d.put("musicRoot", rootFolder != null ? rootFolder.getAbsolutePath() : "null");
+                        d.put("musicExists", rootFolder != null && rootFolder.isDirectory());
+                        d.put("user", account.username);
+                        DebugAgentLog.log(MainActivity.this, "MainActivity.runSoulseekShareScan",
+                                "share scan done", "H2", d);
+                    } catch (Exception ignored) {}
+                    if (c != null) {
+                        c.setShareIndex(soulseekShareIndex);
+                        c.refreshShareAnnouncement();
+                    }
+                } finally {
+                    soulseekShareScanRunning = false;
+                    if (soulseekShareRescanPending) {
+                        runOnUiThread(new Runnable() {
+                            @Override
+                            public void run() {
+                                runSoulseekShareScanIfNeeded();
+                            }
+                        });
+                    }
+                }
+            }
+        }, "ShareScan").start();
+    }
+
     private void updateSoulseekSharePolicy() {
-        boolean reachUi = currentScreenState == STATE_SOULSEEK || hasActiveReachDownload();
+        if (!soulseekReachEnabled) {
+            soulseekSharePolicy.setReachMasterEnabled(false);
+            if (soulseekClient != null) {
+                soulseekClient.shutdown();
+                soulseekClient = null;
+            }
+            return;
+        }
         boolean wifi = hasInternetConnection();
+        boolean peerOk = ReachPeerConnectivity.peersAvailable();
+        boolean peerProbe = ReachPeerConnectivity.state() == ReachPeerConnectivity.State.UNKNOWN;
+        boolean uploadActive = soulseekClient != null && soulseekClient.isUploadInProgress();
+        soulseekSharePolicy.setReachMasterEnabled(true);
         soulseekSharePolicy.setUserEnabled(soulseekSharingEnabled);
-        soulseekSharePolicy.update(soulseekCharging, wifi, reachUi);
+        soulseekSharePolicy.setMessagingEnabled(soulseekMessagingEnabled);
+        soulseekSharePolicy.update(wifi, peerOk, uploadActive);
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
-            d.put("charging", soulseekCharging);
             d.put("wifi", wifi);
-            d.put("reachUi", reachUi);
+            d.put("peerOk", peerOk);
+            d.put("peerState", ReachPeerConnectivity.state().name());
             d.put("sharingEnabled", soulseekSharingEnabled);
             d.put("policyState", soulseekSharePolicy.state().name());
             d.put("announce", soulseekSharePolicy.announceShares());
@@ -14403,72 +20138,58 @@ public class MainActivity extends Activity {
                     "policy tick", "H1", d);
         } catch (Exception ignored) {}
         // #endregion
-        if (!wifi) {
-            if (soulseekClient != null && !hasActiveReachDownload() && !soulseekSearchInProgress) {
+        boolean wantReach = soulseekSharingEnabled || soulseekMessagingEnabled;
+        if (!wifi || !wantReach) {
+            if (soulseekClient != null && !soulseekClient.isBusy() && !soulseekSearchInProgress) {
                 soulseekClient.pauseWhenIdle();
             }
             return;
         }
-        if (!soulseekSharePolicy.announceShares()) {
-            if (soulseekClient == null) return;
-            if (!reachUi && !soulseekSearchInProgress
-                    && (soulseekClient == null || !soulseekClient.isTransferActive())) {
+        if (!peerOk && !peerProbe) {
+            if (soulseekClient != null && !soulseekClient.isBusy() && !soulseekSearchInProgress) {
                 soulseekClient.pauseWhenIdle();
-                return;
             }
-            soulseekClient.setSharePolicy(soulseekSharePolicy);
-            soulseekClient.setShareIndex(soulseekShareIndex);
             return;
         }
         if (soulseekSearchInProgress || (soulseekClient != null && soulseekClient.isSearchActive())) {
             SoulseekClient c = soulseekClient;
             if (c == null) c = ensureSoulseekClient();
-            c.setSharePolicy(soulseekSharePolicy);
-            c.setShareIndex(soulseekShareIndex);
+            if (c != null) {
+                c.setSharePolicy(soulseekSharePolicy);
+                c.setShareIndex(soulseekShareIndex);
+            }
             return;
         }
         SoulseekClient client = ensureSoulseekClient();
         if (client == null) return;
         client.setSharePolicy(soulseekSharePolicy);
-        if (!soulseekShareScanRunning) {
-            soulseekShareScanRunning = true;
-            final SoulseekAccount account = SoulseekAccount.load(prefs);
-            new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        soulseekShareIndex.scan(account.username, rootFolder, PodcastLibrary.ROOT);
-                        SoulseekClient c = soulseekClient;
-                        // #region agent log
-                        try {
-                            org.json.JSONObject d = new org.json.JSONObject();
-                            d.put("files", soulseekShareIndex.fileCount());
-                            d.put("dirs", soulseekShareIndex.dirCount());
-                            d.put("musicRoot", rootFolder != null ? rootFolder.getAbsolutePath() : "null");
-                            d.put("musicExists", rootFolder != null && rootFolder.isDirectory());
-                            d.put("user", account.username);
-                            DebugAgentLog.log(MainActivity.this, "MainActivity.updateSoulseekSharePolicy",
-                                    "share scan done", "H2", d);
-                        } catch (Exception ignored) {}
-                        // #endregion
-                        if (c != null) {
-                            c.setShareIndex(soulseekShareIndex);
-                            c.refreshShareAnnouncement();
-                        }
-                    } finally {
-                        soulseekShareScanRunning = false;
-                    }
-                }
-            }, "ShareScan").start();
+        if (soulseekSharingEnabled) {
+            boolean scanWasRunning = soulseekShareScanRunning;
+            runSoulseekShareScanIfNeeded();
+            if (!scanWasRunning && soulseekShareScanRunning) {
+                return;
+            }
+            client.setShareIndex(soulseekShareIndex);
         } else {
             client.setShareIndex(soulseekShareIndex);
-            client.refreshShareAnnouncement();
         }
     }
 
     private String soulseekSharingStatusLabel() {
+        if (!soulseekReachEnabled) {
+            return getString(R.string.soulseek_reach_disabled);
+        }
         if (!soulseekSharingEnabled) {
             return getString(R.string.soulseek_sharing_disabled);
+        }
+        if (!hasInternetConnection()) {
+            return getString(R.string.soulseek_sharing_off);
+        }
+        if (ReachPeerConnectivity.state() == ReachPeerConnectivity.State.UNKNOWN) {
+            return getString(R.string.soulseek_sharing_nat_probing);
+        }
+        if (!ReachPeerConnectivity.peersAvailable()) {
+            return getString(R.string.soulseek_sharing_no_nat);
         }
         switch (soulseekSharePolicy.state()) {
             case ACTIVE:
@@ -14479,6 +20200,165 @@ public class MainActivity extends Activity {
                 return getString(R.string.soulseek_sharing_off);
         }
     }
+
+    private final SoulseekClient.SocialListener soulseekSocialListener = new SoulseekClient.SocialListener() {
+        @Override
+        public void onPrivateMessage(int messageId, int timestamp, String fromUser, String text) {
+            SoulseekAccount acct = SoulseekAccount.load(prefs, MainActivity.this);
+            final boolean persist = ReachIntroMessage.shouldPersistForReachClient(
+                    text, fromUser, acct.username, prefs);
+            if (persist) {
+                SoulseekMessaging.append(MainActivity.this, prefs, new SoulseekMessaging.Message(
+                        messageId, timestamp, fromUser, text, true));
+            }
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (!persist) return;
+                    boolean downloadActive = soulseekUiMode == SOULSEEK_UI_DOWNLOAD
+                            && soulseekActiveDownload != null;
+                    boolean samePeer = downloadActive && fromUser != null
+                            && fromUser.equalsIgnoreCase(soulseekActiveDownload.username);
+                    if (samePeer) {
+                        showReachDownloadMessageInterstitial(fromUser, text);
+                    } else if (SettingsScreens.SOULSEEK_MESSAGES_THREAD.equals(settingsSubScreenKey)
+                            && fromUser != null
+                            && fromUser.equalsIgnoreCase(soulseekMessagePeer)) {
+                        refreshConversationThreadList();
+                    } else if (SettingsScreens.SOULSEEK_MESSAGES.equals(settingsSubScreenKey)) {
+                        refreshSoulseekMessagesListIfVisible();
+                    } else {
+                        showSoulseekPmNotification(fromUser, text);
+                    }
+                }
+            });
+        }
+
+        @Override
+        public void onUserStatusUpdate(String username, int status, boolean privileged) {
+            // optional UI refresh
+        }
+
+        @Override
+        public void onRoomList(final List<SoulseekWire.RoomEntry> rooms) {
+            SoulseekChatRooms.saveRoomList(MainActivity.this, prefs, rooms);
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (SettingsScreens.SOULSEEK_CHAT_ROOMS.equals(settingsSubScreenKey)) {
+                        debouncedRoomListUpdate(rooms);
+                    }
+                }
+            });
+        }
+
+        @Override
+        public void onRoomMessage(final String room, final String sender, final String text,
+                final int timestamp) {
+            SoulseekAccount acct = SoulseekAccount.load(prefs, MainActivity.this);
+            boolean incoming = sender == null || !sender.equalsIgnoreCase(acct.username);
+            final boolean persist = ReachIntroMessage.shouldPersistForReachClient(
+                    text, sender, acct.username, prefs);
+            if (persist) {
+                SoulseekChatRooms.appendMessage(MainActivity.this, prefs, new SoulseekChatRooms.RoomMessage(
+                        room, sender, text, timestamp, incoming));
+            }
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (!persist) return;
+                    if (isRoomThreadScreenActive()
+                            && room != null && room.equalsIgnoreCase(soulseekChatRoomName)) {
+                        if (SettingsScreens.SOULSEEK_CHAT_ROOM_WALL.equals(settingsSubScreenKey)) {
+                            refreshRoomWallList();
+                        } else {
+                            refreshChatRoomThreadList();
+                        }
+                    }
+                }
+            });
+        }
+
+        @Override
+        public void onRoomJoined(String room) {
+        }
+
+        @Override
+        public void onRoomLeft(String room) {
+        }
+
+        @Override
+        public void onRoomUserJoined(String room, String username) {
+            if (room == null || username == null) return;
+            SoulseekChatRooms.appendRoomStatus(MainActivity.this, prefs, room, username, true);
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD.equals(settingsSubScreenKey)
+                            && room.equalsIgnoreCase(soulseekChatRoomName)) {
+                        refreshChatRoomThreadList();
+                    }
+                }
+            });
+        }
+
+        @Override
+        public void onRoomUserLeft(String room, String username) {
+            if (room == null || username == null) return;
+            SoulseekChatRooms.appendRoomStatus(MainActivity.this, prefs, room, username, false);
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (SettingsScreens.SOULSEEK_CHAT_ROOM_THREAD.equals(settingsSubScreenKey)
+                            && room.equalsIgnoreCase(soulseekChatRoomName)) {
+                        refreshChatRoomThreadList();
+                    }
+                }
+            });
+        }
+
+        @Override
+        public void onRoomTickers(String room, List<SoulseekWire.RoomTickerEntry> tickers) {
+            SoulseekRoomWall.replaceTickers(MainActivity.this, room, tickers);
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (SettingsScreens.SOULSEEK_CHAT_ROOM_WALL.equals(settingsSubScreenKey)
+                            && room != null && room.equalsIgnoreCase(soulseekChatRoomName)) {
+                        refreshRoomWallList();
+                    }
+                }
+            });
+        }
+
+        @Override
+        public void onRoomTickerAdded(String room, String username, String text) {
+            SoulseekRoomWall.upsertTicker(MainActivity.this, room, username, text);
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (SettingsScreens.SOULSEEK_CHAT_ROOM_WALL.equals(settingsSubScreenKey)
+                            && room != null && room.equalsIgnoreCase(soulseekChatRoomName)) {
+                        refreshRoomWallList();
+                    }
+                }
+            });
+        }
+
+        @Override
+        public void onRoomTickerRemoved(String room, String username) {
+            SoulseekRoomWall.removeTicker(MainActivity.this, room, username);
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (SettingsScreens.SOULSEEK_CHAT_ROOM_WALL.equals(settingsSubScreenKey)
+                            && room != null && room.equalsIgnoreCase(soulseekChatRoomName)) {
+                        refreshRoomWallList();
+                    }
+                }
+            });
+        }
+    };
 
     private final SoulseekClient.Listener soulseekListener = new SoulseekClient.Listener() {
         @Override
@@ -14521,6 +20401,9 @@ public class MainActivity extends Activity {
                 public void run() {
                     ConnectivityHelper.setReachLoginOk(true);
                     buildHomeMenu();
+                    registerReachDirectoryPresence();
+                    requestSoulseekShareRescan();
+                    updateSoulseekSharePolicy();
                     soulseekListenPort = listenPort;
                     if (isSoulseekUiActive() && tvBrowserPath != null && soulseekUiMode == SOULSEEK_UI_SEARCH) {
                         SoulseekAccount account = SoulseekAccount.load(prefs);
@@ -14556,6 +20439,7 @@ public class MainActivity extends Activity {
         public void onSearchResult(final SoulseekClient.Result result) {
             if (soulseekClient != null && soulseekClient.isPeerDenied(result.username)) return;
             if (soulseekHideHighBitrate && result.isOverBitrateThreshold()) return;
+            watchSoulseekPeer(result.username);
             synchronized (soulseekPendingUi) {
                 soulseekPendingUi.add(result);
                 if (!soulseekUiFlushScheduled) {
@@ -14573,13 +20457,44 @@ public class MainActivity extends Activity {
                 public void run() {
                     soulseekUiHandler.removeCallbacks(soulseekUiFlushRunnable);
                     flushSoulseekResultsUi(true);
+                    if (isGetMusicMultiSource() && getMusicMode == GetMusicSources.MODE_UNIFIED) {
+                        final int gen = getMusicSearchGen;
+                        if (soulseekClient != null) {
+                            for (SoulseekClient.Result r : soulseekClient.getResultsSnapshot()) {
+                                if (soulseekClient.isPeerDenied(r.username)) continue;
+                                if (soulseekHideHighBitrate && r.isOverBitrateThreshold()) continue;
+                                mergeGetMusicReachResult(r);
+                            }
+                        }
+                        List<SoulseekClient.Result> reachSort = new ArrayList<SoulseekClient.Result>();
+                        for (MusicSearchEntry e : getMusicEntries) {
+                            if (e.reach != null) reachSort.add(e.reach);
+                        }
+                        sortSoulseekResultsByQuality(reachSort, soulseekLastQuery,
+                                SoulseekDownloadHistory.loadPeerSet(prefs));
+                        List<MusicSearchEntry> kept = new ArrayList<MusicSearchEntry>();
+                        for (MusicSearchEntry e : getMusicEntries) {
+                            if (e.source != MusicSearchEntry.Source.REACH) kept.add(e);
+                        }
+                        getMusicEntries.clear();
+                        getMusicEntries.addAll(kept);
+                        for (SoulseekClient.Result r : reachSort) {
+                            getMusicEntries.add(MusicSearchEntry.reach(r));
+                        }
+                        finishGetMusicSearch(gen);
+                        if (isSoulseekUiActive() && soulseekUiMode == SOULSEEK_UI_RESULTS) {
+                            buildGetMusicResultsUI();
+                        }
+                        return;
+                    }
                     mergeSoulseekResultsFromSnapshot();
                     final List<SoulseekClient.Result> toSort =
                             new ArrayList<SoulseekClient.Result>(soulseekResults);
                     new Thread(new Runnable() {
                         @Override
                         public void run() {
-                            sortSoulseekResultsByQuality(toSort);
+                            sortSoulseekResultsByQuality(toSort, soulseekLastQuery,
+                                    SoulseekDownloadHistory.loadPeerSet(prefs));
                             runOnUiThreadSafe(new Runnable() {
                                 @Override
                                 public void run() {
@@ -14680,7 +20595,9 @@ public class MainActivity extends Activity {
                         reachQueuePartialFile = partialFile;
                         String meta = soulseekActiveDownload != null
                                 ? soulseekActiveDownload.title() : partialFile.getName();
-                        queueReachTrackAfterCurrent(partialFile, meta);
+                        String peer = soulseekActiveDownload != null
+                                ? soulseekActiveDownload.username : null;
+                        queueReachTrackAfterCurrent(partialFile, meta, peer);
                     }
                 }
             });
@@ -14696,6 +20613,22 @@ public class MainActivity extends Activity {
                     final boolean reachStream = reachPartialPlaybackStarted;
                     final String reachMeta = soulseekActiveDownload != null
                             ? soulseekActiveDownload.title() : (file != null ? file.getName() : "");
+                    if (soulseekActiveDownload != null && file != null) {
+                        SoulseekDownloadHistory.record(prefs, soulseekActiveDownload.username);
+                    }
+                    if (action == SOULSEEK_ACTION_SAVE && file != null) {
+                        requestSoulseekShareRescan();
+                        if (soulseekPendingSaveToLibrary) {
+                            soulseekPendingSaveToLibrary = false;
+                            saveStreamTrackToLibraryInternal(file);
+                        }
+                    }
+                    final SoulseekClient.Result thanks = soulseekPendingThankYouResult;
+                    soulseekPendingThankYouResult = null;
+                    if (thanks != null && file != null && action == SOULSEEK_ACTION_SAVE
+                            && !soulseekFolderThankPending) {
+                        sendSoulseekThankYou(thanks);
+                    }
                     stopSoulseekDownloadUiRunnables();
                     if (!reachStream) progressHandler.removeCallbacks(reachGrowingEdgePoll);
                     soulseekActiveDownload = null;
@@ -14739,6 +20672,10 @@ public class MainActivity extends Activity {
                     }
                     if (!isSoulseekUiActive() && !shouldDeferSoulseekOffScreenCleanup()) {
                         soulseekOffScreenCleanup();
+                    }
+                    if (action == SOULSEEK_ACTION_SAVE
+                            && soulseekFolderDownloadQueue != null) {
+                        startNextFolderDownload();
                     }
                 }
             });
@@ -14804,18 +20741,21 @@ public class MainActivity extends Activity {
         return result.username.toLowerCase(Locale.US) + "\0" + result.filename;
     }
 
-    private static void sortSoulseekResultsByQuality(List<SoulseekClient.Result> list) {
+    private static void sortSoulseekResultsByQuality(List<SoulseekClient.Result> list,
+            String query, java.util.Set<String> historyPeers) {
         Collections.sort(list, new Comparator<SoulseekClient.Result>() {
             @Override
             public int compare(SoulseekClient.Result a, SoulseekClient.Result b) {
-                return SoulseekClient.Result.compareByDownloadReliability(a, b);
+                return SoulseekClient.Result.compareByDownloadReliability(a, b, query, historyPeers);
             }
         });
     }
 
     private int soulseekRankInsertIndex(SoulseekClient.Result r) {
+        java.util.Set<String> history = SoulseekDownloadHistory.loadPeerSet(prefs);
         for (int i = 0; i < soulseekResults.size(); i++) {
-            if (SoulseekClient.Result.compareByDownloadReliability(r, soulseekResults.get(i)) < 0) return i;
+            if (SoulseekClient.Result.compareByDownloadReliability(
+                    r, soulseekResults.get(i), soulseekLastQuery, history) < 0) return i;
         }
         return soulseekResults.size();
     }
@@ -14852,6 +20792,18 @@ public class MainActivity extends Activity {
             soulseekPendingUi.subList(0, take).clear();
         }
         if (!isSoulseekUiActive()) return;
+
+        if (isGetMusicMultiSource() && getMusicMode == GetMusicSources.MODE_UNIFIED) {
+            flushGetMusicReachBatch(batch);
+            synchronized (soulseekPendingUi) {
+                if (!soulseekPendingUi.isEmpty()) {
+                    soulseekUiFlushScheduled = true;
+                    long delay = soulseekPendingUi.size() > 16 ? SOULSEEK_UI_FLUSH_MS_HEAVY : SOULSEEK_UI_FLUSH_MS;
+                    soulseekUiHandler.postDelayed(soulseekUiFlushRunnable, delay);
+                }
+            }
+            return;
+        }
 
         for (SoulseekClient.Result r : batch) {
             if (soulseekClient != null && soulseekClient.isPeerDenied(r.username)) continue;
@@ -14901,18 +20853,19 @@ public class MainActivity extends Activity {
         if (!isSoulseekUiActive() || soulseekUiMode != SOULSEEK_UI_RESULTS) return;
         int cap = soulseekVisibleCap();
         int insertAt = soulseekResultInsertIndex();
-        int shown = 0;
         int added = 0;
+        int rankedIndex = 0;
         for (SoulseekClient.Result r : soulseekResults) {
             if (soulseekClient != null && soulseekClient.isPeerDenied(r.username)) continue;
             if (soulseekSearchInProgress && r.isLikelySlowDownload()) continue;
-            if (shown < soulseekResultUiCount) {
-                shown++;
+            if (rankedIndex < soulseekResultUiCount) {
+                rankedIndex++;
                 continue;
             }
             if (soulseekResultUiCount >= cap) break;
             containerBrowserItems.addView(makeSoulseekResultButton(r), insertAt + added);
             soulseekResultUiCount++;
+            rankedIndex++;
             added++;
         }
         if (soulseekSearchStatusRow != null && soulseekResultUiCount > 0) {
@@ -14950,15 +20903,614 @@ public class MainActivity extends Activity {
         if (tvBrowserPath != null) tvBrowserPath.setText(getString(hintResId));
     }
 
+    private boolean isGetMusicMultiSource() {
+        return getMusicMode == GetMusicSources.MODE_UNIFIED
+                || getMusicMode == GetMusicSources.MODE_DEEZER_ONLY;
+    }
+
+    private String getMusicStatusTitle() {
+        return getString(R.string.home_menu_soulseek);
+    }
+
+    private View createGetMusicListRow(String title, String subtitle, final View.OnClickListener click) {
+        final int rowKind = Y1_ROW_ITEM;
+        final LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setFocusable(true);
+        row.setSoundEffectsEnabled(false);
+        int hPad = (int) (10 * getResources().getDisplayMetrics().density);
+        row.setPadding(hPad, 4, hPad, 4);
+        int rowW = listRowWidthPx > 0 ? listRowWidthPx : y1ActiveRowWidthPx();
+        row.setBackground(getY1RowBackground(false, rowW, rowKind));
+        row.setOnClickListener(click);
+
+        final TextView tvTitle = new TextView(this);
+        tvTitle.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
+        tvTitle.setText(title != null ? title : "");
+        ThemeManager.applyThemedTextStyle(tvTitle, y1RowTextColorNormal(rowKind));
+        tvTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                getResources().getDimension(R.dimen.y1_menu_text_size));
+        enableMarquee(tvTitle);
+        row.addView(tvTitle, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        if (subtitle != null && subtitle.length() > 0) {
+            TextView tvSub = new TextView(this);
+            tvSub.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
+            tvSub.setText(subtitle);
+            ThemeManager.applyThemedTextStyle(tvSub, ThemeManager.getTextColorSecondary());
+            tvSub.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                    getResources().getDimension(R.dimen.y1_menu_text_size) * 0.85f);
+            enableMarquee(tvSub);
+            row.addView(tvSub, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+            row.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+                @Override
+                public void onFocusChange(View v, boolean hasFocus) {
+                    int w = row.getWidth() > 0 ? row.getWidth()
+                            : (listRowWidthPx > 0 ? listRowWidthPx : y1ActiveRowWidthPx());
+                    row.setBackground(getY1RowBackground(hasFocus, w, rowKind));
+                    ThemeManager.applyThemedTextStyle(tvTitle, hasFocus
+                            ? y1RowTextColorSelected(rowKind) : y1RowTextColorNormal(rowKind));
+                    ThemeManager.applyThemedTextStyle(tvSub, hasFocus
+                            ? y1RowTextColorSelected(rowKind) : ThemeManager.getTextColorSecondary());
+                    tvTitle.setSelected(hasFocus);
+                    tvSub.setSelected(hasFocus);
+                    if (hasFocus) showFastScrollLetter(title);
+                }
+            });
+        } else {
+            row.setOnFocusChangeListener(new View.OnFocusChangeListener() {
+                @Override
+                public void onFocusChange(View v, boolean hasFocus) {
+                    int w = row.getWidth() > 0 ? row.getWidth()
+                            : (listRowWidthPx > 0 ? listRowWidthPx : y1ActiveRowWidthPx());
+                    row.setBackground(getY1RowBackground(hasFocus, w, rowKind));
+                    ThemeManager.applyThemedTextStyle(tvTitle, hasFocus
+                            ? y1RowTextColorSelected(rowKind) : y1RowTextColorNormal(rowKind));
+                    tvTitle.setSelected(hasFocus);
+                    if (hasFocus) showFastScrollLetter(title);
+                }
+            });
+        }
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, 1, 0, 1);
+        row.setLayoutParams(lp);
+        return row;
+    }
+
+    private void fetchGetMusicResults(final String query) {
+        if (query == null || query.trim().isEmpty()) return;
+        if (!requireInternet(R.string.toast_internet_required)) return;
+        soulseekLastQuery = query.trim();
+        GetMusicSearchHistory.remember(prefs, soulseekLastQuery);
+        getMusicSearchGen++;
+        final int gen = getMusicSearchGen;
+        getMusicSearchInProgress = true;
+        getMusicDeezerDone = false;
+        getMusicResultsVisibleCount = GET_MUSIC_PAGE_SIZE;
+        getMusicEntries.clear();
+        getMusicTopLevelEntries.clear();
+        getMusicBrowseContainer = null;
+        getMusicDeezerResults.clear();
+        getMusicDeezerArtists.clear();
+        getMusicReachKeys.clear();
+        getMusicDeezerDedupeKeys.clear();
+        getMusicEntryUiCount = 0;
+        soulseekResults.clear();
+        soulseekResultKeys.clear();
+        synchronized (soulseekPendingUi) {
+            soulseekPendingUi.clear();
+        }
+        soulseekUiHandler.removeCallbacks(soulseekUiFlushRunnable);
+        soulseekUiFlushScheduled = false;
+        buildGetMusicResultsShell();
+
+        final boolean wantDeezer = getMusicMode == GetMusicSources.MODE_UNIFIED
+                || getMusicMode == GetMusicSources.MODE_DEEZER_ONLY;
+        final boolean wantReach = getMusicMode == GetMusicSources.MODE_UNIFIED
+                || (getMusicMode == GetMusicSources.MODE_REACH_ONLY && false);
+        final boolean wantReachSearch = getMusicMode == GetMusicSources.MODE_UNIFIED
+                && GetMusicSources.reachInGetMusic(prefs, soulseekReachEnabled);
+
+        if (wantDeezer && GetMusicSources.deezerConfiguredForGetMusic(prefs, deezerEnabled)) {
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    List<DeezerResult> foundTracks = new ArrayList<DeezerResult>();
+                    List<DeezerSearch.DeezerArtist> foundArtists = new ArrayList<DeezerSearch.DeezerArtist>();
+                    try {
+                        DeezerClient c = new DeezerClient(prefs);
+                        if (c.initSession() || DeezerAccount.hasArl(prefs)) {
+                            DeezerSearch search = new DeezerSearch(c);
+                            foundArtists = search.searchArtists(soulseekLastQuery);
+                            foundTracks = search.searchTracks(soulseekLastQuery);
+                        }
+                    } catch (Exception ignored) {}
+                    final List<DeezerResult> ff = foundTracks;
+                    final List<DeezerSearch.DeezerArtist> fa = foundArtists;
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            if (gen != getMusicSearchGen) return;
+                            getMusicDeezerResults.clear();
+                            getMusicDeezerResults.addAll(ff);
+                            getMusicDeezerArtists.clear();
+                            getMusicDeezerArtists.addAll(fa);
+                            getMusicDeezerDedupeKeys = GetMusicSearch.deezerDedupeKeys(ff);
+                            for (DeezerResult r : ff) {
+                                getMusicEntries.add(MusicSearchEntry.deezer(r));
+                            }
+                            getMusicDeezerDone = true;
+                            updateGetMusicSearchStatusRow();
+                            appendGetMusicResultRowsInner();
+                            if (!wantReachSearch) finishGetMusicSearch(gen);
+                        }
+                    });
+                }
+            }, "GetMusicDeezer").start();
+        } else {
+            getMusicDeezerDone = true;
+        }
+
+        if (wantReachSearch) {
+            if (requireReachPeerConnectivity()) {
+                soulseekSearchInProgress = true;
+                updateGetMusicSearchStatusRow();
+                ensureSoulseekClient().search(soulseekLastQuery);
+            } else {
+                finishGetMusicSearch(gen);
+            }
+        } else if (wantDeezer && !GetMusicSources.deezerConfiguredForGetMusic(prefs, deezerEnabled)) {
+            finishGetMusicSearch(gen);
+        } else if (!wantDeezer) {
+            finishGetMusicSearch(gen);
+        }
+    }
+
+    private void finishGetMusicSearch(int gen) {
+        if (gen != getMusicSearchGen) return;
+        getMusicSearchInProgress = false;
+        soulseekSearchInProgress = false;
+        getMusicTopLevelEntries.clear();
+        getMusicTopLevelEntries.addAll(
+                GetMusicSearch.organizeWithContainers(getMusicDeezerArtists, getMusicEntries));
+        getMusicBrowseContainer = null;
+        getMusicEntryUiCount = 0;
+        refreshGetMusicResultsVisible(true);
+        if (getMusicSearchStatusRow != null && getMusicResultsForDisplay().isEmpty()) {
+            getMusicSearchStatusRow.setText(getString(
+                    getMusicMode == GetMusicSources.MODE_UNIFIED
+                            ? R.string.get_music_empty_unified : R.string.get_music_empty_results));
+        }
+        if (tvBrowserPath != null) {
+            tvBrowserPath.setText(getString(R.string.get_music_path_results, soulseekLastQuery));
+        }
+    }
+
+    private List<MusicSearchEntry> getMusicResultsForDisplay() {
+        if (getMusicBrowseContainer != null) return getMusicBrowseContainer.children;
+        if (!getMusicSearchInProgress && !getMusicTopLevelEntries.isEmpty()) {
+            return getMusicTopLevelEntries;
+        }
+        return getMusicEntries;
+    }
+
+    private void refreshGetMusicResultsVisible(boolean fullRebuild) {
+        if (!isSoulseekUiActive() || soulseekUiMode != SOULSEEK_UI_RESULTS || !isGetMusicMultiSource()) return;
+        if (!fullRebuild) {
+            appendGetMusicResultRowsInner();
+            return;
+        }
+        java.util.ArrayList<View> toRemove = new java.util.ArrayList<View>();
+        for (int i = 0; i < containerBrowserItems.getChildCount(); i++) {
+            View v = containerBrowserItems.getChildAt(i);
+            if (v.getTag() instanceof MusicSearchEntry) toRemove.add(v);
+        }
+        for (View v : toRemove) containerBrowserItems.removeView(v);
+        getMusicEntryUiCount = 0;
+        appendGetMusicResultRowsInner();
+    }
+
+    private void openGetMusicContainer(final MusicSearchEntry container) {
+        if (container == null || !container.isContainer()) return;
+        if (container.needsLazyLoad()) {
+            beginGetMusicLazyContainerLoad(container);
+            return;
+        }
+        getMusicBrowseContainer = container;
+        getMusicEntryUiCount = 0;
+        getMusicResultsVisibleCount = GET_MUSIC_PAGE_SIZE;
+        containerBrowserItems.removeAllViews();
+
+        Button back = createListButton(getString(R.string.get_music_back_containers));
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                clickFeedback();
+                getMusicBrowseContainer = null;
+                getMusicEntryUiCount = 0;
+                buildGetMusicResultsUI();
+            }
+        });
+        containerBrowserItems.addView(back);
+
+        String pathLabel;
+        if (container.kind == MusicSearchEntry.RowKind.DEEZER_ARTIST) {
+            pathLabel = getString(R.string.get_music_artist_row, container.containerLabel);
+        } else if (container.kind == MusicSearchEntry.RowKind.DEEZER_ALBUM) {
+            pathLabel = GetMusicSearch.formatDeezerReleaseLabel(
+                    container.deezerRecordType, container.containerLabel);
+        } else {
+            pathLabel = getString(R.string.get_music_folder_row, container.containerLabel);
+        }
+        if (tvBrowserPath != null) {
+            tvBrowserPath.setText(getString(R.string.get_music_path_container, pathLabel));
+        }
+        appendGetMusicResultRowsInner();
+        if (containerBrowserItems.getChildCount() > 0) containerBrowserItems.getChildAt(0).requestFocus();
+    }
+
+    private void beginGetMusicLazyContainerLoad(final MusicSearchEntry container) {
+        getMusicContainerLoadGen++;
+        final int gen = getMusicContainerLoadGen;
+        getMusicBrowseContainer = container;
+        getMusicEntryUiCount = 0;
+        containerBrowserItems.removeAllViews();
+
+        Button back = createListButton(getString(R.string.get_music_back_containers));
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                clickFeedback();
+                getMusicBrowseContainer = null;
+                getMusicEntryUiCount = 0;
+                buildGetMusicResultsUI();
+            }
+        });
+        containerBrowserItems.addView(back);
+
+        Button loading = createListButton(getString(R.string.get_music_loading_container));
+        loading.setEnabled(false);
+        containerBrowserItems.addView(loading);
+        if (tvBrowserPath != null) {
+            tvBrowserPath.setText(getString(R.string.get_music_path_container,
+                    container.containerLabel));
+        }
+
+        new Thread(new Runnable() {
+            @Override public void run() {
+                List<MusicSearchEntry> children = new ArrayList<MusicSearchEntry>();
+                try {
+                    DeezerClient c = new DeezerClient(prefs);
+                    DeezerSearch search = new DeezerSearch(c);
+                    if (container.kind == MusicSearchEntry.RowKind.DEEZER_ARTIST) {
+                        List<DeezerSearch.DeezerAlbum> albums =
+                                search.listArtistAlbums(container.deezerContainerId);
+                        java.util.Collections.sort(albums, new java.util.Comparator<DeezerSearch.DeezerAlbum>() {
+                            @Override
+                            public int compare(DeezerSearch.DeezerAlbum a, DeezerSearch.DeezerAlbum b) {
+                                int ta = recordTypeOrder(a.recordType);
+                                int tb = recordTypeOrder(b.recordType);
+                                if (ta != tb) return ta - tb;
+                                return a.title.compareToIgnoreCase(b.title);
+                            }
+                        });
+                        for (DeezerSearch.DeezerAlbum a : albums) {
+                            if (a == null || a.id <= 0) continue;
+                            children.add(MusicSearchEntry.deezerAlbumBrowse(
+                                    a.id, a.title, a.recordType, null));
+                        }
+                    } else if (container.kind == MusicSearchEntry.RowKind.DEEZER_ALBUM) {
+                        List<DeezerResult> tracks =
+                                search.listAlbumTracks(container.deezerContainerId);
+                        for (DeezerResult t : tracks) {
+                            if (t == null) continue;
+                            children.add(MusicSearchEntry.deezer(t));
+                        }
+                    }
+                } catch (Exception ignored) {}
+                final List<MusicSearchEntry> loaded = children;
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        if (gen != getMusicContainerLoadGen) return;
+                        getMusicBrowseContainer = MusicSearchEntry.withChildren(container, loaded);
+                        getMusicEntryUiCount = 0;
+                        getMusicResultsVisibleCount = GET_MUSIC_PAGE_SIZE;
+                        containerBrowserItems.removeAllViews();
+                        containerBrowserItems.addView(backFromLazyContainerButton());
+                        if (loaded.isEmpty()) {
+                            Button empty = createListButton(getString(R.string.get_music_empty_results));
+                            empty.setEnabled(false);
+                            containerBrowserItems.addView(empty);
+                        } else {
+                            appendGetMusicResultRowsInner();
+                        }
+                        if (containerBrowserItems.getChildCount() > 0) {
+                            containerBrowserItems.getChildAt(0).requestFocus();
+                        }
+                    }
+                });
+            }
+        }, "GetMusicBrowse").start();
+    }
+
+    private static int recordTypeOrder(String recordType) {
+        if (recordType == null) return 0;
+        String t = recordType.toLowerCase(java.util.Locale.US);
+        if ("album".equals(t)) return 0;
+        if ("ep".equals(t)) return 1;
+        if ("single".equals(t)) return 2;
+        return 3;
+    }
+
+    private Button backFromLazyContainerButton() {
+        Button back = createListButton(getString(R.string.get_music_back_containers));
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                clickFeedback();
+                getMusicBrowseContainer = null;
+                getMusicEntryUiCount = 0;
+                buildGetMusicResultsUI();
+            }
+        });
+        return back;
+    }
+
+    private void buildGetMusicResultsShell() {
+        soulseekUiMode = SOULSEEK_UI_RESULTS;
+        getMusicEntryUiCount = 0;
+        getMusicSearchStatusRow = null;
+        getMusicMoreRow = null;
+        prepareSoulseekBrowserChrome();
+        browserStatusTitle = getMusicStatusTitle();
+        updateStatusBarTitle();
+        if (tvBrowserPath != null) {
+            tvBrowserPath.setText(getString(R.string.get_music_path_searching, soulseekLastQuery));
+        }
+        containerBrowserItems.removeAllViews();
+
+        Button back = createListButton(getString(R.string.get_music_back_search));
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                clickFeedback();
+                cancelGetMusicSearch();
+                buildSoulseekSearchUI();
+            }
+        });
+        containerBrowserItems.addView(back);
+
+        getMusicSearchStatusRow = createListButton(getString(R.string.get_music_searching));
+        getMusicSearchStatusRow.setEnabled(false);
+        containerBrowserItems.addView(getMusicSearchStatusRow);
+        updateGetMusicSearchStatusRow();
+        if (containerBrowserItems.getChildCount() > 0) containerBrowserItems.getChildAt(0).requestFocus();
+    }
+
+    private void updateGetMusicSearchStatusRow() {
+        if (getMusicSearchStatusRow == null) return;
+        boolean wantReach = getMusicMode == GetMusicSources.MODE_UNIFIED
+                && GetMusicSources.reachInGetMusic(prefs, soulseekReachEnabled);
+        if (!getMusicDeezerDone) {
+            getMusicSearchStatusRow.setText(getString(
+                    wantReach ? R.string.get_music_searching_deezer : R.string.get_music_searching));
+        } else if (wantReach && soulseekSearchInProgress) {
+            getMusicSearchStatusRow.setText(getString(R.string.get_music_searching_reach));
+        } else if (getMusicSearchInProgress) {
+            getMusicSearchStatusRow.setText(getString(R.string.get_music_searching));
+        }
+    }
+
+    private void buildGetMusicResultsUI() {
+        soulseekUiMode = SOULSEEK_UI_RESULTS;
+        getMusicEntryUiCount = 0;
+        getMusicSearchStatusRow = null;
+        getMusicMoreRow = null;
+        prepareSoulseekBrowserChrome();
+        browserStatusTitle = getMusicStatusTitle();
+        updateStatusBarTitle();
+        if (tvBrowserPath != null) {
+            tvBrowserPath.setText(getString(R.string.get_music_path_results, soulseekLastQuery));
+        }
+        containerBrowserItems.removeAllViews();
+
+        Button back = createListButton(getString(R.string.get_music_back_search));
+        back.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                clickFeedback();
+                buildSoulseekSearchUI();
+            }
+        });
+        containerBrowserItems.addView(back);
+
+        Button searchAgain = createListButton(getString(R.string.get_music_search_again));
+        searchAgain.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                clickFeedback();
+                openGetMusicSearchKeyboard();
+            }
+        });
+        containerBrowserItems.addView(searchAgain);
+
+        if (getMusicEntries.isEmpty()) {
+            Button empty = createListButton(getString(
+                    isGetMusicMultiSource() && getMusicMode == GetMusicSources.MODE_UNIFIED
+                            ? R.string.get_music_empty_unified : R.string.get_music_empty_results));
+            empty.setEnabled(false);
+            containerBrowserItems.addView(empty);
+        } else {
+            getMusicTopLevelEntries.clear();
+            getMusicTopLevelEntries.addAll(
+                    GetMusicSearch.organizeWithContainers(getMusicDeezerArtists, getMusicEntries));
+            getMusicBrowseContainer = null;
+            updateReachBrowserHint(R.string.get_music_hint_results);
+            appendGetMusicResultRowsInner();
+        }
+        if (containerBrowserItems.getChildCount() > 0) containerBrowserItems.getChildAt(0).requestFocus();
+    }
+
+    private void cancelGetMusicSearch() {
+        getMusicSearchGen++;
+        getMusicSearchInProgress = false;
+        soulseekSearchInProgress = false;
+        if (soulseekClient != null) soulseekClient.cancelSearch();
+        if (deezerScreen != null) deezerScreen.cancelSearch();
+    }
+
+    private int getMusicVisibleCap() {
+        if (getMusicSearchInProgress) return GET_MUSIC_PAGE_SIZE;
+        return getMusicResultsVisibleCount;
+    }
+
+    private void appendGetMusicResultRowsInner() {
+        if (!isSoulseekUiActive() || soulseekUiMode != SOULSEEK_UI_RESULTS || !isGetMusicMultiSource()) return;
+        final List<MusicSearchEntry> display = getMusicResultsForDisplay();
+        int cap = getMusicVisibleCap();
+        int insertAt = getMusicResultInsertIndex();
+        int added = 0;
+        while (getMusicEntryUiCount < display.size() && getMusicEntryUiCount < cap) {
+            final MusicSearchEntry e = display.get(getMusicEntryUiCount);
+            View row = makeGetMusicResultRow(e);
+            containerBrowserItems.addView(row, insertAt + added);
+            getMusicEntryUiCount++;
+            added++;
+        }
+        if (getMusicSearchStatusRow != null && getMusicEntryUiCount > 0) {
+            containerBrowserItems.removeView(getMusicSearchStatusRow);
+            getMusicSearchStatusRow = null;
+        }
+        updateGetMusicMoreRow(display.size());
+    }
+
+    private int getMusicResultInsertIndex() {
+        if (getMusicMoreRow != null && getMusicMoreRow.getParent() == containerBrowserItems) {
+            return containerBrowserItems.indexOfChild(getMusicMoreRow);
+        }
+        return containerBrowserItems.getChildCount();
+    }
+
+    private void updateGetMusicMoreRow() {
+        updateGetMusicMoreRow(getMusicResultsForDisplay().size());
+    }
+
+    private void updateGetMusicMoreRow(int total) {
+        if (!isSoulseekUiActive() || !isGetMusicMultiSource()) return;
+        if (getMusicMoreRow != null && getMusicMoreRow.getParent() == containerBrowserItems) {
+            containerBrowserItems.removeView(getMusicMoreRow);
+            getMusicMoreRow = null;
+        }
+        if (getMusicEntryUiCount >= total || getMusicEntryUiCount >= getMusicVisibleCap()) {
+            if (!getMusicSearchInProgress && getMusicEntryUiCount < total) {
+                getMusicMoreRow = createListButton(getString(R.string.deezer_show_more, total - getMusicEntryUiCount));
+                getMusicMoreRow.setOnClickListener(new View.OnClickListener() {
+                    @Override public void onClick(View v) {
+                        clickFeedback();
+                        getMusicResultsVisibleCount += GET_MUSIC_PAGE_SIZE;
+                        appendGetMusicResultRowsInner();
+                    }
+                });
+                containerBrowserItems.addView(getMusicMoreRow);
+            }
+        }
+    }
+
+    private View makeGetMusicResultRow(final MusicSearchEntry e) {
+        String title;
+        String subtitle;
+        if (e.isContainer()) {
+            if (e.kind == MusicSearchEntry.RowKind.DEEZER_ARTIST) {
+                title = getString(R.string.get_music_artist_row, e.containerLabel);
+                subtitle = getString(R.string.get_music_artist_browse_hint);
+            } else if (e.kind == MusicSearchEntry.RowKind.DEEZER_ALBUM) {
+                title = GetMusicSearch.formatDeezerReleaseLabel(e.deezerRecordType, e.containerLabel);
+                subtitle = e.children.isEmpty()
+                        ? getString(R.string.get_music_album_browse_hint)
+                        : getString(R.string.get_music_container_tracks, e.children.size());
+            } else {
+                title = getString(R.string.get_music_folder_row, e.containerLabel);
+                subtitle = getString(R.string.get_music_container_tracks, e.children.size());
+            }
+        } else if (e.source == MusicSearchEntry.Source.DEEZER && e.deezer != null) {
+            title = e.deezer.title;
+            subtitle = GetMusicSearch.formatDeezerSubtitle(e.deezer);
+            String dur = DeezerClient.formatDuration(e.deezer.durationSec);
+            if (!dur.isEmpty()) subtitle = subtitle.isEmpty() ? dur : subtitle + " · " + dur;
+        } else if (e.reach != null) {
+            title = GetMusicSearch.formatReachTitle(e.reach);
+            subtitle = getString(R.string.get_music_from_user, e.reach.username);
+            watchSoulseekPeer(e.reach.username);
+        } else {
+            title = "";
+            subtitle = "";
+        }
+        View.OnClickListener click = new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                clickFeedback();
+                if (!requireInternet(R.string.toast_internet_required)) return;
+                if (e.isContainer()) openGetMusicContainer(e);
+                else buildGetMusicActionUI(e);
+            }
+        };
+        View row = createGetMusicListRow(title, subtitle, click);
+        row.setTag(e);
+        return row;
+    }
+
+    private void buildGetMusicActionUI(final MusicSearchEntry e) {
+        getMusicActionEntry = e;
+        if (e.source == MusicSearchEntry.Source.DEEZER && e.deezer != null) {
+            getMusicEmbeddedInDeezer = true;
+            if (deezerScreen != null) deezerScreen.buildActionUi(e.deezer);
+            soulseekUiMode = SOULSEEK_UI_ACTION;
+            return;
+        }
+        if (e.reach != null) {
+            buildSoulseekActionUI(e.reach);
+        }
+    }
+
+    private void mergeGetMusicReachResult(SoulseekClient.Result r) {
+        if (!isGetMusicMultiSource()) return;
+        String key = GetMusicSearch.reachResultKey(r);
+        if (!getMusicReachKeys.add(key)) return;
+        if (GetMusicSearch.reachMatchesDeezer(r, getMusicDeezerDedupeKeys)) return;
+        getMusicEntries.add(MusicSearchEntry.reach(r));
+    }
+
+    private void flushGetMusicReachBatch(List<SoulseekClient.Result> batch) {
+        if (!isGetMusicMultiSource() || batch == null) return;
+        java.util.Set<String> history = SoulseekDownloadHistory.loadPeerSet(prefs);
+        List<SoulseekClient.Result> reachOnly = new ArrayList<SoulseekClient.Result>();
+        for (SoulseekClient.Result r : batch) {
+            if (soulseekClient != null && soulseekClient.isPeerDenied(r.username)) continue;
+            if (soulseekHideHighBitrate && r.isOverBitrateThreshold()) continue;
+            reachOnly.add(r);
+        }
+        sortSoulseekResultsByQuality(reachOnly, soulseekLastQuery, history);
+        for (SoulseekClient.Result r : reachOnly) {
+            mergeGetMusicReachResult(r);
+        }
+        if (getMusicSearchInProgress) {
+            appendGetMusicResultRowsInner();
+        }
+    }
+
     private void buildSoulseekSearchUI() {
         soulseekUiMode = SOULSEEK_UI_SEARCH;
         prepareSoulseekBrowserChrome();
-        browserStatusTitle = getString(R.string.status_soulseek);
+        final boolean getMusic = isGetMusicMultiSource();
+        browserStatusTitle = getMusic ? getMusicStatusTitle() : getString(R.string.status_soulseek);
         updateStatusBarTitle();
-        updateReachBrowserHint(R.string.reach_hint_search);
+        updateReachBrowserHint(getMusic ? R.string.get_music_hint_search : R.string.reach_hint_search);
         containerBrowserItems.removeAllViews();
 
-        String backLabel = soulseekReturnScreen == STATE_MENU ? getString(R.string.soulseek_back_home) : getString(R.string.soulseek_back_settings);
+        String backLabel;
+        if (getMusic) {
+            backLabel = soulseekReturnScreen == STATE_MENU
+                    ? getString(R.string.get_music_back_home) : getString(R.string.soulseek_back_settings);
+        } else {
+            backLabel = soulseekReturnScreen == STATE_MENU
+                    ? getString(R.string.soulseek_back_home) : getString(R.string.soulseek_back_settings);
+        }
         Button back = createListButton(backLabel);
         back.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -14974,7 +21526,7 @@ public class MainActivity extends Activity {
             return;
         }
 
-        String typeLabel = getString(R.string.soulseek_type_search);
+        String typeLabel = getString(getMusic ? R.string.get_music_type_search : R.string.soulseek_type_search);
         if (soulseekLastQuery != null && soulseekLastQuery.length() > 0) {
             typeLabel += " (" + soulseekLastQuery + ")";
         }
@@ -14983,14 +21535,17 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View v) {
                 clickFeedback();
-                openSoulseekSearchKeyboard();
+                if (getMusic) openGetMusicSearchKeyboard();
+                else openSoulseekSearchKeyboard();
             }
         });
         containerBrowserItems.addView(typeSearch);
 
-        List<String> recent = SoulseekSearchHistory.load(prefs);
+        List<String> recent = getMusic
+                ? GetMusicSearchHistory.load(prefs) : SoulseekSearchHistory.load(prefs);
         if (!recent.isEmpty()) {
-            createBrowserSectionHeader(getString(R.string.soulseek_recent_searches));
+            createBrowserSectionHeader(getString(
+                    getMusic ? R.string.get_music_recent_searches : R.string.soulseek_recent_searches));
             for (final String q : recent) {
                 Button b = createListButton(q);
                 b.setTag(R.id.tag_soulseek_recent_query, q);
@@ -14998,8 +21553,10 @@ public class MainActivity extends Activity {
                     @Override
                     public void onClick(View v) {
                         clickFeedback();
-                        if (requireInternet(R.string.soulseek_wifi_required)) {
-                            fetchSoulseekResults(q);
+                        if (requireInternet(getMusic ? R.string.toast_internet_required
+                                : R.string.soulseek_wifi_required)) {
+                            if (getMusic) fetchGetMusicResults(q);
+                            else fetchSoulseekResults(q);
                         }
                     }
                 });
@@ -15011,13 +21568,26 @@ public class MainActivity extends Activity {
 
     private void finishSoulseekSearchEntry() {
         final String q = typedPassword.trim();
+        final boolean getMusic = getMusicMode != GetMusicSources.MODE_REACH_ONLY
+                && GetMusicSources.anyAvailable(prefs, soulseekReachEnabled, deezerEnabled);
+        if (getMusic) {
+            openGetMusicScreen(true);
+            if (q.length() > 0 && requireInternet(R.string.toast_internet_required)) {
+                getMusicMode = GetMusicSources.resolveMode(prefs, soulseekReachEnabled, deezerEnabled);
+                fetchGetMusicResults(q);
+            }
+            return;
+        }
         openSoulseekScreen(true);
-        if (q.length() > 0 && requireInternet(R.string.soulseek_wifi_required)) fetchSoulseekResults(q);
+        if (q.length() > 0 && requireInternet(R.string.soulseek_wifi_required)) {
+            fetchSoulseekResults(q);
+        }
     }
 
     private void fetchSoulseekResults(final String query) {
         if (query == null || query.trim().isEmpty()) return;
         if (!requireInternet(R.string.soulseek_wifi_required)) return;
+        if (!requireReachPeerConnectivity()) return;
         soulseekLastQuery = query.trim();
         SoulseekSearchHistory.remember(prefs, soulseekLastQuery);
         soulseekSearchInProgress = true;
@@ -15061,13 +21631,19 @@ public class MainActivity extends Activity {
     }
 
     private Button makeSoulseekResultButton(final SoulseekClient.Result r) {
+        watchSoulseekPeer(r.username);
         String slotTag = r.freeSlot ? "+ " : "  ";
         String label = slotTag + r.qualityStars() + " " + r.title() + " · " + formatSoulseekBitrate(r.bitrate)
                 + formatSoulseekSize(r.size) + " (" + r.username + ")";
+        Integer shared = soulseekPeerSharedFiles.get(r.username.toLowerCase(Locale.US));
+        if (shared != null && shared.intValue() > 0) {
+            label += " · " + getString(R.string.soulseek_peer_files, shared.intValue());
+        }
         final Button b = new Button(this);
         b.setText(label);
         b.setTag(r);
         configureSoulseekResultButton(b);
+        applySoulseekCountryFlag(b, soulseekPeerCountryCode(r.username));
         b.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -15129,6 +21705,7 @@ public class MainActivity extends Activity {
 
     private void buildSoulseekActionUI(final SoulseekClient.Result r) {
         stopSoulseekActionRefresh();
+        soulseekActionResult = r;
         soulseekUiMode = SOULSEEK_UI_ACTION;
         prepareSoulseekBrowserChrome();
         browserStatusTitle = r.title();
@@ -15136,13 +21713,15 @@ public class MainActivity extends Activity {
         if (tvBrowserPath != null) tvBrowserPath.setText(getString(R.string.path_soulseek, r.title()));
         containerBrowserItems.removeAllViews();
 
-        Button back = createListButton(getString(R.string.soulseek_back_results));
+        Button back = createListButton(getString(
+                isGetMusicMultiSource() ? R.string.get_music_back_results : R.string.soulseek_back_results));
         back.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 clickFeedback();
                 stopSoulseekActionRefresh();
-                buildSoulseekResultsUI();
+                if (isGetMusicMultiSource()) buildGetMusicResultsUI();
+                else buildSoulseekResultsUI();
             }
         });
         containerBrowserItems.addView(back);
@@ -15175,6 +21754,18 @@ public class MainActivity extends Activity {
         });
         containerBrowserItems.addView(save);
 
+        Button saveThanks = createListButton(getString(R.string.soulseek_save_and_thanks));
+        saveThanks.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                stopSoulseekActionRefresh();
+                soulseekPendingThankYouResult = r;
+                startSoulseekTransfer(r, SOULSEEK_ACTION_SAVE);
+            }
+        });
+        containerBrowserItems.addView(saveThanks);
+
         Button queue = createListButton(getString(R.string.soulseek_add_to_queue));
         queue.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -15185,6 +21776,71 @@ public class MainActivity extends Activity {
             }
         });
         containerBrowserItems.addView(queue);
+
+        final String browseUser = r.username;
+        final String browseFolder = SoulseekBrowseSession.parentFolder(r.filename);
+        Button browseFolderBtn = createListButton(getString(R.string.soulseek_browse_folder));
+        browseFolderBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                stopSoulseekActionRefresh();
+                openSoulseekBrowse(browseUser, browseFolder);
+            }
+        });
+        containerBrowserItems.addView(browseFolderBtn);
+
+        final java.util.ArrayList<SoulseekClient.Result> folderFiles =
+                soulseekResultsInFolder(r.username, browseFolder);
+        if (folderFiles.size() > 1) {
+            Button dlFolder = createListButton(
+                    getString(R.string.soulseek_download_folder, folderFiles.size()));
+            dlFolder.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    stopSoulseekActionRefresh();
+                    String folderName = browseFolder;
+                    int slash = Math.max(folderName.lastIndexOf('\\'), folderName.lastIndexOf('/'));
+                    if (slash >= 0 && slash < folderName.length() - 1) {
+                        folderName = folderName.substring(slash + 1);
+                    }
+                    showFolderDownloadConfirm(r.username, folderName, folderFiles, false);
+                }
+            });
+            containerBrowserItems.addView(dlFolder);
+        }
+
+        Button browseUserBtn = createListButton(getString(R.string.soulseek_browse_user));
+        browseUserBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                stopSoulseekActionRefresh();
+                openSoulseekBrowse(browseUser, "");
+            }
+        });
+        containerBrowserItems.addView(browseUserBtn);
+
+        final Runnable returnToAction = new Runnable() {
+            @Override
+            public void run() {
+                changeScreen(STATE_SOULSEEK);
+                stopSoulseekActionRefresh();
+                buildSoulseekActionUI(r);
+            }
+        };
+        Button viewProfile = createListButton(getString(R.string.soulseek_view_profile));
+        viewProfile.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                openSoulseekUserProfile(browseUser, returnToAction);
+            }
+        });
+        containerBrowserItems.addView(viewProfile);
+
+        appendReachPeerActionButtons(containerBrowserItems, browseUser, null, false);
 
         soulseekActionSuggestionPool.clear();
         soulseekActionSuggestionPool.addAll(SoulseekSearchSuggestions.similarFromResults(
@@ -15254,6 +21910,15 @@ public class MainActivity extends Activity {
     private void purgeStreamTempFiles() {
         StreamTempCache.purgeReach(getCacheDir(), playback.musicPlaylist(),
                 reachGrowingCacheFile, reachQueuePartialFile);
+        List<File> keep = StreamTempCache.reachKeepList(playback.musicPlaylist(),
+                reachGrowingCacheFile, reachQueuePartialFile);
+        if (deezerActiveGrowingFile != null && deezerActiveGrowingFile.isFile()) {
+            keep.add(deezerActiveGrowingFile);
+        }
+        if (deezerScreen != null && deezerScreen.growingFile() != null) {
+            keep.add(deezerScreen.growingFile());
+        }
+        DeezerCache.purgeUnreferenced(getCacheDir(), keep);
         StreamTempCache.purgePodcastStream(getCacheDir(),
                 podcastGrowingCacheFile, podcastGrowingCacheFinal);
     }
@@ -15283,8 +21948,173 @@ public class MainActivity extends Activity {
         playback.replaceReachFileInQueue(oldF, newF, newF != null ? newF.getName() : null);
     }
 
+    private String resolveReachPeerForFile(File file) {
+        if (file == null) return null;
+        PlayQueue.QueueItem cur = playback.currentItem();
+        if (cur != null && cur.file != null && cur.file.equals(file)
+                && cur.reachPeerUsername != null && !cur.reachPeerUsername.isEmpty()) {
+            return cur.reachPeerUsername;
+        }
+        for (PlayQueue.QueueItem q : playback.unifiedQueue().items()) {
+            if (q.kind == PlayQueue.ItemKind.REACH_STREAM && q.file != null && q.file.equals(file)
+                    && q.reachPeerUsername != null && !q.reachPeerUsername.isEmpty()) {
+                return q.reachPeerUsername;
+            }
+        }
+        return ReachTrackProvenance.peerForPath(prefs, file.getAbsolutePath());
+    }
+
+    private String resolveReachTitleForFile(File file) {
+        if (file == null) return "";
+        PlayQueue.QueueItem cur = playback.currentItem();
+        if (cur != null && cur.file != null && cur.file.equals(file)
+                && cur.reachMeta != null && !cur.reachMeta.isEmpty()) {
+            return cur.reachMeta;
+        }
+        for (PlayQueue.QueueItem q : playback.unifiedQueue().items()) {
+            if (q.kind == PlayQueue.ItemKind.REACH_STREAM && q.file != null && q.file.equals(file)
+                    && q.reachMeta != null && !q.reachMeta.isEmpty()) {
+                return q.reachMeta;
+            }
+        }
+        return file.getName();
+    }
+
+    private boolean isReachTrackStillBuffering(File src) {
+        if (!isReachTempFile(src)) return false;
+        if (reachDownloadInProgress()) {
+            if (reachQueuePartialFile != null && reachQueuePartialFile.equals(src)) return true;
+            if (reachGrowingCacheFile != null && reachGrowingCacheFile.equals(src)) return true;
+        }
+        return src.length() < 1024;
+    }
+
+    private boolean isDeezerTrackStillBuffering(File src) {
+        if (!DeezerCache.isTempFile(getCacheDir(), src)) return false;
+        if (deezerScreen != null && deezerScreen.isDownloadActive()
+                && deezerActiveGrowingFile != null && deezerActiveGrowingFile.equals(src)) {
+            return true;
+        }
+        if (deezerActiveGrowingFile != null && deezerActiveGrowingFile.equals(src)
+                && deezerActiveDownloadPercent >= 0 && deezerActiveDownloadPercent < 100) {
+            return true;
+        }
+        return src.length() < 1024;
+    }
+
+    private boolean isStreamTrackStillBuffering(File src) {
+        return isReachTrackStillBuffering(src) || isDeezerTrackStillBuffering(src);
+    }
+
+    private java.util.ArrayList<SoulseekClient.Result> soulseekResultsInFolder(String username,
+            String folder) {
+        java.util.ArrayList<SoulseekClient.Result> out = new java.util.ArrayList<SoulseekClient.Result>();
+        if (username == null || folder == null) return out;
+        for (SoulseekClient.Result r : soulseekResults) {
+            if (!username.equalsIgnoreCase(r.username)) continue;
+            String parent = SoulseekBrowseSession.parentFolder(r.filename);
+            if (parent != null && parent.equalsIgnoreCase(folder)) out.add(r);
+        }
+        return out;
+    }
+
+    private void showFolderDownloadConfirm(final String peer, final String folderLabel,
+            final java.util.ArrayList<SoulseekClient.Result> files, final boolean queueThanks) {
+        if (files == null || files.isEmpty() || peer == null) return;
+        contextReachPeerUser = peer;
+        java.util.ArrayList<String> labels = new java.util.ArrayList<String>();
+        java.util.ArrayList<String> states = new java.util.ArrayList<String>();
+        java.util.ArrayList<Boolean> headers = new java.util.ArrayList<Boolean>();
+        java.util.ArrayList<Runnable> actions = new java.util.ArrayList<Runnable>();
+        labels.add(getString(R.string.soulseek_download_folder_confirm, files.size(), folderLabel));
+        states.add(null);
+        headers.add(Boolean.TRUE);
+        actions.add(null);
+        labels.add(getString(R.string.soulseek_save));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+                startFolderDownloadQueue(peer, folderLabel, files, queueThanks);
+            }
+        });
+        labels.add(getString(R.string.soulseek_pm_dismiss));
+        states.add(null);
+        headers.add(Boolean.FALSE);
+        actions.add(new Runnable() {
+            @Override
+            public void run() {
+                dismissThemedContextMenu();
+            }
+        });
+        if (!themedContextMenu.isShowing()) showThemedContextMenu();
+        contextMenuTierStack.clear();
+        contextMenuTierStack.push(CONTEXT_NAV_ROOT);
+        pushContextMenuTier("reach_pm");
+        showContextMenuTierInPlace(folderLabel, labels, states, headers, actions, true);
+    }
+
+    private void startFolderDownloadQueue(String peer, String folderLabel,
+            java.util.ArrayList<SoulseekClient.Result> files, boolean thankAfter) {
+        if (files == null || files.isEmpty()) return;
+        soulseekFolderDownloadQueue = new java.util.ArrayDeque<SoulseekClient.Result>(files);
+        soulseekFolderDownloadPeer = peer;
+        soulseekFolderDownloadFolderName = folderLabel != null ? folderLabel : peer;
+        soulseekFolderThankPending = thankAfter;
+        soulseekPendingThankYouResult = null;
+        startNextFolderDownload();
+    }
+
+    private void startNextFolderDownload() {
+        if (soulseekFolderDownloadQueue == null || soulseekFolderDownloadQueue.isEmpty()) {
+            if (soulseekFolderThankPending && soulseekFolderDownloadPeer != null) {
+                sendSoulseekThankYou(soulseekFolderDownloadPeer, soulseekFolderDownloadFolderName, true);
+            }
+            soulseekFolderThankPending = false;
+            soulseekFolderDownloadPeer = null;
+            soulseekFolderDownloadFolderName = null;
+            return;
+        }
+        SoulseekClient.Result next = soulseekFolderDownloadQueue.poll();
+        if (next == null) return;
+        startSoulseekTransfer(next, SOULSEEK_ACTION_SAVE);
+    }
+
+    private void saveReachTrackToLibraryWithThanks(final File src, final String peer, final String title) {
+        if (isStreamTrackStillBuffering(src)) {
+            soulseekPendingSaveToLibrary = true;
+            soulseekPendingThankYouResult = new SoulseekClient.Result(
+                    peer, title, 0, 0, 0, true, true, 0, 0);
+            Toast.makeText(this, getString(R.string.soulseek_save_wait_download), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (saveStreamTrackToLibraryInternal(src)) {
+            sendSoulseekThankYou(peer, title, true);
+        }
+    }
+
     private void saveReachTrackToLibrary(final File src) {
-        if (!isReachTempFile(src) || !src.isFile()) return;
+        saveStreamTrackToLibrary(src);
+    }
+
+    private void saveStreamTrackToLibrary(final File src) {
+        if (isStreamTrackStillBuffering(src)) {
+            soulseekPendingSaveToLibrary = true;
+            Toast.makeText(this, getString(R.string.soulseek_save_wait_download), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        saveStreamTrackToLibraryInternal(src);
+    }
+
+    private boolean saveStreamTrackToLibraryInternal(final File src) {
+        if (isStreamTrackStillBuffering(src)) {
+            Toast.makeText(this, getString(R.string.soulseek_save_wait_download), Toast.LENGTH_SHORT).show();
+            return false;
+        }
+        if (!isStreamTempFile(src) || !src.isFile()) return false;
+        final String oldPath = src.getAbsolutePath();
         File dest = SoulseekClient.uniqueFile(rootFolder, src.getName());
         boolean moved = src.renameTo(dest);
         if (!moved) {
@@ -15299,17 +22129,20 @@ public class MainActivity extends Activity {
                 src.delete();
             } catch (Exception e) {
                 Toast.makeText(this, getString(R.string.soulseek_save_failed), Toast.LENGTH_SHORT).show();
-                return;
+                return false;
             }
         }
-        replaceReachFileInQueue(src, dest);
+        ReachTrackProvenance.renamePath(prefs, oldPath, dest.getAbsolutePath());
+        playback.finishStreamFileInQueue(src, dest, dest.getName());
         purgeUnreferencedReachCache();
         scanMediaLibraryAsync();
         Toast.makeText(this, getString(R.string.soulseek_saved_to_library), Toast.LENGTH_SHORT).show();
+        return true;
     }
 
     private void startSoulseekTransfer(final SoulseekClient.Result r, final int action) {
         if (!requireInternet(R.string.soulseek_wifi_required)) return;
+        if (!requireReachPeerConnectivity()) return;
         stopSoulseekActionRefresh();
         reachPartialPlaybackStarted = false;
         reachGrowingCacheFile = null;
@@ -15324,10 +22157,36 @@ public class MainActivity extends Activity {
         soulseekPendingAction = action;
         soulseekActiveDownload = r;
         soulseekLastProgressUiMs = 0;
+        watchDownloadPeerSharing(r.username);
         buildSoulseekDownloadUI(r, action);
         File dest = action == SOULSEEK_ACTION_SAVE ? rootFolder : reachCacheDir();
         ensureSoulseekClient().download(r, dest);
         updateSoulseekSharePolicy();
+    }
+
+    private void watchDownloadPeerSharing(final String peer) {
+        if (peer == null || peer.trim().isEmpty()) return;
+        SoulseekUserDirectory.watch(ensureSoulseekClient(), peer, new SoulseekUserDirectory.Callback() {
+            @Override
+            public void onUserInfo(SoulseekUserDirectory.UserInfo info) {
+                if (info == null || !info.isOnline() || info.files > 0) return;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (soulseekActiveDownload == null
+                                || !peer.equalsIgnoreCase(soulseekActiveDownload.username)) {
+                            return;
+                        }
+                        Toast.makeText(MainActivity.this,
+                                getString(R.string.soulseek_peer_not_sharing_warning, peer),
+                                Toast.LENGTH_LONG).show();
+                    }
+                });
+            }
+
+            @Override
+            public void onError(String reason) {}
+        });
     }
 
     private boolean isReachCacheAction(int action) {
@@ -15423,6 +22282,18 @@ public class MainActivity extends Activity {
         errorBanner.setPadding(hPad, hPad, hPad, hPad / 2);
         errorBanner.setFocusable(false);
         containerBrowserItems.addView(errorBanner);
+
+        if (isSoulseekSharingRejectionMessage(reason)
+                || (soulseekClient != null && soulseekClient.isPeerDenied(failed.username))) {
+            TextView sharingHint = new TextView(this);
+            sharingHint.setText(getString(R.string.soulseek_enable_sharing_hint));
+            sharingHint.setTypeface(ThemeManager.getCustomFont());
+            sharingHint.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                    getResources().getDimension(R.dimen.y1_menu_text_size));
+            sharingHint.setPadding(hPad, hPad / 2, hPad, hPad);
+            sharingHint.setFocusable(false);
+            containerBrowserItems.addView(sharingHint);
+        }
 
         if (reason != null && (reason.contains("forward TCP port")
                 || reason.contains("NAT") || reason.contains("not reachable"))) {
@@ -15718,8 +22589,16 @@ public class MainActivity extends Activity {
     }
 
     private boolean reachDownloadInProgress() {
+        return isSoulseekTransferInProgress() || isDeezerStreamDownloadInProgress();
+    }
+
+    private boolean isSoulseekTransferInProgress() {
         return soulseekActiveDownload != null
                 && soulseekClient != null && soulseekClient.isTransferActive();
+    }
+
+    private boolean isDeezerStreamDownloadInProgress() {
+        return deezerScreen != null && deezerScreen.isDownloadActive();
     }
 
     private void clearReachStreamAlbumArt() {
@@ -15782,11 +22661,92 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
     }
 
+    /** Apply Deezer API metadata and cover art on the Now Playing screen during stream/download. */
+    private void applyDeezerStreamMetadata(File partial, boolean showBufferingArtist) {
+        if (partial == null || !partial.isFile()) return;
+        String path = partial.getAbsolutePath();
+        if (!DeezerMetadata.hasMetadata(prefs, path)
+                && !DeezerCache.isTempFile(getCacheDir(), partial)) return;
+
+        int pct = streamDownloadPercentForFile(partial);
+        String title = DeezerMetadata.title(prefs, path, "");
+        String artist = DeezerMetadata.artist(prefs, path, "");
+        String album = DeezerMetadata.album(prefs, path, "");
+        if (artist.isEmpty()) artist = deezerArtistFromQueueMeta();
+        if (title.isEmpty() && tvPlayerTitle != null) {
+            title = stripReachProgressPrefix(tvPlayerTitle.getText().toString());
+            if (title.isEmpty()) {
+                PlayQueue.QueueItem cur = playback.currentItem();
+                if (cur != null && cur.deezerMeta != null && !cur.deezerMeta.isEmpty()) {
+                    String meta = cur.deezerMeta.trim();
+                    int dash = meta.indexOf(" - ");
+                    title = dash >= 0 ? meta.substring(dash + 3).trim() : meta;
+                }
+            }
+        }
+
+        if (!title.isEmpty()) {
+            String titled = reachProgressPrefix(pct) + title;
+            if (tvPlayerTitle != null) tvPlayerTitle.setText(titled);
+            if (tvVizTitle != null) tvVizTitle.setText(titled);
+        }
+        if (tvPlayerArtist != null) {
+            if (showBufferingArtist && pct >= 0 && pct < 95 && isDeezerStreamDownloadInProgress()) {
+                tvPlayerArtist.setText(getString(R.string.reach_buffering_track));
+            } else if (!artist.isEmpty() && !album.isEmpty()) {
+                tvPlayerArtist.setText(artist + " · " + album);
+            } else if (!artist.isEmpty()) {
+                tvPlayerArtist.setText(artist);
+            } else if (!album.isEmpty()) {
+                tvPlayerArtist.setText(album);
+            }
+        }
+
+        if (lastAlbumArtBytes == null || lastAlbumArtBytes.length == 0) {
+            String coverUrl = DeezerMetadata.coverUrl(prefs, path);
+            if (coverUrl != null && !coverUrl.isEmpty()) {
+                String safeFileName = partial.getName().replace(".mp3", "").replace(".flac", "")
+                        .replace(".m4a", "").replace(".wav", "");
+                File coverFile = new File(getCoversFolder(), safeFileName + ".jpg");
+                if (coverFile.exists()) {
+                    applyCachedCoverArt(coverFile.getAbsolutePath());
+                } else {
+                    fetchDeezerCoverArt(partial, coverUrl, coverFile);
+                }
+            } else if (partial.length() >= REACH_ID3_MIN_BYTES) {
+                tryDeezerStreamEmbeddedArt(partial);
+            }
+        }
+        refreshNowPlayingPreview();
+    }
+
+    private void tryDeezerStreamEmbeddedArt(File partial) {
+        if (partial == null || partial.length() < REACH_ID3_MIN_BYTES) return;
+        if (lastAlbumArtBytes != null && lastAlbumArtBytes.length > 0) return;
+        try {
+            MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+            java.io.FileInputStream fis = new java.io.FileInputStream(partial);
+            mmr.setDataSource(fis.getFD());
+            byte[] art = mmr.getEmbeddedPicture();
+            fis.close();
+            mmr.release();
+            if (art != null && art.length > 0) {
+                lastAlbumArtBytes = art;
+                applyReachStreamCoverArt();
+            }
+        } catch (Exception ignored) {}
+    }
+
     private void startReachPlayFromPartial(File partial) {
         saveCurrentPodcastResume();
         stopPodcastDownloadFully();
         clearReachStreamAlbumArt();
-        playback.playReachAfterCurrent(partial, partial.getName());
+        String peer = soulseekActiveDownload != null ? soulseekActiveDownload.username : null;
+        String meta = soulseekActiveDownload != null ? soulseekActiveDownload.title() : partial.getName();
+        playback.playReachAfterCurrent(partial, meta, peer);
+        if (peer != null && !peer.isEmpty()) {
+            ReachTrackProvenance.record(prefs, partial.getAbsolutePath(), peer);
+        }
         purgeUnreferencedReachCache();
         String reachBase = partial.getName();
         int dot = reachBase.lastIndexOf('.');
@@ -15801,6 +22761,7 @@ public class MainActivity extends Activity {
         playerReturnScreen = currentScreenState;
         persistPlaybackQueue();
         applyScreenChange(STATE_PLAYER);
+        progressHandler.post(updateProgressTask);
         startReachFromGrowingFile(partial, 0);
     }
 
@@ -15839,6 +22800,18 @@ public class MainActivity extends Activity {
             }
         }
         reachGrowingSeekMs = positionMs;
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("fileLen", fileLen);
+            d.put("prepared", reachGrowingPreparedBytes);
+            d.put("seekMs", positionMs);
+            d.put("force", force);
+            d.put("deezer", isDeezerStreamDownloadInProgress());
+            DebugAgentLog.log(this, "MainActivity.maybeExtendReachGrowingPlayback",
+                    "reprepare growing file", "H-DZ-GROW", d);
+        } catch (Exception ignored) {}
+        // #endregion
         startReachFromGrowingFile(reachGrowingCacheFile, reachGrowingSeekMs);
     }
 
@@ -15885,8 +22858,26 @@ public class MainActivity extends Activity {
                         tvPlayerTimeCurrent.setText(formatTime(growingSeek));
                     }
                     if (!isPausedByHand) mp.start();
+                    syncNowPlayingHomeVisibility();
+                    updatePlayerUI();
                     updatePlayerStatusIndicators();
                     clearReachLoadingArtistLabel();
+                    // #region agent log
+                    try {
+                        org.json.JSONObject d = new org.json.JSONObject();
+                        d.put("dur", dur);
+                        d.put("seekMs", growingSeek);
+                        d.put("fileLen", growingFile.length());
+                        d.put("deezer", DeezerCache.isTempFile(getCacheDir(), growingFile));
+                        d.put("playing", mp.isPlaying());
+                        DebugAgentLog.log(MainActivity.this, "MainActivity.reachGrowingOnPrepared",
+                                "media prepared", "H-PREPARE", d);
+                    } catch (Exception ignored) {}
+                    // #endregion
+                    if (reachGrowingCacheFile != null
+                            && DeezerCache.isTempFile(getCacheDir(), reachGrowingCacheFile)) {
+                        applyDeezerStreamMetadata(reachGrowingCacheFile, reachDownloadInProgress());
+                    }
                     if (reachDownloadInProgress()) {
                         progressHandler.postDelayed(reachGrowingEdgePoll, 150);
                     }
@@ -15948,7 +22939,8 @@ public class MainActivity extends Activity {
 
     /** Keep Reach download + client alive while streaming on Now Playing (like podcast handoff). */
     boolean keepReachStreamHandoffForScreen(int targetState) {
-        return targetState == STATE_PLAYER && reachPartialPlaybackStarted && hasActiveReachDownload();
+        return targetState == STATE_PLAYER && reachPartialPlaybackStarted
+                && (hasActiveReachDownload() || isDeezerStreamDownloadInProgress());
     }
 
     void pauseSoulseekUiOnly() {
@@ -15971,6 +22963,8 @@ public class MainActivity extends Activity {
         reachGrowingTotalBytes = 0;
         reachGrowingSeekMs = 0;
         reachQueuePartialFile = null;
+        deezerActiveGrowingFile = null;
+        deezerActiveDownloadPercent = -1;
         progressHandler.removeCallbacks(reachGrowingEdgePoll);
         purgeStreamTempFiles();
         if (!isSoulseekUiActive()) soulseekOffScreenCleanup();
@@ -16044,6 +23038,11 @@ public class MainActivity extends Activity {
         cancelReachDownloadIfAny(false);
     }
 
+    void teardownDeezerSession() {
+        if (deezerScreen != null) deezerScreen.teardown();
+        if (containerBrowserItems != null) containerBrowserItems.removeAllViews();
+    }
+
     void sessionSweepHandlers(int from, int to) {
         progressHandler.removeCallbacks(podcastGrowingEdgePoll);
         if (!keepReachStreamHandoffForScreen(to)) {
@@ -16074,6 +23073,17 @@ public class MainActivity extends Activity {
 
     private void updateReachGrowingDurationUi() {
         updateReachGrowingTimeUi();
+    }
+
+    /** Refresh download percent in title/artist while a Reach or Deezer stream is growing. */
+    private void refreshReachGrowingBufferUi() {
+        if (currentScreenState != STATE_PLAYER || reachGrowingCacheFile == null) return;
+        if (!reachPartialPlaybackStarted && !reachDownloadInProgress()) return;
+        int pct = streamDownloadPercentForFile(reachGrowingCacheFile);
+        long done = reachGrowingCacheFile.length();
+        long total = reachGrowingTotalBytes > 0 ? reachGrowingTotalBytes : done;
+        updateReachPlayerBufferUi(pct, done, total);
+        refreshReachPlayerTitleProgress();
     }
 
     private int reachGrowingDisplayDurationMs() {
@@ -16108,11 +23118,19 @@ public class MainActivity extends Activity {
     }
 
     private void updateReachPlayerBufferUi(int pct, long done, long total) {
-        soulseekActiveDownloadPercent = pct;
+        if (reachGrowingCacheFile != null && DeezerCache.isTempFile(getCacheDir(), reachGrowingCacheFile)) {
+            deezerActiveDownloadPercent = pct;
+        } else {
+            soulseekActiveDownloadPercent = pct;
+        }
         refreshReachPlayerTitleProgress();
         if (tvPlayerArtist == null) return;
         if (pct >= 95 || !reachDownloadInProgress()) {
             clearReachLoadingArtistLabel();
+            if (reachGrowingCacheFile != null
+                    && DeezerCache.isTempFile(getCacheDir(), reachGrowingCacheFile)) {
+                applyDeezerStreamMetadata(reachGrowingCacheFile, false);
+            }
         } else {
             tvPlayerArtist.setText(getString(R.string.reach_buffering_track));
         }
@@ -16122,13 +23140,51 @@ public class MainActivity extends Activity {
     private void clearReachLoadingArtistLabel() {
         if (tvPlayerArtist == null) return;
         CharSequence t = tvPlayerArtist.getText();
-        if (t == null || t.length() == 0) return;
+        if (t == null || t.length() == 0) {
+            restoreStreamArtistFromMetadata();
+            return;
+        }
         String s = t.toString();
         if (s.equals(getString(R.string.reach_loading_track))
                 || s.equals(getString(R.string.reach_buffering_track))
                 || s.startsWith("Buffering")) {
-            tvPlayerArtist.setText("");
+            restoreStreamArtistFromMetadata();
         }
+    }
+
+    private void restoreStreamArtistFromMetadata() {
+        if (tvPlayerArtist == null || reachGrowingCacheFile == null) return;
+        String path = reachGrowingCacheFile.getAbsolutePath();
+        String artist = "";
+        if (DeezerCache.isTempFile(getCacheDir(), reachGrowingCacheFile)) {
+            artist = DeezerMetadata.artist(prefs, path, "");
+            if (artist.isEmpty()) {
+                artist = deezerArtistFromQueueMeta();
+            }
+            String album = DeezerMetadata.album(prefs, path, "");
+            if (!artist.isEmpty() && !album.isEmpty()) {
+                tvPlayerArtist.setText(artist + " · " + album);
+            } else if (!artist.isEmpty()) {
+                tvPlayerArtist.setText(artist);
+            } else if (!album.isEmpty()) {
+                tvPlayerArtist.setText(album);
+            } else {
+                tvPlayerArtist.setText("");
+            }
+            return;
+        }
+        artist = prefs.getString("meta_artist_" + path, "");
+        if (!artist.isEmpty()) tvPlayerArtist.setText(artist);
+        else tvPlayerArtist.setText("");
+    }
+
+    private String deezerArtistFromQueueMeta() {
+        PlayQueue.QueueItem cur = playback.currentItem();
+        if (cur == null || cur.deezerMeta == null || cur.deezerMeta.isEmpty()) return "";
+        String meta = cur.deezerMeta.trim();
+        int dash = meta.indexOf(" - ");
+        if (dash > 0) return meta.substring(0, dash).trim();
+        return "";
     }
 
     private void confirmStopReachDownload(final Runnable onConfirmed) {
@@ -16334,7 +23390,7 @@ public class MainActivity extends Activity {
             if (!r.title().equalsIgnoreCase(base)) continue;
             out.add(r);
         }
-        sortSoulseekResultsByQuality(out);
+        sortSoulseekResultsByQuality(out, soulseekLastQuery, SoulseekDownloadHistory.loadPeerSet(prefs));
         return out;
     }
 
@@ -16378,7 +23434,8 @@ public class MainActivity extends Activity {
             empty.setEnabled(false);
             containerBrowserItems.addView(empty);
         } else {
-            sortSoulseekResultsByQuality(soulseekResults);
+            sortSoulseekResultsByQuality(soulseekResults, soulseekLastQuery,
+                    SoulseekDownloadHistory.loadPeerSet(prefs));
             updateReachBrowserHint(R.string.reach_hint_results);
             soulseekResultUiCount = 0;
             appendSoulseekResultRowsInner();
@@ -16389,7 +23446,7 @@ public class MainActivity extends Activity {
     private void finishSoulseekUserEntry() {
         pendingSoulseekUser = typedPassword.trim();
         if (pendingSoulseekUser.isEmpty()) {
-            SoulseekAccount.resetToAuto(prefs);
+            SoulseekAccount.resetToAuto(prefs, MainActivity.this);
             if (soulseekClient != null) {
                 soulseekClient.shutdown();
                 soulseekClient = null;
@@ -16422,6 +23479,8 @@ public class MainActivity extends Activity {
         }
         final String user = pendingSoulseekUser;
         final String pass = typedPassword;
+        final boolean hadSameCustom = prefs.getBoolean(SoulseekAccount.PREF_CUSTOM, false)
+                && user.equals(prefs.getString(SoulseekAccount.PREF_USER, ""));
         Toast.makeText(this, getString(R.string.soulseek_testing_login), Toast.LENGTH_SHORT).show();
         new Thread(new Runnable() {
             @Override
@@ -16440,7 +23499,10 @@ public class MainActivity extends Activity {
                             soulseekClient.shutdown();
                             soulseekClient = null;
                         }
-                        Toast.makeText(MainActivity.this, getString(R.string.soulseek_account_saved),
+                        int msgRes = hadSameCustom
+                                ? R.string.soulseek_account_saved
+                                : R.string.soulseek_account_created;
+                        Toast.makeText(MainActivity.this, getString(msgRes),
                                 Toast.LENGTH_SHORT).show();
                         restoreSettingsAfterSoulseekAccount();
                     }
@@ -16466,6 +23528,7 @@ public class MainActivity extends Activity {
                     @Override
                     public void run() {
                         isCustomScanning = false;
+                        requestSoulseekShareRescan();
                     }
                 });
             }
@@ -16543,11 +23606,19 @@ public class MainActivity extends Activity {
     }
 
     private void startPodcastPlayback(List<OpenRssClient.Episode> episodes, int index, boolean fromSavedLibrary) {
-        if (episodes == null || episodes.isEmpty()) return;
+        if (episodes == null || episodes.isEmpty() || index < 0 || index >= episodes.size()) return;
         boolean offline = fromSavedLibrary || episodesAllOnDisk(episodes) || episodeOnDisk(episodes, index);
         if (!offline && !requireInternet(R.string.podcasts_wifi_required_stream)) return;
         saveCurrentPodcastResume();
         String showTitle = podcastSelected != null ? podcastSelected.title : playback.podcastShowTitle();
+        if (!playback.unifiedQueue().isEmpty()) {
+            OpenRssClient.Episode ep = episodes.get(index);
+            finalizeReachStreamHandoff();
+            stopPodcastDownloadFully();
+            playback.playPodcastAfterCurrent(ep, showTitle, fromSavedLibrary);
+            preparePodcastEpisode(playback.podcastIndex());
+            return;
+        }
         playback.activatePodcast(episodes, index, showTitle, fromSavedLibrary);
         preparePodcastEpisode(playback.podcastIndex());
     }
@@ -17126,6 +24197,7 @@ public class MainActivity extends Activity {
                             setBlockingLoading(false);
                             Toast.makeText(MainActivity.this, getString(R.string.podcasts_saved_to_library),
                                     Toast.LENGTH_LONG).show();
+                            requestSoulseekShareRescan();
                             buildPodcastEpisodesUI();
                         }
                     });
@@ -17418,6 +24490,10 @@ public class MainActivity extends Activity {
         currentAlbumColor = ThemeManager.getListButtonFocusedBg() | 0xFF000000;
         // 🚀 [추가된 부분] 손상된 파일 방어막: 파일이 없거나 용량이 1KB(1024 bytes) 미만인 껍데기 파일일 경우
         if (!track.exists() || track.length() < 1024) {
+            if (isReachTempFile(track)) {
+                playback.removeQueueItemAt(index);
+                persistPlaybackQueue();
+            }
             tvPlayerTitle.setText("Corrupted File");
             tvPlayerArtist.setText("Skipping...");
             ivAlbumArt.setImageResource(R.drawable.default_album);
@@ -17453,10 +24529,16 @@ public class MainActivity extends Activity {
 
             String safeFileName = track.getName().replace(".mp3", "").replace(".flac", "").replace(".wav", "").replace(".m4a", "");
             File coverFile = new File(getCoversFolder(), safeFileName + ".jpg");
+            final String trackPath = track.getAbsolutePath();
+            final boolean hasDeezerMeta = DeezerMetadata.hasMetadata(prefs, trackPath)
+                    || DeezerCache.isTempFile(getCacheDir(), track);
 
-            if (prefs.contains("meta_title_" + track.getAbsolutePath())) {
-                t = prefs.getString("meta_title_" + track.getAbsolutePath(), t);
-                a = prefs.getString("meta_artist_" + track.getAbsolutePath(), a);
+            if (DeezerMetadata.hasMetadata(prefs, trackPath)) {
+                t = DeezerMetadata.title(prefs, trackPath, t);
+                a = DeezerMetadata.artist(prefs, trackPath, a);
+            } else if (prefs.contains("meta_title_" + trackPath)) {
+                t = prefs.getString("meta_title_" + trackPath, t);
+                a = prefs.getString("meta_artist_" + trackPath, a);
             }
 
             // 🚀 [핵심 판단 로직] 이 파일에 정말 멀쩡한 태그(가수+제목)가 들어있는지 검사합니다.
@@ -17504,6 +24586,10 @@ public class MainActivity extends Activity {
                 applyCachedCoverArt(coverFile.getAbsolutePath());
 
             } else {
+                final String deezerCoverUrl = DeezerMetadata.coverUrl(prefs, trackPath);
+                if (deezerCoverUrl != null && !deezerCoverUrl.isEmpty()) {
+                    fetchDeezerCoverArt(track, deezerCoverUrl, coverFile);
+                } else {
 
                 ivAlbumArt.setImageResource(R.drawable.default_album);
                 currentAlbumColor = ThemeManager.getListButtonFocusedBg() | 0xFF000000;
@@ -17511,7 +24597,7 @@ public class MainActivity extends Activity {
                 updateMainMenuBackground();
                 refreshNowPlayingPreview();
                 // 없으면 인터넷에서 검색 출동!
-                if (isAutoFetchEnabled) {
+                if (isAutoFetchEnabled && !hasDeezerMeta) {
                     android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
                     if (wm != null && wm.isWifiEnabled() && wm.getConnectionInfo().getNetworkId() != -1) {
 
@@ -17526,6 +24612,7 @@ public class MainActivity extends Activity {
                         // 태그가 있다는 사실과 기존 태그 내용을 같이 넘겨서, 정보가 덮어씌워지지 않게 막습니다.
                         fetchTrackInfoFromInternet(track, searchQuery, hasValidTags, t, a);
                     }
+                }
                 }
             }
 
@@ -17947,6 +25034,10 @@ public class MainActivity extends Activity {
             int est = podcastResumeDurationForSave();
             if (est > 0) return est;
         }
+        if (reachPartialPlaybackStarted && reachGrowingCacheFile != null) {
+            int est = reachGrowingDisplayDurationMs();
+            if (est > 0) return est;
+        }
         try {
             if (mediaPlayer == null) return 0;
             int d = mediaPlayer.getDuration();
@@ -17983,8 +25074,29 @@ public class MainActivity extends Activity {
     private int playbackMaxSeekMs() {
         int buffered = podcastBufferedSeekLimitMs();
         if (buffered >= 0) return Math.max(0, buffered);
+        if (reachPartialPlaybackStarted && reachDownloadInProgress()) {
+            int reachBuf = reachBufferedSeekLimitMs();
+            if (reachBuf > 0) return reachBuf;
+        }
         int dur = playbackDurationForScrub();
         return dur > 0 ? dur : Integer.MAX_VALUE;
+    }
+
+    /** Cap scrub/seek to downloaded fraction while a Reach or Deezer stream is still growing. */
+    private int reachBufferedSeekLimitMs() {
+        if (!reachPartialPlaybackStarted || reachGrowingCacheFile == null) return -1;
+        try {
+            if (mediaPlayer == null) return 0;
+            int mpDur = mediaPlayer.getDuration();
+            if (mpDur <= 0) return 0;
+            long fileLen = reachGrowingCacheFile.length();
+            if (reachGrowingTotalBytes > fileLen && fileLen > 0) {
+                return (int) Math.min(mpDur, (long) mpDur * fileLen / reachGrowingTotalBytes);
+            }
+            return mpDur;
+        } catch (Exception e) {
+            return 0;
+        }
     }
 
     static int clampScrubPositionMs(int positionMs, int durationMs) {
@@ -18007,6 +25119,17 @@ public class MainActivity extends Activity {
     private void enterPlayerScrubCursorMode() {
         if (!hasActiveMediaPlayback()) return;
         int dur = playbackDurationForScrub();
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("dur", dur);
+            d.put("reachPartial", reachPartialPlaybackStarted);
+            d.put("reachGrowing", reachGrowingCacheFile != null);
+            d.put("deezerDl", isDeezerStreamDownloadInProgress());
+            DebugAgentLog.log(this, "MainActivity.enterPlayerScrubCursorMode",
+                    "scrub enter attempt", "H-SCRUB", d);
+        } catch (Exception ignored) {}
+        // #endregion
         if (dur <= 0) return;
         try {
             playerScrubCursorMs = mediaPlayer != null ? mediaPlayer.getCurrentPosition() : 0;
@@ -18183,6 +25306,19 @@ public class MainActivity extends Activity {
         else if (!up && currentVol > 0)
             currentVol--;
         audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, currentVol, 0);
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("up", up);
+            d.put("vol", currentVol);
+            d.put("max", maxVol);
+            d.put("screen", currentScreenState);
+            d.put("ctxMenu", themedContextMenu != null && themedContextMenu.isShowing());
+            d.put("volOnly", contextMenuVolumeOnly);
+            d.put("volSlider", contextMenuInVolumeSlider);
+            DebugAgentLog.log(this, "MainActivity.adjustVolume", "volume adjusted", "H-VOLUME", d);
+        } catch (Exception ignored) {}
+        // #endregion
         if (currentScreenState == STATE_PLAYER) {
             if (themedContextMenu != null && themedContextMenu.isShowing() && contextMenuInVolumeSlider
                     && !contextMenuVolumeOnly) {
@@ -18394,7 +25530,18 @@ public class MainActivity extends Activity {
 
         if (currentScreenState == STATE_PLAYER) {
             if (themedContextMenu != null && themedContextMenu.isShowing()
+                    && !contextMenuVolumeOnly
                     && (keyCode == 21 || keyCode == 22)) {
+                // #region agent log
+                try {
+                    org.json.JSONObject d = new org.json.JSONObject();
+                    d.put("keyCode", keyCode);
+                    d.put("ctxMenu", true);
+                    d.put("volOnly", contextMenuVolumeOnly);
+                    DebugAgentLog.log(this, "MainActivity.onKeyDown",
+                            "player wheel blocked by context menu", "H-VOLUME-BLOCK", d);
+                } catch (Exception ignored) {}
+                // #endregion
                 return true;
             }
             if (keyCode == 21) {
@@ -18438,14 +25585,14 @@ public class MainActivity extends Activity {
             return true;
         }
 
-        if (currentScreenState == STATE_WEBSERVER) {
+        if (currentScreenState == STATE_WEBSERVER || currentScreenState == STATE_DEEZER_SETUP) {
             return true;
         }
 
         if (currentScreenState == STATE_MENU || currentScreenState == STATE_BROWSER
                 || currentScreenState == STATE_SETTINGS || currentScreenState == STATE_BLUETOOTH
                 || currentScreenState == STATE_WIFI || currentScreenState == STATE_PODCASTS
-                || currentScreenState == STATE_SOULSEEK) {
+                || currentScreenState == STATE_SOULSEEK || currentScreenState == STATE_DEEZER) {
             // Playlist move strip replaces the ListView — handle wheel while list is hidden.
             if (currentScreenState == STATE_BROWSER && isPlaylistMoveActive()) {
                 if (playlistMoveStrip != null && playlistMoveStrip.isAnimating()) return true;
@@ -18483,68 +25630,17 @@ public class MainActivity extends Activity {
                     }
                 }
 
-                long now = System.currentTimeMillis();
-                boolean isFastScroll = false;
-
-                // 💡 [오토매틱 엔진] 0.05초(50ms) 이내에 연속으로 휠이 3칸 이상 돌아가면 '고속 점프 모드' 발동!
-                if (now - lastWheelTime < 50) {
-                    wheelFastCount++;
-                    if (wheelFastCount >= 3) isFastScroll = true;
-                } else {
-                    wheelFastCount = 0; // 천천히 돌리면 즉시 초기화
-                }
-                lastWheelTime = now;
-
-                if (isFastScroll && !currentScrollIndexList.isEmpty()) {
-                    // 🚀🚀 [고속 점프 모드] 알파벳(첫 글자) 단위로 뭉텅뭉텅 스크롤!
-                    int currentPos = listVirtualSongs.getSelectedItemPosition();
-                    if (currentPos < 0) currentPos = 0;
-                    char currentChar = getInitialChar(currentScrollIndexList.get(currentPos));
-                    int targetPos = currentPos;
-
-                    if (keyCode == 22) { // 휠 아래로 휙! 돌릴 때 (다음 알파벳 찾기)
-                        for (int i = currentPos + 1; i < currentScrollIndexList.size(); i++) {
-                            if (getInitialChar(currentScrollIndexList.get(i)) != currentChar) {
-                                targetPos = i;
-                                break;
-                            }
-                        }
-                    } else if (keyCode == 21) { // 휠 위로 휙! 돌릴 때 (이전 알파벳 시작점 찾기)
-                        char targetChar = currentChar;
-                        boolean foundPrevChar = false;
-                        for (int i = currentPos - 1; i >= 0; i--) {
-                            char c = getInitialChar(currentScrollIndexList.get(i));
-                            if (!foundPrevChar && c != currentChar) {
-                                foundPrevChar = true;
-                                targetChar = c;
-                            }
-                            if (foundPrevChar && c != targetChar) {
-                                targetPos = i + 1;
-                                break;
-                            }
-                            if (i == 0) targetPos = 0;
-                        }
-                    }
-                    listVirtualSongs.setSelection(targetPos);
-                    if (targetPos >= 0 && targetPos < currentScrollIndexList.size()) {
-                        showFastScrollLetter(currentScrollIndexList.get(targetPos));
-                    }
+                if (keyCode == 21) {
+                    listVirtualSongs.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP));
+                    listVirtualSongs.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP));
                     clickFeedback();
                     return true;
-                } else {
-                    // 🐢🐢 [일반 주행 모드] 평소처럼 천천히 정확하게 1곡씩 이동!
-                    if (keyCode == 21) {
-                        listVirtualSongs.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_UP));
-                        listVirtualSongs.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_UP));
-                        clickFeedback();
-                        return true;
-                    }
-                    if (keyCode == 22) {
-                        listVirtualSongs.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN));
-                        listVirtualSongs.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_DOWN));
-                        clickFeedback();
-                        return true;
-                    }
+                }
+                if (keyCode == 22) {
+                    listVirtualSongs.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_DOWN));
+                    listVirtualSongs.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_DOWN));
+                    clickFeedback();
+                    return true;
                 }
             }
             if (currentScreenState == STATE_SETTINGS && isThemeListActive()
@@ -18554,6 +25650,29 @@ public class MainActivity extends Activity {
                 return true;
             }
             if (currentScreenState == STATE_SETTINGS && (keyCode == 21 || keyCode == 22)) {
+                // #region agent log
+                if (isConversationThreadActive()) {
+                    try {
+                        org.json.JSONObject d = new org.json.JSONObject();
+                        d.put("keyCode", keyCode);
+                        d.put("branch", "settings_wheel_before_moveSettingsListFocus");
+                        DebugAgentLog.log(this, "MainActivity.onKeyDown",
+                                "conv wheel", "H3", d);
+                    } catch (Exception ignored) {}
+                }
+                // #endregion
+                if (isConversationThreadActive()) {
+                    if (moveConversationListFocus(keyCode == 21 ? -1 : 1)) {
+                        clickFeedback();
+                    }
+                    return true;
+                }
+                if (isReachBrowseListActive()) {
+                    if (moveReachBrowseListFocus(keyCode == 21 ? -1 : 1)) {
+                        clickFeedback();
+                    }
+                    return true;
+                }
                 if (!isFocusValidForCurrentScreen() && containerSettingsItems != null
                         && containerSettingsItems.getChildCount() > 0) {
                     for (int i = 0; i < containerSettingsItems.getChildCount(); i++) {
@@ -18572,16 +25691,16 @@ public class MainActivity extends Activity {
                 return true;
             }
             if ((currentScreenState == STATE_BROWSER || currentScreenState == STATE_PODCASTS
-                    || currentScreenState == STATE_SOULSEEK || currentScreenState == STATE_APPS
-                    || currentScreenState == STATE_MORE)
+                    || currentScreenState == STATE_SOULSEEK || currentScreenState == STATE_DEEZER
+                    || currentScreenState == STATE_APPS || currentScreenState == STATE_MORE)
                     && (listVirtualSongs == null || listVirtualSongs.getVisibility() != View.VISIBLE)
                     && !isFocusValidForCurrentScreen()) {
                 ensureBrowserListFocus();
             }
             View c = getCurrentFocus();
             if (c == null && (currentScreenState == STATE_BROWSER || currentScreenState == STATE_PODCASTS
-                    || currentScreenState == STATE_SOULSEEK || currentScreenState == STATE_APPS
-                    || currentScreenState == STATE_MORE)) {
+                    || currentScreenState == STATE_SOULSEEK || currentScreenState == STATE_DEEZER
+                    || currentScreenState == STATE_APPS || currentScreenState == STATE_MORE)) {
                 ensureBrowserListFocus();
                 c = getCurrentFocus();
             }
@@ -18596,7 +25715,10 @@ public class MainActivity extends Activity {
                             View n = parent.getChildAt(i);
                             if (n != null && n.getVisibility() == View.VISIBLE && n.isFocusable()
                                     && n.isEnabled()) {
-                                if (n.requestFocus()) break;
+                                if (n.requestFocus()) {
+                                    scrollBrowserRowIntoView(n, parent);
+                                    break;
+                                }
                                 continue;
                             }
                         }
@@ -18616,7 +25738,10 @@ public class MainActivity extends Activity {
                             View n = parent.getChildAt(i);
                             if (n != null && n.getVisibility() == View.VISIBLE && n.isFocusable()
                                     && n.isEnabled()) {
-                                if (n.requestFocus()) break;
+                                if (n.requestFocus()) {
+                                    scrollBrowserRowIntoView(n, parent);
+                                    break;
+                                }
                                 continue;
                             }
                         }
@@ -18638,6 +25763,12 @@ public class MainActivity extends Activity {
     public boolean onKeyUp(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             clockHandler.removeCallbacks(backLongPressRunnable);
+            clockHandler.removeCallbacks(backForceQuitRunnable);
+            clockHandler.removeCallbacks(backForceQuitHintRunnable);
+            if (backForceQuitHandled) {
+                backKeyHeld = false;
+                return true;
+            }
             backKeyHeld = false;
             if (currentScreenState == STATE_WIFI_KEYBOARD) {
                 backLongPressHandled = false;
@@ -18763,6 +25894,15 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        if (!launchExtrasHandled) {
+            launchExtrasHandled = true;
+            handleLaunchIntentExtras();
+        }
+    }
+
+    @Override
     protected void onPause() {
         super.onPause();
         try {
@@ -18772,6 +25912,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        stopSettingsPreviewVerticalMarquee();
         try {
             persistPlaybackQueue();
         } catch (Exception ignored) {}
@@ -19200,13 +26341,6 @@ public class MainActivity extends Activity {
     }
     // 💡 [수정] 메인 화면 미리보기도 재생 상태에 따라 아이콘을 똑똑하게 바꿉니다.
     private void refreshNowPlayingPreview() {
-        boolean anyWidgetActive = isWidgetClockOn || isWidgetBatteryOn || isWidgetAlbumOn;
-        if (anyWidgetActive) {
-            if (tvMenuPreviewTitle != null) tvMenuPreviewTitle.setVisibility(View.GONE);
-            if (tvMenuPreviewArtist != null) tvMenuPreviewArtist.setVisibility(View.GONE);
-            refreshWidgets(); // 위젯 화면 즉시 새로고침!
-            return; // 🚀 여기서 함수를 강제 종료하여 아래쪽의 기존 텍스트 부활 코드를 완전히 씹어버립니다.
-        }
         if (isNowPlayingHomeFocused() && currentScreenState == STATE_MENU) {
             if (!playback.hasAnyQueue()) {
                 ivMenuPreview.setImageResource(R.drawable.music_circle);
@@ -19280,6 +26414,42 @@ public class MainActivity extends Activity {
     }
 
     // 💡 [수정] 정밀 검색 및 기존 태그(가수/제목) 보호 기능이 추가된 Deezer 스크래핑 엔진
+    /** Download album art from Deezer CDN URL saved in metadata prefs. */
+    private void fetchDeezerCoverArt(final File track, final String coverUrl, final File coverFile) {
+        ivAlbumArt.setImageResource(R.drawable.default_album);
+        currentAlbumColor = ThemeManager.getListButtonFocusedBg() | 0xFF000000;
+        ivPlayerBgBlur.setImageResource(0);
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    String url = coverUrl.replace("https://", "http://");
+                    java.net.URL imgUrl = new java.net.URL(url);
+                    java.net.HttpURLConnection imgConn = (java.net.HttpURLConnection) imgUrl.openConnection();
+                    java.io.InputStream in = imgConn.getInputStream();
+                    final android.graphics.Bitmap coverBitmap =
+                            android.graphics.BitmapFactory.decodeStream(in);
+                    in.close();
+                    if (coverBitmap == null) return;
+                    File coverFolder = getCoversFolder();
+                    if (!coverFolder.exists()) coverFolder.mkdirs();
+                    java.io.FileOutputStream fos = new java.io.FileOutputStream(coverFile);
+                    coverBitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, fos);
+                    fos.close();
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (playback.musicPlaylist().isEmpty()) return;
+                            if (!playback.musicPlaylist().get(playback.musicIndex())
+                                    .getAbsolutePath().equals(track.getAbsolutePath())) return;
+                            applyCachedCoverArt(coverFile.getAbsolutePath());
+                        }
+                    });
+                } catch (Exception ignored) {}
+            }
+        }).start();
+    }
+
     private void fetchTrackInfoFromInternet(final File track, final String originalQuery, final boolean hasValidTags, final String origTitle, final String origArtist) {
         // 찌꺼기 텍스트 청소기
         final String cleanQuery = originalQuery

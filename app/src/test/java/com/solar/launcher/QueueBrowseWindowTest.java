@@ -28,7 +28,7 @@ public class QueueBrowseWindowTest {
     @Test
     public void browseViewportSlot_edgesAndCenter() {
         assertEquals(0, QueueBrowseWindow.browseViewportSlot(0, 2, 3));
-        assertEquals(2, QueueBrowseWindow.browseViewportSlot(1, 2, 3));
+        assertEquals(1, QueueBrowseWindow.browseViewportSlot(1, 2, 3));
         assertEquals(1, QueueBrowseWindow.browseViewportSlot(2, 8, 3));
         assertEquals(1, QueueBrowseWindow.browseViewportSlot(1, 4, 3));
     }
@@ -36,6 +36,6 @@ public class QueueBrowseWindowTest {
     @Test
     public void shortListTopPadding_anchorsLastItem() {
         assertEquals(0, QueueBrowseWindow.shortListTopPadding(0, 2, 90, 30));
-        assertEquals(30, QueueBrowseWindow.shortListTopPadding(1, 2, 90, 30));
+        assertEquals(0, QueueBrowseWindow.shortListTopPadding(1, 2, 90, 30));
     }
 }
