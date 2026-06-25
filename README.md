@@ -11,7 +11,7 @@ Custom firmware and launcher for the **Innioasis Y1** — a full interface repla
 - **Reach** — search and download music from Deezer and Soulseek; messaging, chat rooms, and peer browse
 - **Podcasts** — search, subscribe, and download episodes to SD
 - **Quick menu** — global context menu for playback, queue, Wi‑Fi, Bluetooth, and more from any screen
-- **Y1 themes** — install and apply themes from the original Y1 custom-firmware gallery
+- **Y1 themes** — install and apply themes from the original Y1 firmware
 - **Rockbox-Y1** — co-installed; switch launchers from Settings (unified keymap, no reboot)
 
 ## Screenshots
