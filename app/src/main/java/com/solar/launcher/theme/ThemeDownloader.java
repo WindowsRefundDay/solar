@@ -828,6 +828,21 @@ public class ThemeDownloader {
         return loadCoverBitmap(entry, null, maxHeightPx);
     }
 
+    /** Preview-only: disk cache — never hits the network (avoids OOM when scrolling the catalog). */
+    public static Bitmap loadCachedCoverBitmap(CatalogEntry entry, ThemeVariant variant, int maxHeightPx) {
+        String cacheKey = entry.folder;
+        if (variant != null && !variant.gallerySubpath.isEmpty()) {
+            cacheKey = entry.folder + "__" + variant.gallerySubpath.replace('/', '_');
+        }
+        File cache = coverCacheFile(cacheKey);
+        if (!cache.isFile() || cache.length() <= 0) return null;
+        try {
+            return scaleBitmap(BitmapFactory.decodeFile(cache.getAbsolutePath()), maxHeightPx);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     public static Bitmap loadCoverBitmap(CatalogEntry entry, ThemeVariant variant, int maxHeightPx) {
         String cacheKey = entry.folder;
         String url = entry.coverUrl();
@@ -876,6 +891,9 @@ public class ThemeDownloader {
             return;
         }
         beginSession("download", entry.folder + " (" + entry.name + ")");
+        if (!ThemeManager.ensureThemesRootReady(null)) {
+            throw new Exception("Cannot create themes folder under " + ThemeManager.themesRoot());
+        }
         File dest = entry.themeDir();
         try {
             if (!dest.exists() && !dest.mkdirs()) {
@@ -960,6 +978,9 @@ public class ThemeDownloader {
         }
 
         beginSession("downloadVariant", installFolder + " (" + displayName + ")");
+        if (!ThemeManager.ensureThemesRootReady(null)) {
+            throw new Exception("Cannot create themes folder under " + ThemeManager.themesRoot());
+        }
         File dest = new File(ThemeManager.themesRoot(), installFolder);
         try {
             if (!dest.exists() && !dest.mkdirs()) {

@@ -85,10 +85,35 @@ public class ThemeManager {
         return themesRootPath;
     }
 
+    /**
+     * Ensures themes root exists and is writable; falls back to app filesDir when SD is missing.
+     * ponytail: downloadTheme mkdirs failed on Y1 when /storage/sdcard0/Themes was absent.
+     */
+    public static boolean ensureThemesRootReady(Context ctx) {
+        Context app = ctx != null ? ctx.getApplicationContext() : assetContext;
+        if (app != null) {
+            assetContext = app;
+            themesRootPath = resolveThemesRoot(app);
+        }
+        File root = new File(themesRootPath);
+        if (root.isDirectory() && root.canWrite()) {
+            new File(root, ".cache/covers").mkdirs();
+            return true;
+        }
+        if (!root.mkdirs() || !root.canWrite()) {
+            if (app == null) return false;
+            themesRootPath = new File(app.getFilesDir(), "Themes").getAbsolutePath();
+            root = new File(themesRootPath);
+            if (!root.mkdirs() && !root.isDirectory()) return false;
+        }
+        new File(root, ".cache/covers").mkdirs();
+        return root.canWrite();
+    }
+
     /** Extract bundled Default → themes root; load in-memory fallback if copy fails. */
     public static void ensureBundledDefault(Context ctx) {
         assetContext = ctx.getApplicationContext();
-        themesRootPath = resolveThemesRoot(ctx);
+        ensureThemesRootReady(ctx);
         try {
             File dest = new File(themesRootPath, BUILTIN_DEFAULT_FOLDER);
             File config = new File(dest, "config.json");
@@ -1765,9 +1790,12 @@ public class ThemeManager {
     public static Bitmap getScaledThemeCover(ThemeEntry entry, int heightPx) {
         Bitmap cover = getThemeCover(entry);
         if (cover == null || heightPx <= 0) return null;
+        if (cover.getHeight() <= heightPx) return cover;
         int w = (int) (cover.getWidth() * (heightPx / (float) cover.getHeight()));
         if (w < 1) w = 1;
-        return Bitmap.createScaledBitmap(cover, w, heightPx, true);
+        Bitmap scaled = Bitmap.createScaledBitmap(cover, w, heightPx, true);
+        if (scaled != cover && !cover.isRecycled()) cover.recycle();
+        return scaled;
     }
 
     public static int getItemTextColorSelected() {

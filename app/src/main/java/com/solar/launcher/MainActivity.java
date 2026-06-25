@@ -422,6 +422,9 @@ public class MainActivity extends Activity {
     private String podcastSavedShowFolder = "";
     private int podcastUiGen = 0;
     private int themeDownloadGen = 0;
+    private final Handler themePreviewHandler = new Handler();
+    private Runnable themePreviewPending;
+    private static final long THEME_PREVIEW_DEBOUNCE_MS = 200L;
     private int libraryScanGen = 0;
     private int activeLibraryScanGen = 0;
     private final PlaybackCoordinator playback = new PlaybackCoordinator();
@@ -1962,6 +1965,87 @@ public class MainActivity extends Activity {
             }, 1500);
         }
 
+        if (getIntent().getBooleanExtra("solar_adb_open_themes_get_more", false)) {
+            getIntent().removeExtra("solar_adb_open_themes_get_more");
+            final int scrollSteps = Math.max(0, getIntent().getIntExtra("solar_adb_theme_scroll_steps", 0));
+            getIntent().removeExtra("solar_adb_theme_scroll_steps");
+            new Handler().postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    openThemesScreen(null);
+                    openThemeGetMoreBrowser();
+                    new Handler().postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            SolarAdbTest.pass("themes_get_more rows=" + themeBrowserRows.size()
+                                    + " loading=" + themeCatalogLoading);
+                            for (int i = 0; i < scrollSteps; i++) {
+                                dispatchThemeListKey(Y1InputKeys.KEY_WHEEL_DOWN);
+                            }
+                            if (scrollSteps > 0) {
+                                ThemeBrowser.Row row = themeBrowserFocusedRow();
+                                SolarAdbTest.pass("theme_scroll focus=" + themeBrowserFocus
+                                        + " rowNull=" + (row == null)
+                                        + (row != null ? " kind=" + row.kind : ""));
+                            }
+                        }
+                    }, scrollSteps > 0 ? 5000 : 3000);
+                }
+            }, 1500);
+        }
+
+        if (getIntent().getBooleanExtra("solar_adb_log_home_menu", false)) {
+            getIntent().removeExtra("solar_adb_log_home_menu");
+            new Handler().postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    StringBuilder sb = new StringBuilder("home_menu focus=" + focusedHomeMenuIndex
+                            + " nowPlaying=" + shouldShowNowPlayingHome());
+                    for (int i = 0; i < homeMenuEntries.size(); i++) {
+                        sb.append(' ').append(i).append('=').append(homeMenuEntries.get(i).id);
+                    }
+                    SolarAdbTest.pass(sb.toString());
+                }
+            }, 2000);
+        }
+
+        if (getIntent().getBooleanExtra("solar_adb_apply_installed_theme", false)) {
+            getIntent().removeExtra("solar_adb_apply_installed_theme");
+            final int applyIdx = getIntent().getIntExtra("solar_adb_theme_apply_index", 0);
+            getIntent().removeExtra("solar_adb_theme_apply_index");
+            new Handler().postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    changeScreen(STATE_SETTINGS);
+                    buildUnifiedThemesUI();
+                    new Handler().postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            if (ThemeManager.availableThemes.isEmpty()) {
+                                SolarAdbTest.fail("no_themes");
+                                return;
+                            }
+                            int idx = Math.max(0, Math.min(applyIdx, ThemeManager.availableThemes.size() - 1));
+                            ThemeBrowser.Row pick = null;
+                            for (ThemeBrowser.Row r : themeBrowserRows) {
+                                if (r.kind == ThemeBrowser.KIND_INSTALLED && r.themeIndex == idx) {
+                                    pick = r;
+                                    break;
+                                }
+                            }
+                            if (pick == null) {
+                                SolarAdbTest.fail("theme_row_missing idx=" + idx);
+                                return;
+                            }
+                            SolarAdbTest.pass("apply_theme idx=" + idx + " name="
+                                    + ThemeManager.availableThemes.get(idx).name);
+                            onThemeBrowserRowClick(pick);
+                        }
+                    }, 2500);
+                }
+            }, 1500);
+        }
+
         final String soulseekTest = getIntent().getStringExtra("soulseek_test");
         if (soulseekTest != null && soulseekTest.length() > 0) {
             new Handler().postDelayed(new Runnable() {
@@ -2931,6 +3015,10 @@ public class MainActivity extends Activity {
             themeBrowserRows.addAll(ThemeBrowser.buildVariantRows(
                     themeVariantEntry, themeVariantList, themeBrowserText()));
         } else if (themeBrowserMode == THEME_BROWSER_GET_MORE) {
+            if (themeBrowserOnlineRows.isEmpty() && themeGalleryCatalog != null
+                    && themeCatalogAvailable && !themeCatalogLoading) {
+                scheduleThemeOnlineRowRebuild();
+            }
             themeBrowserRows.addAll(ThemeBrowser.buildGetMoreRows(
                     themeGalleryCatalog, ThemeManager.availableThemes,
                     themeFilterMode, themeSortMode,
@@ -2938,14 +3026,14 @@ public class MainActivity extends Activity {
                     themeBrowserOnlineRows.isEmpty() ? null : themeBrowserOnlineRows,
                     themeBrowserText()));
         } else {
-            if (ActiveThemeEngine.isJjMode()) {
-                themeBrowserRows.addAll(ActiveThemeEngine.buildJjInstalledRows(themeBrowserText()));
-            } else {
-                themeBrowserRows.addAll(ThemeBrowser.buildInstalledRows(
-                        ThemeManager.availableThemes, ThemeManager.getCurrentThemeIndex(),
-                        ConnectivityHelper.isOnline(this), themeListPageCapacityRows(),
-                        themeBrowserText()));
-            }
+            // Y1 theme browser always lists ThemeManager themes — JJ engine is debug-only for home layout.
+            themeBrowserRows.addAll(ThemeBrowser.buildInstalledRows(
+                    ThemeManager.availableThemes, ThemeManager.getCurrentThemeIndex(),
+                    ConnectivityHelper.isOnline(this), themeListPageCapacityRows(),
+                    themeBrowserText()));
+        }
+        if (themeBrowserFocus >= themeBrowserRows.size()) {
+            themeBrowserFocus = Math.max(0, themeBrowserRows.size() - 1);
         }
     }
 
@@ -2995,7 +3083,14 @@ public class MainActivity extends Activity {
     private int themeBrowserListPosition() {
         if (listThemes == null) return -1;
         View focused = listThemes.getFocusedChild();
-        if (focused != null) return listThemes.getPositionForView(focused);
+        if (focused != null) {
+            int pos = listThemes.getPositionForView(focused);
+            if (pos >= 0) return pos;
+        }
+        // ponytail: ListView itemsCanFocus — selected position is often stale; keep themeBrowserFocus
+        if (themeBrowserFocus >= 0 && themeBrowserFocus < themeBrowserRows.size()) {
+            return themeBrowserFocus;
+        }
         return listThemes.getSelectedItemPosition();
     }
 
@@ -3109,11 +3204,11 @@ public class MainActivity extends Activity {
                 cycleThemeFilter();
                 break;
             case ThemeBrowser.KIND_INSTALLED:
-                if (ActiveThemeEngine.isJjMode()) {
-                    if (row.themeIndex >= 0 && row.themeIndex < JjThemeManager.availableThemes.size()) {
-                        applyJjThemeSelection(row.themeIndex);
+                if (row.themeIndex >= 0 && row.themeIndex < ThemeManager.availableThemes.size()) {
+                    if (ActiveThemeEngine.isJjMode()) {
+                        ActiveThemeEngine.setJjMode(MainActivity.this, false);
+                        ActiveThemeEngine.loadThemes(MainActivity.this);
                     }
-                } else if (row.themeIndex >= 0 && row.themeIndex < ThemeManager.availableThemes.size()) {
                     ThemeManager.ThemeEntry theme = ThemeManager.availableThemes.get(row.themeIndex);
                     applyThemeWithIntegrityCheck(row.themeIndex, theme, null);
                 }
@@ -3204,6 +3299,7 @@ public class MainActivity extends Activity {
                     @Override
                     public void run() {
                         if (isFinishing() || gen != themeGalleryPreviewGen || ivSettingsPreviewIcon == null) return;
+                        recycleImageViewBitmap(ivSettingsPreviewIcon);
                         if (cover != null) {
                             ivSettingsPreviewIcon.setImageBitmap(cover);
                             ivSettingsPreviewIcon.setVisibility(View.VISIBLE);
@@ -3344,6 +3440,14 @@ public class MainActivity extends Activity {
         }
     }
 
+    private boolean handleDebugSettingsBack() {
+        if (SettingsScreens.DEBUG.equals(settingsSubScreenKey)) {
+            buildSettingsUI();
+            return true;
+        }
+        return false;
+    }
+
     private boolean isThemeGalleryActive() {
         return SettingsScreens.THEMES.equals(settingsSubScreenKey);
     }
@@ -3354,10 +3458,6 @@ public class MainActivity extends Activity {
 
     private boolean handleAboutSettingsBack() {
         if (SettingsScreens.SYSTEM_UPDATE.equals(settingsSubScreenKey)) {
-            buildAboutUI();
-            return true;
-        }
-        if (SettingsScreens.DEBUG.equals(settingsSubScreenKey)) {
             buildAboutUI();
             return true;
         }
@@ -3850,6 +3950,8 @@ public class MainActivity extends Activity {
 
     private void clearThemeGalleryPreview() {
         themeGalleryPreviewGen++;
+        themePreviewHandler.removeCallbacksAndMessages(null);
+        themePreviewPending = null;
         stopSettingsPreviewVerticalMarquee();
         if (storagePieView != null) storagePieView.setVisibility(View.GONE);
         if (tvSettingsPreviewTitle != null) {
@@ -3863,6 +3965,25 @@ public class MainActivity extends Activity {
             ivSettingsPreviewIcon.setImageDrawable(null);
             ivSettingsPreviewIcon.setVisibility(View.GONE);
         }
+    }
+
+    /** Debounce preview loads while wheel-scrolling — avoids OOM from stacked cover decode threads. */
+    private void scheduleThemeRowPreview(final ThemeBrowser.Row row) {
+        if (row == null || isFullWidthMenus) return;
+        themePreviewHandler.removeCallbacksAndMessages(null);
+        themePreviewPending = new Runnable() {
+            @Override
+            public void run() {
+                themePreviewPending = null;
+                if (row.kind == ThemeBrowser.KIND_INSTALLED && row.themeIndex >= 0
+                        && row.themeIndex < ThemeManager.availableThemes.size()) {
+                    updateInstalledThemePreview(ThemeManager.availableThemes.get(row.themeIndex));
+                } else if (row.catalog != null) {
+                    updateThemeGalleryPreview(row.catalog, row.variant);
+                }
+            }
+        };
+        themePreviewHandler.postDelayed(themePreviewPending, THEME_PREVIEW_DEBOUNCE_MS);
     }
 
     private void updateThemeGalleryPreview(final ThemeDownloader.CatalogEntry entry,
@@ -3887,14 +4008,29 @@ public class MainActivity extends Activity {
         }
         final int gen = ++themeGalleryPreviewGen;
         final int maxH = themeGalleryCoverMaxPx();
+        // #region agent log
+        final String previewFolder = entry.folder;
+        // #endregion
         new Thread(new Runnable() {
             @Override
             public void run() {
-                final Bitmap cover = ThemeDownloader.loadCoverBitmap(entry, variant, maxH);
+                // ponytail: scroll preview uses cache only — network fetch on every focus OOMs Y1
+                final Bitmap cover = ThemeDownloader.loadCachedCoverBitmap(entry, variant, maxH);
                 runOnUiThreadSafe(new Runnable() {
                     @Override
                     public void run() {
                         if (isFinishing() || gen != themeGalleryPreviewGen || ivSettingsPreviewIcon == null) return;
+                        // #region agent log
+                        try {
+                            org.json.JSONObject d = new org.json.JSONObject();
+                            d.put("folder", previewFolder);
+                            d.put("cachedCover", cover != null);
+                            d.put("gen", gen);
+                            DebugAgentLog.log(MainActivity.this, "MainActivity.updateThemeGalleryPreview",
+                                    "preview bound", "H-OOM", d);
+                        } catch (Exception ignored) {}
+                        // #endregion
+                        recycleImageViewBitmap(ivSettingsPreviewIcon);
                         if (cover != null) {
                             ivSettingsPreviewIcon.setImageBitmap(cover);
                             ivSettingsPreviewIcon.setVisibility(View.VISIBLE);
@@ -3905,6 +4041,17 @@ public class MainActivity extends Activity {
                 });
             }
         }, "ThemeCoverPreview").start();
+    }
+
+    /** Drop the old bitmap before binding a new one so scroll previews do not OOM. */
+    private static void recycleImageViewBitmap(android.widget.ImageView iv) {
+        if (iv == null) return;
+        android.graphics.drawable.Drawable d = iv.getDrawable();
+        iv.setImageDrawable(null);
+        if (d instanceof android.graphics.drawable.BitmapDrawable) {
+            android.graphics.Bitmap b = ((android.graphics.drawable.BitmapDrawable) d).getBitmap();
+            if (b != null && !b.isRecycled()) b.recycle();
+        }
     }
 
     private void bindThemeGalleryListButton(final Button btn, final ThemeDownloader.CatalogEntry entry,
@@ -4160,6 +4307,9 @@ public class MainActivity extends Activity {
     private void applyThemeWithIntegrityCheck(final int index, final ThemeManager.ThemeEntry theme,
                                               final String toastName) {
         if (layoutLoadingOverlay != null) layoutLoadingOverlay.setVisibility(View.VISIBLE);
+        if (ActiveThemeEngine.isJjMode()) {
+            ActiveThemeEngine.setJjMode(this, false);
+        }
 
         new Thread(new Runnable() {
             @Override
@@ -6082,6 +6232,17 @@ public class MainActivity extends Activity {
             if (currentScreenState == STATE_SETTINGS && isThemeListActive()) {
                 clickFeedback();
                 ThemeBrowser.Row row = themeBrowserFocusedRow();
+                // #region agent log
+                try {
+                    org.json.JSONObject d = new org.json.JSONObject();
+                    d.put("rowNull", row == null);
+                    d.put("focus", themeBrowserFocus);
+                    d.put("rowCount", themeBrowserRows.size());
+                    if (row != null) d.put("kind", row.kind);
+                    DebugAgentLog.log(this, "MainActivity.handleCenterShortClick",
+                            "theme row activate", "H-SEL", d);
+                } catch (Exception ignored) {}
+                // #endregion
                 if (row != null) onThemeBrowserRowClick(row);
                 return;
             }
@@ -13871,6 +14032,7 @@ public class MainActivity extends Activity {
             if (handleLanguageSettingsBack()) return;
             if (handleSoulseekSettingsBack()) return;
             if (handleLibraryBrowseSettingsBack()) return;
+            if (handleDebugSettingsBack()) return;
             if (handleAboutSettingsBack()) return;
             if (handleThemeGalleryBack()) return;
             changeScreen(STATE_MENU);
@@ -14355,6 +14517,16 @@ public class MainActivity extends Activity {
             }
         });
         containerSettingsItems.addView(btnTime);
+
+        LinearLayout btnDebug = createSettingsRow(RowKeys.DEBUG, R.string.settings_sub_debug, true);
+        btnDebug.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildDebugUI();
+            }
+        });
+        containerSettingsItems.addView(btnDebug);
 
         LinearLayout btnAbout = createSettingsRow(RowKeys.ABOUT, R.string.settings_about, true);
         btnAbout.setOnClickListener(new View.OnClickListener() {
@@ -17802,16 +17974,6 @@ public class MainActivity extends Activity {
         containerSettingsItems.addView(content, new LinearLayout.LayoutParams(
                 rowW, LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        Button btnDebug = createListButton(getString(R.string.settings_sub_debug));
-        btnDebug.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                clickFeedback();
-                buildDebugUI();
-            }
-        });
-        containerSettingsItems.addView(btnDebug);
-
         if (BuildConfig.FEATURE_OTA_UPDATE) {
             final Button otaProbe = createListButton(getString(R.string.update_checking));
             otaProbe.setEnabled(false);
@@ -17866,11 +18028,22 @@ public class MainActivity extends Activity {
     }
 
     private void buildDebugUI() {
-        setSettingsAboutFullWidth(true);
+        setSettingsAboutFullWidth(false);
         setSettingsSubScreen(SettingsScreens.DEBUG);
         updateStatusBarTitle();
         updateScreenBackground(STATE_SETTINGS);
         containerSettingsItems.removeAllViews();
+
+        Button btnBack = createListButton(getString(R.string.common_back_short));
+        styleSecondaryLabel(btnBack);
+        btnBack.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                buildSettingsUI();
+            }
+        });
+        containerSettingsItems.addView(btnBack);
 
         final LinearLayout btnJjThemes = createSettingsRow(RowKeys.DEBUG_JJ_THEMES,
                 R.string.settings_debug_jj_themes, false);
@@ -27931,6 +28104,20 @@ public class MainActivity extends Activity {
 
         @Override
         public View getView(final int position, View convertView, android.view.ViewGroup parent) {
+            if (position < 0 || position >= themeBrowserRows.size()) {
+                // #region agent log
+                try {
+                    org.json.JSONObject d = new org.json.JSONObject();
+                    d.put("position", position);
+                    d.put("rowCount", themeBrowserRows.size());
+                    DebugAgentLog.log(MainActivity.this, "ThemeUnifiedListAdapter.getView",
+                            "position oob", "H-IOOB", d);
+                } catch (Exception ignored) {}
+                // #endregion
+                TextView stub = new TextView(MainActivity.this);
+                stub.setText("");
+                return stub;
+            }
             final ThemeBrowser.Row row = themeBrowserRows.get(position);
             final int kind = row.kind;
 
@@ -28088,12 +28275,7 @@ public class MainActivity extends Activity {
                     }
                     if (hasFocus) {
                         themeBrowserFocus = position;
-                        if (row.kind == ThemeBrowser.KIND_INSTALLED && row.themeIndex >= 0
-                                && row.themeIndex < ThemeManager.availableThemes.size()) {
-                            updateInstalledThemePreview(ThemeManager.availableThemes.get(row.themeIndex));
-                        } else if (row.catalog != null) {
-                            updateThemeGalleryPreview(row.catalog, row.variant);
-                        }
+                        scheduleThemeRowPreview(row);
                     }
                 }
             });
