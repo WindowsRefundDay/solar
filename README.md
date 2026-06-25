@@ -76,7 +76,7 @@ Head to the [Solar GitHub repository](https://github.com/thesolarproject/solar) 
 
 ### Install with SP Flash Tool 5.1924: 
 
-Extract [rom.zip]([http://rom.zip](https://github.com/thesolarproject/solar/releases/latest/download/rom.zip)) contents and [apply these instructions to the files](https://support.innioasis.com/download/flashing_tutorial/Flashing_tutorial-Y1_EN%20v2.0.7-20241021.pdf) extracted from the zip
+Extract [rom.zip](https://github.com/thesolarproject/solar/releases/latest/download/rom.zip) contents and [apply these instructions to the files](https://support.innioasis.com/download/flashing_tutorial/Flashing_tutorial-Y1_EN%20v2.0.7-20241021.pdf) extracted from the zip
 
 ### Install with MTKClient
 
