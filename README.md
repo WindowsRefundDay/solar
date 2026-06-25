@@ -31,7 +31,7 @@ Custom firmware and launcher for the **Innioasis Y1** — a full interface repla
 
 ## Deezer account setup
 
-Reach and **Get Music** can search, stream, and download from [Deezer](https://www.deezer.com) using your account’s **`arl` session cookie** (the same method used by other Deezer download tools). You need a free or Premium Deezer account and a PC on the **same Wi‑Fi** as the Y1.
+**Reach** can search, stream, and download from [Deezer](https://www.deezer.com) using your account’s **`arl` session cookie** (the same method used by other Deezer download tools). You need a free or Premium Deezer account and a PC on the **same Wi‑Fi** as the Y1.
 
 ### On the Y1
 
