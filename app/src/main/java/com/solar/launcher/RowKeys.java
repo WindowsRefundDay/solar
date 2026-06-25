@@ -57,6 +57,7 @@ public final class RowKeys {
     public static final String SOULSEEK_HIDE_HIGH_BITRATE = "soulseek.hide_high_bitrate";
     public static final String SOULSEEK_SHARING = "soulseek.sharing";
     public static final String SOULSEEK_REACH_ENABLED = "soulseek.reach_enabled";
+    public static final String SOULSEEK_ENABLED = "soulseek.enabled";
     public static final String SOULSEEK_INCLUDE_GET_MUSIC = "soulseek.include_get_music";
     public static final String SOULSEEK_MESSAGING = "soulseek.messaging";
     public static final String SOULSEEK_FIND_USER = "soulseek.find_user";
@@ -156,6 +157,7 @@ public final class RowKeys {
         if (SOULSEEK_HIDE_HIGH_BITRATE.equals(rowKey)) return R.string.soulseek_hide_high_bitrate;
         if (SOULSEEK_SHARING.equals(rowKey)) return R.string.soulseek_share_library;
         if (SOULSEEK_REACH_ENABLED.equals(rowKey)) return R.string.soulseek_reach_enabled;
+        if (SOULSEEK_ENABLED.equals(rowKey)) return R.string.soulseek_enabled;
         if (SOULSEEK_INCLUDE_GET_MUSIC.equals(rowKey)) return R.string.get_music_include_reach;
         if (SOULSEEK_MESSAGING.equals(rowKey)) return R.string.soulseek_allow_messaging;
         if (SOULSEEK_FIND_USER.equals(rowKey)) return R.string.soulseek_find_user;

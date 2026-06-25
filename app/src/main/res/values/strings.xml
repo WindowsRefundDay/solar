@@ -500,6 +500,9 @@
     <string name="soulseek_sharing_no_nat">Sharing: off (NAT-PMP unavailable on this network)</string>
     <string name="soulseek_sharing_hint">Sharing and profile exchange run whenever you are on Wi‑Fi with a successful NAT-PMP port forward — no charger needed. Turn Wi‑Fi off to stop Reach from using the network; without Wi‑Fi or NAT-PMP the Soulseek client stays disconnected to save power.</string>
     <string name="soulseek_reach_enabled">Enable Reach</string>
+    <string name="soulseek_enabled">Enable Soulseek</string>
+    <string name="soulseek_enabled_hint">Soulseek search, messaging, chat rooms, and peer sharing.</string>
+    <string name="soulseek_service_disabled">Soulseek is off. Enable it in Settings → Reach.</string>
     <string name="soulseek_reach_disabled">Reach is disabled</string>
     <string name="soulseek_reach_disabled_hint">Reach is turned off. Enable it here to search and share on Soulseek.</string>
     <string name="reach_unavailable_title">Reach unavailable</string>
@@ -621,6 +624,8 @@
     <string name="deezer_account_row">Account</string>
     <string name="deezer_connection_row">Connection</string>
     <string name="deezer_enabled">Enable Deezer</string>
+    <string name="deezer_enabled_hint">Deezer search and downloads in Get Music.</string>
+    <string name="deezer_service_disabled">Deezer is off. Enable it in Settings → Reach.</string>
     <string name="deezer_clear_account">Clear account</string>
     <string name="deezer_setup_pc">Set up on PC</string>
     <string name="deezer_change_account_pc">Change account on PC</string>

@@ -1,6 +1,5 @@
 package com.solar.launcher;
 
-import com.solar.launcher.deezer.DeezerAccount;
 import com.solar.launcher.soulseek.SoulseekAccount;
 
 import org.junit.After;
@@ -20,13 +19,13 @@ public class GetMusicSourcesTest {
     }
 
     @Test
-    public void deezerSearchDoesNotRequireLogin() {
+    public void deezerSearchFollowsServiceFlagOnly() {
         assertTrue(GetMusicSources.deezerSearchInGetMusic(null, true));
-        assertFalse(GetMusicSources.deezerPlayInGetMusic(null, true));
+        assertFalse(GetMusicSources.deezerSearchInGetMusic(null, false));
     }
 
     @Test
-    public void activeSourceSubtitleSoulseekOnlyWhenReachOk() {
+    public void reachSearchNeedsPeerOk() {
         ConnectivityHelper.setReachPeerOk(true);
         ConnectivityHelper.setDeezerLoginOk(false);
         int sub = GetMusicSources.activeSourceSubtitle(
@@ -42,8 +41,7 @@ public class GetMusicSourcesTest {
     }
 
     @Test
-    public void includePrefKeysExist() {
-        assertEquals("soulseek_include_in_get_music", SoulseekAccount.PREF_INCLUDE_IN_GET_MUSIC);
-        assertEquals("deezer_include_in_get_music", DeezerAccount.PREF_INCLUDE_IN_GET_MUSIC);
+    public void soulseekEnabledPrefKey() {
+        assertEquals("soulseek_enabled", SoulseekAccount.PREF_SOULSEEK_ENABLED);
     }
 }

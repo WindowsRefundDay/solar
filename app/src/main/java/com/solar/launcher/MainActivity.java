@@ -567,9 +567,8 @@ public class MainActivity extends Activity {
     private boolean soulseekHideHighBitrate = true;
     private boolean soulseekSharingEnabled = true;
     private boolean soulseekReachEnabled = true;
-    private boolean soulseekIncludeInGetMusic = true;
+    private boolean soulseekEnabled = true;
     private boolean deezerEnabled = true;
-    private boolean deezerIncludeInGetMusic = true;
     private int getMusicMode = GetMusicSources.MODE_REACH_ONLY;
     /** True when STATE_SOULSEEK was opened from Get Music / Get more (unified chrome). */
     private boolean getMusicFromEntryPoint = false;
@@ -1473,7 +1472,7 @@ public class MainActivity extends Activity {
                         @Override
                         public void run() {
                             isCustomScanning = false;
-                            if (soulseekReachEnabled && soulseekSharingEnabled) {
+                            if (soulseekActive() && soulseekSharingEnabled) {
                                 requestSoulseekShareRescan();
                                 updateSoulseekSharePolicy();
                             }
@@ -1823,12 +1822,10 @@ public class MainActivity extends Activity {
         try {
             soulseekSharingEnabled = prefs.getBoolean(SoulseekAccount.PREF_SHARING_ENABLED, true);
             soulseekReachEnabled = prefs.getBoolean(SoulseekAccount.PREF_REACH_ENABLED, true);
-            soulseekIncludeInGetMusic = SoulseekAccount.includeInGetMusic(prefs);
+            soulseekEnabled = prefs.getBoolean(SoulseekAccount.PREF_SOULSEEK_ENABLED, true);
             soulseekMessagingEnabled = prefs.getBoolean(SoulseekAccount.PREF_MESSAGING_ENABLED, true);
             deezerEnabled = DeezerAccount.isEnabled(prefs);
-            deezerIncludeInGetMusic = DeezerAccount.includeInGetMusic(prefs);
-            ConnectivityHelper.setDeezerEnabled(deezerEnabled);
-            ConnectivityHelper.setReachEnabled(soulseekReachEnabled);
+            syncReachConnectivityFlags();
             ReachPeerConnectivity.setCallback(new ReachPeerConnectivity.Callback() {
                 @Override
                 public void onReachPeerStateChanged(ReachPeerConnectivity.State state, String reason) {
@@ -1837,12 +1834,12 @@ public class MainActivity extends Activity {
             });
         } catch (Exception e) {}
         updateStatusBarTitle();
-        if (soulseekReachEnabled) {
+        if (soulseekActive()) {
             requestSoulseekShareRescan();
             updateSoulseekSharePolicy();
         }
         deezerScreen = new DeezerScreen(deezerHost);
-        if (deezerEnabled && DeezerAccount.hasArl(prefs)) {
+        if (deezerActive() && DeezerAccount.hasArl(prefs)) {
             new Thread(new Runnable() {
                 @Override public void run() {
                     try {
@@ -7099,14 +7096,14 @@ public class MainActivity extends Activity {
             Toast.makeText(this, getString(R.string.toast_internet_required), Toast.LENGTH_SHORT).show();
             return;
         }
-        if (!GetMusicSources.anyAvailable(prefs, soulseekReachEnabled, deezerEnabled)) {
+        if (!GetMusicSources.anyAvailable(prefs, soulseekActive(), deezerActive())) {
             Toast.makeText(this, getString(R.string.get_music_unavailable), Toast.LENGTH_LONG).show();
             return;
         }
-        getMusicMode = GetMusicSources.resolveMode(prefs, soulseekReachEnabled, deezerEnabled);
+        getMusicMode = GetMusicSources.resolveMode(prefs, soulseekActive(), deezerActive());
         getMusicFromEntryPoint = true;
         getMusicEmbeddedInDeezer = false;
-        if (GetMusicSources.deezerConfiguredForGetMusic(prefs, deezerEnabled)
+        if (GetMusicSources.deezerConfiguredForGetMusic(prefs, deezerActive())
                 && !ConnectivityHelper.isDeezerLoginOk()) {
             refreshDeezerSessionFromPrefs(false);
         }
@@ -7130,8 +7127,8 @@ public class MainActivity extends Activity {
 
     private void openReachFromLibrary() {
         if (!hasInternetConnection()) return;
-        getMusicMode = GetMusicSources.resolveMode(prefs, soulseekReachEnabled, deezerEnabled);
-        if (!GetMusicSources.anyAvailable(prefs, soulseekReachEnabled, deezerEnabled)) {
+        getMusicMode = GetMusicSources.resolveMode(prefs, soulseekActive(), deezerActive());
+        if (!GetMusicSources.anyAvailable(prefs, soulseekActive(), deezerActive())) {
             Toast.makeText(this, getString(R.string.get_music_unavailable), Toast.LENGTH_LONG).show();
             return;
         }
@@ -7146,7 +7143,7 @@ public class MainActivity extends Activity {
         getMusicMode = GetMusicSources.MODE_REACH_ONLY;
         getMusicFromEntryPoint = false;
         getMusicEmbeddedInDeezer = false;
-        if (!soulseekReachEnabled) {
+        if (!soulseekActive()) {
             Toast.makeText(this, getString(R.string.soulseek_reach_disabled), Toast.LENGTH_LONG).show();
             return;
         }
@@ -7247,10 +7244,10 @@ public class MainActivity extends Activity {
         @Override public void onDeezerBackFromSearch() { returnFromDeezer(); }
         @Override public void openDeezerSearchKeyboard() { MainActivity.this.openDeezerSearchKeyboard(); }
         @Override public boolean soulseekReachAvailable() {
-            return soulseekReachEnabled && ConnectivityHelper.isReachPeerOk();
+            return soulseekActive() && ConnectivityHelper.isReachPeerOk();
         }
         @Override public boolean deezerAvailable() {
-            return deezerEnabled && ConnectivityHelper.isDeezerLoginOk();
+            return deezerActive() && ConnectivityHelper.isDeezerLoginOk();
         }
         @Override public String string(int res) { return getString(res); }
         @Override public String string(int res, Object arg) { return getString(res, arg); }
@@ -7379,7 +7376,7 @@ public class MainActivity extends Activity {
 
     /** @param redirectToSetupIfUnconfigured home tile sends users to PC setup when ARL is missing */
     private void openDeezerScreen(boolean preserveReturn, boolean redirectToSetupIfUnconfigured) {
-        if (!deezerEnabled) {
+        if (!deezerActive()) {
             Toast.makeText(this, getString(R.string.deezer_not_configured), Toast.LENGTH_LONG).show();
             return;
         }
@@ -7480,7 +7477,7 @@ public class MainActivity extends Activity {
     private void launchDeezerSearchFromSuggestion(String query, boolean openKeyboard) {
         if (query == null || query.trim().isEmpty()) return;
         if (!requireInternet(R.string.deezer_wifi_required)) return;
-        if (!deezerEnabled) return;
+        if (!deezerActive()) return;
         deezerReturnScreen = currentScreenState;
         if (openKeyboard) {
             openDeezerScreen(true);
@@ -7493,7 +7490,7 @@ public class MainActivity extends Activity {
 
     private void launchGetMusicSearchFromSuggestion(String query, boolean openKeyboard) {
         if (query == null || query.trim().isEmpty()) return;
-        if (!GetMusicSources.anyAvailable(prefs, soulseekReachEnabled, deezerEnabled)) {
+        if (!GetMusicSources.anyAvailable(prefs, soulseekActive(), deezerActive())) {
             Toast.makeText(this, getString(R.string.get_music_unavailable), Toast.LENGTH_SHORT).show();
             return;
         }
@@ -7517,7 +7514,7 @@ public class MainActivity extends Activity {
     private void openGetMusicSearchKeyboard(String initialQuery) {
         if (!requireInternet(R.string.toast_internet_required)) return;
         getMusicFromEntryPoint = true;
-        getMusicMode = GetMusicSources.resolveMode(prefs, soulseekReachEnabled, deezerEnabled);
+        getMusicMode = GetMusicSources.resolveMode(prefs, soulseekActive(), deezerActive());
         keyboardPurpose = KEYBOARD_SOULSEEK_SEARCH;
         keyboardReturnState = STATE_SOULSEEK;
         keyboardPrefill = initialQuery != null ? initialQuery : "";
@@ -7579,41 +7576,18 @@ public class MainActivity extends Activity {
         back.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 clickFeedback();
-                buildReachSettingsUI(2);
+                buildReachSettingsUI(5);
             }
         });
         containerSettingsItems.addView(back);
 
-        LinearLayout enableRow = createSettingsRow(RowKeys.DEEZER_ENABLED, R.string.deezer_enabled, true);
-        enableRow.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                clickFeedback();
-                deezerEnabled = !deezerEnabled;
-                prefs.edit().putBoolean(DeezerAccount.PREF_ENABLED, deezerEnabled).commit();
-                ConnectivityHelper.setDeezerEnabled(deezerEnabled);
-                buildDeezerSettingsUI();
-                buildHomeMenu();
-            }
-        });
-        containerSettingsItems.addView(enableRow);
-
-        if (!deezerEnabled) {
+        if (!deezerActive()) {
+            Button disabled = createListButton(getString(R.string.deezer_service_disabled));
+            disabled.setEnabled(false);
+            containerSettingsItems.addView(disabled);
             if (containerSettingsItems.getChildCount() > 0) containerSettingsItems.getChildAt(0).requestFocus();
             return;
         }
-
-        LinearLayout includeRow = createSettingsRow(RowKeys.DEEZER_INCLUDE_GET_MUSIC,
-                R.string.get_music_include_deezer, false);
-        includeRow.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                clickFeedback();
-                deezerIncludeInGetMusic = !deezerIncludeInGetMusic;
-                prefs.edit().putBoolean(DeezerAccount.PREF_INCLUDE_IN_GET_MUSIC,
-                        deezerIncludeInGetMusic).commit();
-                refreshSettingsPreview(RowKeys.DEEZER_INCLUDE_GET_MUSIC);
-            }
-        });
-        containerSettingsItems.addView(includeRow);
 
         final boolean hasArl = DeezerAccount.hasArl(prefs);
 
@@ -9301,22 +9275,21 @@ public class MainActivity extends Activity {
             return stateOnOff(HomeMenuConfig.isMoreEnabled(prefs));
         }
         if (RowKeys.HOME_MANAGE_MORE.equals(rowKey)) return "";
+        if (SettingsScreens.REACH.equals(settingsSubScreenKey)) {
+            if (RowKeys.SOULSEEK_REACH_ENABLED.equals(rowKey)) return stateOnOff(soulseekReachEnabled);
+            if (RowKeys.SOULSEEK_ENABLED.equals(rowKey)) return stateOnOff(soulseekEnabled);
+            if (RowKeys.DEEZER_ENABLED.equals(rowKey)) return stateOnOff(deezerEnabled);
+        }
         if (SettingsScreens.SOULSEEK.equals(settingsSubScreenKey)) {
             if (RowKeys.SOULSEEK_ACCOUNT.equals(rowKey)) {
                 return SoulseekAccount.displayLabel(SoulseekAccount.load(prefs));
             }
             if (RowKeys.SOULSEEK_HIDE_HIGH_BITRATE.equals(rowKey)) return stateOnOff(soulseekHideHighBitrate);
             if (RowKeys.SOULSEEK_SHARING.equals(rowKey)) return stateOnOff(soulseekSharingEnabled);
-            if (RowKeys.SOULSEEK_REACH_ENABLED.equals(rowKey)) return stateOnOff(soulseekReachEnabled);
-            if (RowKeys.SOULSEEK_INCLUDE_GET_MUSIC.equals(rowKey)) return stateOnOff(soulseekIncludeInGetMusic);
             if (RowKeys.SOULSEEK_MESSAGING.equals(rowKey)) return stateOnOff(soulseekMessagingEnabled);
         }
         if (RowKeys.SOULSEEK_ACCOUNT.equals(rowKey) && SettingsScreens.isSoulseek(settingsSubScreenKey)) {
             return SoulseekAccount.displayLabel(SoulseekAccount.load(prefs));
-        }
-        if (SettingsScreens.DEEZER.equals(settingsSubScreenKey)) {
-            if (RowKeys.DEEZER_ENABLED.equals(rowKey)) return stateOnOff(deezerEnabled);
-            if (RowKeys.DEEZER_INCLUDE_GET_MUSIC.equals(rowKey)) return stateOnOff(deezerIncludeInGetMusic);
         }
         if (RowKeys.DT_YEAR.equals(rowKey)) return String.valueOf(dtYear);
         if (RowKeys.DT_MONTH.equals(rowKey)) return String.format(Locale.US, "%02d", dtMonth);
@@ -9349,19 +9322,26 @@ public class MainActivity extends Activity {
         return "";
     }
 
+    private String resolveReachSettingsPreviewText(String rowKey) {
+        if (!SettingsScreens.REACH.equals(settingsSubScreenKey) || rowKey == null) return null;
+        if (RowKeys.SOULSEEK_REACH_ENABLED.equals(rowKey)) {
+            if (!soulseekReachEnabled) {
+                return getString(R.string.soulseek_reach_disabled_hint);
+            }
+            return getString(R.string.soulseek_reach_enabled) + "\n\n" + stateOnOff(true);
+        }
+        if (RowKeys.SOULSEEK_ENABLED.equals(rowKey)) {
+            return getString(R.string.soulseek_enabled_hint) + "\n\n" + stateOnOff(soulseekEnabled);
+        }
+        if (RowKeys.DEEZER_ENABLED.equals(rowKey)) {
+            return getString(R.string.deezer_enabled_hint) + "\n\n" + stateOnOff(deezerEnabled);
+        }
+        return null;
+    }
+
     private String resolveSoulseekSettingsPreviewText(String rowKey) {
         if (!SettingsScreens.isSoulseek(settingsSubScreenKey) || rowKey == null) return null;
         if (SettingsScreens.SOULSEEK.equals(settingsSubScreenKey)) {
-            if (RowKeys.SOULSEEK_REACH_ENABLED.equals(rowKey)) {
-                if (!soulseekReachEnabled) {
-                    return getString(R.string.soulseek_reach_disabled_hint);
-                }
-                return getString(R.string.soulseek_reach_enabled) + "\n\n" + stateOnOff(true);
-            }
-            if (RowKeys.SOULSEEK_INCLUDE_GET_MUSIC.equals(rowKey)) {
-                return getString(R.string.get_music_include_reach_hint) + "\n\n"
-                        + stateOnOff(soulseekIncludeInGetMusic);
-            }
             if (RowKeys.SOULSEEK_SHARING.equals(rowKey)) {
                 return getString(R.string.soulseek_sharing_hint) + "\n\n" + stateOnOff(soulseekSharingEnabled);
             }
@@ -9728,6 +9708,10 @@ public class MainActivity extends Activity {
                         : desc;
             }
         }
+        String reachPreview = resolveReachSettingsPreviewText(rowKey);
+        if (reachPreview != null) {
+            stateText = reachPreview;
+        }
         String soulseekPreview = resolveSoulseekSettingsPreviewText(rowKey);
         if (soulseekPreview != null) {
             stateText = soulseekPreview;
@@ -9744,11 +9728,6 @@ public class MainActivity extends Activity {
     }
 
     private String resolveDeezerSettingsPreviewText(String rowKey) {
-        if (!SettingsScreens.DEEZER.equals(settingsSubScreenKey) || rowKey == null) return null;
-        if (RowKeys.DEEZER_INCLUDE_GET_MUSIC.equals(rowKey)) {
-            return getString(R.string.get_music_include_deezer_hint) + "\n\n"
-                    + stateOnOff(deezerIncludeInGetMusic);
-        }
         return null;
     }
 
@@ -13748,7 +13727,7 @@ public class MainActivity extends Activity {
             final boolean replaceQueueForPlay) {
         if (tracks == null || tracks.isEmpty()) return;
         if (!requireInternet(R.string.deezer_wifi_required)) return;
-        if (!GetMusicSources.deezerConfiguredForGetMusic(prefs, deezerEnabled)) {
+        if (!GetMusicSources.deezerConfiguredForGetMusic(prefs, deezerActive())) {
             Toast.makeText(this, getString(R.string.deezer_not_configured), Toast.LENGTH_LONG).show();
             return;
         }
@@ -14900,6 +14879,40 @@ public class MainActivity extends Activity {
         return false;
     }
 
+    /** Reach master on and Soulseek service enabled. */
+    private boolean soulseekActive() {
+        return soulseekReachEnabled && soulseekEnabled;
+    }
+
+    /** Reach master on and Deezer service enabled. */
+    private boolean deezerActive() {
+        return soulseekReachEnabled && deezerEnabled;
+    }
+
+    private void syncReachConnectivityFlags() {
+        ConnectivityHelper.setReachEnabled(soulseekActive());
+        ConnectivityHelper.setDeezerEnabled(deezerActive());
+    }
+
+    /** Tear down live Soulseek / Deezer work when a service is turned off. */
+    private void applyReachServiceState() {
+        syncReachConnectivityFlags();
+        if (!soulseekActive()) {
+            if (soulseekClient != null) {
+                soulseekClient.shutdown();
+                soulseekClient = null;
+            }
+            soulseekSearchInProgress = false;
+            ConnectivityHelper.setReachLoginOk(false);
+        }
+        if (!deezerActive()) {
+            if (deezerScreen != null) deezerScreen.cancelSearch();
+            ConnectivityHelper.setDeezerLoginOk(false);
+        }
+        updateSoulseekSharePolicy();
+        buildHomeMenu();
+    }
+
     /** Reach hub: Soulseek + Deezer settings submenus. */
     private void buildReachSettingsUI() {
         buildReachSettingsUI(1);
@@ -14925,6 +14938,59 @@ public class MainActivity extends Activity {
             }
         });
         containerSettingsItems.addView(btnBack);
+
+        LinearLayout btnReachMaster = createSettingsRow(RowKeys.SOULSEEK_REACH_ENABLED,
+                R.string.soulseek_reach_enabled, false);
+        btnReachMaster.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                soulseekReachEnabled = !soulseekReachEnabled;
+                prefs.edit().putBoolean(SoulseekAccount.PREF_REACH_ENABLED, soulseekReachEnabled).commit();
+                applyReachServiceState();
+                buildReachSettingsUI(1);
+                refreshSettingsPreview(RowKeys.SOULSEEK_REACH_ENABLED);
+            }
+        });
+        containerSettingsItems.addView(btnReachMaster);
+
+        if (!soulseekReachEnabled) {
+            if (containerSettingsItems.getChildCount() > 1) {
+                containerSettingsItems.getChildAt(1).requestFocus();
+            }
+            refreshSettingsPreview(RowKeys.SOULSEEK_REACH_ENABLED);
+            return;
+        }
+
+        LinearLayout btnSoulseekEnable = createSettingsRow(RowKeys.SOULSEEK_ENABLED,
+                R.string.soulseek_enabled, false);
+        btnSoulseekEnable.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                soulseekEnabled = !soulseekEnabled;
+                prefs.edit().putBoolean(SoulseekAccount.PREF_SOULSEEK_ENABLED, soulseekEnabled).commit();
+                applyReachServiceState();
+                buildReachSettingsUI(2);
+                refreshSettingsPreview(RowKeys.SOULSEEK_ENABLED);
+            }
+        });
+        containerSettingsItems.addView(btnSoulseekEnable);
+
+        LinearLayout btnDeezerEnable = createSettingsRow(RowKeys.DEEZER_ENABLED,
+                R.string.deezer_enabled, false);
+        btnDeezerEnable.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                deezerEnabled = !deezerEnabled;
+                prefs.edit().putBoolean(DeezerAccount.PREF_ENABLED, deezerEnabled).commit();
+                applyReachServiceState();
+                buildReachSettingsUI(3);
+                refreshSettingsPreview(RowKeys.DEEZER_ENABLED);
+            }
+        });
+        containerSettingsItems.addView(btnDeezerEnable);
 
         LinearLayout btnSoulseek = createSettingsRow(RowKeys.SOULSEEK, R.string.settings_soulseek, true);
         btnSoulseek.setOnClickListener(new View.OnClickListener() {
@@ -14968,60 +15034,23 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View v) {
                 clickFeedback();
-                buildReachSettingsUI(1);
+                buildReachSettingsUI(4);
             }
         });
         containerSettingsItems.addView(btnBack);
 
-        LinearLayout btnReachEnabled = createSettingsRow(RowKeys.SOULSEEK_REACH_ENABLED,
-                R.string.soulseek_reach_enabled, false);
-        btnReachEnabled.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                clickFeedback();
-                soulseekReachEnabled = !soulseekReachEnabled;
-                prefs.edit().putBoolean(SoulseekAccount.PREF_REACH_ENABLED, soulseekReachEnabled).commit();
-                ConnectivityHelper.setReachEnabled(soulseekReachEnabled);
-                if (!soulseekReachEnabled && soulseekClient != null) {
-                    soulseekClient.shutdown();
-                    soulseekClient = null;
-                }
-                buildHomeMenu();
-                if (currentScreenState == STATE_SETTINGS && settingsSubScreenKey == null) {
-                    buildSettingsUI();
-                }
-                updateSoulseekSharePolicy();
-                refreshSettingsPreview(RowKeys.SOULSEEK_REACH_ENABLED);
-            }
-        });
-        containerSettingsItems.addView(btnReachEnabled);
-
-        if (!soulseekReachEnabled) {
+        if (!soulseekActive()) {
+            Button disabled = createListButton(getString(R.string.soulseek_service_disabled));
+            disabled.setEnabled(false);
+            containerSettingsItems.addView(disabled);
             if (containerSettingsItems.getChildCount() > 1) {
                 containerSettingsItems.getChildAt(1).requestFocus();
             }
-            refreshSettingsPreview(RowKeys.SOULSEEK_REACH_ENABLED);
             return;
         }
 
         final boolean peerOk = ConnectivityHelper.isReachPeerOk()
                 || ReachPeerConnectivity.state() != ReachPeerConnectivity.State.UNAVAILABLE;
-
-        if (peerOk) {
-            LinearLayout btnIncludeGetMusic = createSettingsRow(RowKeys.SOULSEEK_INCLUDE_GET_MUSIC,
-                    R.string.get_music_include_reach, false);
-            btnIncludeGetMusic.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    clickFeedback();
-                    soulseekIncludeInGetMusic = !soulseekIncludeInGetMusic;
-                    prefs.edit().putBoolean(SoulseekAccount.PREF_INCLUDE_IN_GET_MUSIC,
-                            soulseekIncludeInGetMusic).commit();
-                    refreshSettingsPreview(RowKeys.SOULSEEK_INCLUDE_GET_MUSIC);
-                }
-            });
-            containerSettingsItems.addView(btnIncludeGetMusic);
-        }
 
         if (!peerOk) {
             addReachUnavailableSettingsBanner();
@@ -16131,7 +16160,7 @@ public class MainActivity extends Activity {
     private final Runnable reachDirectoryHeartbeatRunnable = new Runnable() {
         @Override
         public void run() {
-            if (ConnectivityHelper.isReachLoginOk() && soulseekReachEnabled) {
+            if (ConnectivityHelper.isReachLoginOk() && soulseekActive()) {
                 SoulseekAccount account = SoulseekAccount.load(prefs, MainActivity.this);
                 ReachDirectoryClient.registerAsync(MainActivity.this, account.username);
             }
@@ -19019,7 +19048,7 @@ public class MainActivity extends Activity {
                 }).start();
             });
             containerBrowserItems.addView(btnScan);
-            if (hasInternetConnection() && GetMusicSources.anyAvailable(prefs, soulseekReachEnabled, deezerEnabled)) {
+            if (hasInternetConnection() && GetMusicSources.anyAvailable(prefs, soulseekActive(), deezerActive())) {
                 Button btnGetMore = createListButton(getString(R.string.browser_get_more));
                 btnGetMore.setOnClickListener(new View.OnClickListener() {
                     @Override
@@ -19355,14 +19384,14 @@ public class MainActivity extends Activity {
             }
         }
 
-        if (deezerEnabled && DeezerAccount.hasArl(prefs)) {
+        if (deezerActive() && DeezerAccount.hasArl(prefs)) {
             createBrowserSectionHeader(getString(R.string.deezer_playlists_section));
             Button loading = createListButton(getString(R.string.deezer_playlists_loading));
             loading.setEnabled(false);
             loading.setTag("deezer_pl_loading");
             containerBrowserItems.addView(loading);
             loadDeezerPlaylistsAsync();
-        } else if (deezerEnabled) {
+        } else if (deezerActive()) {
             createBrowserSectionHeader(getString(R.string.deezer_playlists_section));
             Button unavailable = createListButton(getString(R.string.deezer_playlists_unavailable));
             unavailable.setEnabled(false);
@@ -19597,7 +19626,7 @@ public class MainActivity extends Activity {
     private void playDeezerPlaylistFromIndex(List<DeezerResult> tracks, int startIndex) {
         if (tracks == null || tracks.isEmpty()) return;
         if (!requireInternet(R.string.deezer_wifi_required)) return;
-        if (!GetMusicSources.deezerConfiguredForGetMusic(prefs, deezerEnabled)) {
+        if (!GetMusicSources.deezerConfiguredForGetMusic(prefs, deezerActive())) {
             Toast.makeText(this, getString(R.string.deezer_not_configured), Toast.LENGTH_LONG).show();
             return;
         }
@@ -19900,7 +19929,7 @@ public class MainActivity extends Activity {
             });
         }
         boolean reachSearch = requireReachPeerConnectivity();
-        boolean deezerSearch = deezerEnabled && ConnectivityHelper.isDeezerLoginOk();
+        boolean deezerSearch = deezerActive() && ConnectivityHelper.isDeezerLoginOk();
         if (reachSearch || deezerSearch) {
             List<String> findLike = SoulseekSearchSuggestions.suggestionsFromId3(
                     si.title, si.artist, si.album, si.genre);
@@ -20538,7 +20567,7 @@ public class MainActivity extends Activity {
                             searchTerm, searchCountry, searchGenre, 20);
                     final List<OpenRssClient.Podcast> deezerOnly =
                             new java.util.ArrayList<OpenRssClient.Podcast>();
-                    if (deezerEnabled && ConnectivityHelper.isDeezerLoginOk()) {
+                    if (deezerActive() && ConnectivityHelper.isDeezerLoginOk()) {
                         try {
                             DeezerSearch dz = new DeezerSearch(new DeezerClient(prefs));
                             List<DeezerSearch.DeezerPodcastShow> dzShows =
@@ -21040,7 +21069,7 @@ public class MainActivity extends Activity {
     }
 
     private SoulseekClient ensureSoulseekClient() {
-        if (!soulseekReachEnabled) return null;
+        if (!soulseekActive()) return null;
         if (soulseekClient == null) {
             ReachPeerConnectivity.reset();
             ConnectivityHelper.setReachPeerOk(true);
@@ -21064,7 +21093,7 @@ public class MainActivity extends Activity {
 
     private void runSoulseekShareScanIfNeeded() {
         if (soulseekShareScanRunning) return;
-        if (!soulseekShareRescanPending && !(soulseekSharingEnabled && soulseekReachEnabled)) return;
+        if (!soulseekShareRescanPending && !(soulseekSharingEnabled && soulseekActive())) return;
         soulseekShareRescanPending = false;
         soulseekShareScanRunning = true;
         final SoulseekAccount account = SoulseekAccount.load(prefs, MainActivity.this);
@@ -21104,7 +21133,7 @@ public class MainActivity extends Activity {
     }
 
     private void updateSoulseekSharePolicy() {
-        if (!soulseekReachEnabled) {
+        if (!soulseekActive()) {
             soulseekSharePolicy.setReachMasterEnabled(false);
             if (soulseekClient != null) {
                 soulseekClient.shutdown();
@@ -21172,7 +21201,7 @@ public class MainActivity extends Activity {
     }
 
     private String soulseekSharingStatusLabel() {
-        if (!soulseekReachEnabled) {
+        if (!soulseekActive()) {
             return getString(R.string.soulseek_reach_disabled);
         }
         if (!soulseekSharingEnabled) {
@@ -21978,14 +22007,14 @@ public class MainActivity extends Activity {
         return isGetMusicUnifiedUi()
                 && (getMusicMode == GetMusicSources.MODE_UNIFIED
                 || getMusicMode == GetMusicSources.MODE_REACH_ONLY)
-                && GetMusicSources.reachSearchInGetMusic(prefs, soulseekReachEnabled);
+                && GetMusicSources.reachSearchInGetMusic(prefs, soulseekActive());
     }
 
     private boolean getMusicDeezerSearchActive() {
         return isGetMusicUnifiedUi()
                 && (getMusicMode == GetMusicSources.MODE_UNIFIED
                 || getMusicMode == GetMusicSources.MODE_DEEZER_ONLY)
-                && GetMusicSources.deezerSearchInGetMusic(prefs, deezerEnabled);
+                && GetMusicSources.deezerSearchInGetMusic(prefs, deezerActive());
     }
 
     private void maybeFinishGetMusicSearch(int gen) {
@@ -22005,11 +22034,11 @@ public class MainActivity extends Activity {
 
     private String getMusicSourcesSubtitle() {
         return getString(GetMusicSources.activeSourceSubtitleRes(
-                prefs, soulseekReachEnabled, deezerEnabled));
+                prefs, soulseekActive(), deezerActive()));
     }
 
     private boolean getMusicHasBothSearchSources() {
-        return GetMusicSources.activeSourceSubtitle(prefs, soulseekReachEnabled, deezerEnabled)
+        return GetMusicSources.activeSourceSubtitle(prefs, soulseekActive(), deezerActive())
                 == GetMusicSources.SUBTITLE_BOTH;
     }
 
@@ -22124,7 +22153,7 @@ public class MainActivity extends Activity {
         final boolean wantReachSearch = getMusicReachSearchActive();
 
         if (wantDeezer) {
-            if (GetMusicSources.deezerConfiguredForGetMusic(prefs, deezerEnabled)
+            if (GetMusicSources.deezerConfiguredForGetMusic(prefs, deezerActive())
                     && !ConnectivityHelper.isDeezerLoginOk()) {
                 refreshDeezerSessionFromPrefs(false);
             }
@@ -22135,7 +22164,7 @@ public class MainActivity extends Activity {
                     String errorMsg = null;
                     try {
                         DeezerClient c = new DeezerClient(prefs);
-                        if (GetMusicSources.deezerConfiguredForGetMusic(prefs, deezerEnabled)) {
+                        if (GetMusicSources.deezerConfiguredForGetMusic(prefs, deezerActive())) {
                             try {
                                 if (c.initSession()) ConnectivityHelper.setDeezerLoginOk(true);
                             } catch (Exception ignored) {}
@@ -22695,7 +22724,7 @@ public class MainActivity extends Activity {
         if (getMusic) {
             openGetMusicScreen(true);
             if (q.length() > 0 && requireInternet(R.string.toast_internet_required)) {
-                getMusicMode = GetMusicSources.resolveMode(prefs, soulseekReachEnabled, deezerEnabled);
+                getMusicMode = GetMusicSources.resolveMode(prefs, soulseekActive(), deezerActive());
                 fetchGetMusicResults(q);
             }
             return;
