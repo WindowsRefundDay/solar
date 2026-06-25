@@ -29,16 +29,15 @@ Custom firmware and launcher for the **Innioasis Y1** — a full interface repla
 | ![Quick controls](screenshots/Quick%20Controls.png) | ![ACmp3 theme](screenshots/ACmp3%20theme%20%20on%20Solar.png) |
 | **Quick controls** — global context menu (playback, queue, Wi‑Fi) | **ACmp3 theme** — Y1 custom theme applied in Solar |
 
-## Deezer account setup
+## Deezer account setup in Reach
+A Demo Account is included for testers, please configure your own to ensure reliable playback and downloads, please do not submit issues about failed downloads / streams if still using the demo account as a Deezer account will offer a single playback slot to an account at one time.
 
 **Reach** can search, stream, and download from [Deezer](https://www.deezer.com) using your account’s **`arl` session cookie** (the same method used by other Deezer download tools). You need a free or Premium Deezer account and a PC on the **same Wi‑Fi** as the Y1.
 
-### On the Y1
+### On the Y1 
 
 1. Open **Settings → Deezer**.
-2. Turn **Deezer** on.
-3. Turn **Include in Get Music** on if you want Deezer results in the home **Get Music** search (alongside Reach).
-4. Select **Set up on PC**. Solar starts a small setup server and shows a URL like `http://192.168.x.x:8080/deezer`.
+2. Select **Set up on PC**. Solar starts a small setup server and shows a URL like `http://192.168.x.x:8080/deezer`.
 
 ### On your PC
 
