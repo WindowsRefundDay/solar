@@ -11,9 +11,9 @@ MOUNT="${1:-}"
 [ -n "$MOUNT" ] || die "usage: apply-avrcp-patches.sh <system_mount_root>"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-KOENSAYR_PATCHES="$REPO_ROOT/reference/koensayr-main/src/patches"
-Y1_BRIDGE_SRC="$REPO_ROOT/reference/koensayr rom contents/system/app/Y1Bridge.apk"
+# Vendored from koensayr (GPL-3) — reference/ is gitignored and absent in CI.
+KOENSAYR_PATCHES="$SCRIPT_DIR/../patches/avrcp"
+Y1_BRIDGE_SRC="$SCRIPT_DIR/../system/app/Y1Bridge.apk"
 
 [ -d "$KOENSAYR_PATCHES" ] || die "missing koensayr patches at $KOENSAYR_PATCHES"
 

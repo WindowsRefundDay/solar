@@ -6,9 +6,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-KOENSAYR_PATCHES="$REPO_ROOT/reference/koensayr-main/src/patches"
-Y1_BRIDGE_SRC="$REPO_ROOT/reference/koensayr rom contents/system/app/Y1Bridge.apk"
+KOENSAYR_PATCHES="$SCRIPT_DIR/../patches/avrcp"
+Y1_BRIDGE_SRC="$SCRIPT_DIR/../system/app/Y1Bridge.apk"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 
