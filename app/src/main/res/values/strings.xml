@@ -876,7 +876,10 @@
     <string name="context_hold_back_hint">Hold back button for Options</string>
     <string name="context_quick_power">Power</string>
     <string name="context_quick_queue">Queue</string>
-    <string name="queue_tutorial_line_ok">OK — play this track.</string>
+    <string name="playlist_move_tutorial_title">Move tracks in playlist</string>
+    <string name="playlist_move_tutorial_body">Hold OK on a track to pick it up.\n\nScroll the wheel to move it — the tracks above and below show where it will land.\n\nPress OK again to place it.\n\nPress Back to cancel and restore the original order.</string>
+    <string name="playlist_move_tutorial_got_it">Got it</string>
+    <string name="queue_tutorial_line_ok">Press OK again to place the track.</string>
     <string name="queue_tutorial_line_hold">Hold OK — pick up the track, then scroll to move it in the queue.</string>
     <string name="queue_tutorial_got_it">Got it</string>
     <string name="context_tier_wifi">Wi-Fi</string>
