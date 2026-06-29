@@ -2468,65 +2468,7 @@ public class MainActivity extends Activity {
                 }
             }, 4000);
         }
-        final String themeAutoVariant = getIntent().getStringExtra("theme_auto_variant");
-        if (themeAutoVariant != null && themeAutoVariant.contains("::")) {
-            getIntent().removeExtra("theme_auto_variant");
-            final String[] parts = themeAutoVariant.split("::", 2);
-            final String themeName = parts[0].trim();
-            final String variantSlug = parts[1].trim();
-            new Handler().postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    changeScreen(STATE_SETTINGS);
-                    setSettingsSubScreen(SettingsScreens.THEMES);
-                    updateStatusBarTitle();
-                    prepareThemeGalleryPreviewPane();
-                    new Thread(new Runnable() {
-                        @Override
-                        public void run() {
-                            try {
-                                List<ThemeDownloader.CatalogEntry> catalog = ThemeDownloader.fetchCatalog();
-                                ThemeDownloader.CatalogEntry entry = null;
-                                for (ThemeDownloader.CatalogEntry e : catalog) {
-                                    if (themeName.equalsIgnoreCase(e.name)
-                                            || themeName.equalsIgnoreCase(e.folder)
-                                            || themeName.replace(" ", "").equalsIgnoreCase(
-                                                    e.name.replace(" ", ""))) {
-                                        entry = e;
-                                        break;
-                                    }
-                                }
-                                if (entry == null) throw new Exception("theme not in catalog: " + themeName);
-                                List<ThemeDownloader.ThemeVariant> variants =
-                                        ThemeDownloader.fetchReachableVariants(entry);
-                                ThemeDownloader.ThemeVariant pick = null;
-                                for (ThemeDownloader.ThemeVariant v : variants) {
-                                    if (variantSlug.equalsIgnoreCase(v.folderSlug)
-                                            || variantSlug.equalsIgnoreCase(v.label)) {
-                                        pick = v;
-                                        break;
-                                    }
-                                }
-                                if (pick == null) throw new Exception("variant not found: " + variantSlug);
-                                final ThemeDownloader.CatalogEntry fe = entry;
-                                final ThemeDownloader.ThemeVariant fv = pick;
-                                runOnUiThreadSafe(new Runnable() {
-                                    @Override
-                                    public void run() {
-                                        if (isFinishing()) return;
-                                        applyThemeCatalog(catalog);
-                                        buildUnifiedThemesUI();
-                                        downloadAndApplyThemeVariant(fe, fv);
-                                    }
-                                });
-                            } catch (final Exception e) {
-                                ThemeDownloader.dlLogError("theme_auto_variant", e);
-                            }
-                        }
-                    }).start();
-                }
-            }, 4000);
-        }
+        scheduleThemeAutoVariantIfRequested();
     }
     // 💡 [추가] 화면 전체를 덮는 확실한 로딩 팝업 띄우기 함수
     private void showLoadingPopup() {
@@ -6929,6 +6871,77 @@ public class MainActivity extends Activity {
         }, 500);
     }
 
+    /** adb: am start -n com.solar.launcher/.MainActivity --es theme_auto_variant 'StrangerThings::Robin' */
+    private void scheduleThemeAutoVariantIfRequested() {
+        Intent intent = getIntent();
+        if (intent == null) return;
+        final String themeAutoVariant = intent.getStringExtra("theme_auto_variant");
+        // #region agent log
+        try {
+            org.json.JSONObject themeAdbDbg = new org.json.JSONObject();
+            themeAdbDbg.put("extra", themeAutoVariant != null ? themeAutoVariant : "");
+            DebugSessionLog.log("MainActivity.scheduleThemeAutoVariant", "extra", "H-ADB", themeAdbDbg);
+        } catch (Exception ignored) {}
+        // #endregion
+        if (themeAutoVariant == null || !themeAutoVariant.contains("::")) return;
+        intent.removeExtra("theme_auto_variant");
+        final String[] parts = themeAutoVariant.split("::", 2);
+        final String themeName = parts[0].trim();
+        final String variantSlug = parts[1].trim();
+        new Handler().postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                changeScreen(STATE_SETTINGS);
+                setSettingsSubScreen(SettingsScreens.THEMES);
+                updateStatusBarTitle();
+                prepareThemeGalleryPreviewPane();
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            List<ThemeDownloader.CatalogEntry> catalog = ThemeDownloader.fetchCatalog();
+                            ThemeDownloader.CatalogEntry entry = null;
+                            for (ThemeDownloader.CatalogEntry e : catalog) {
+                                if (themeName.equalsIgnoreCase(e.name)
+                                        || themeName.equalsIgnoreCase(e.folder)
+                                        || themeName.replace(" ", "").equalsIgnoreCase(
+                                                e.name.replace(" ", ""))) {
+                                    entry = e;
+                                    break;
+                                }
+                            }
+                            if (entry == null) throw new Exception("theme not in catalog: " + themeName);
+                            List<ThemeDownloader.ThemeVariant> variants =
+                                    ThemeDownloader.fetchReachableVariants(entry);
+                            ThemeDownloader.ThemeVariant pick = null;
+                            for (ThemeDownloader.ThemeVariant v : variants) {
+                                if (variantSlug.equalsIgnoreCase(v.folderSlug)
+                                        || variantSlug.equalsIgnoreCase(v.label)) {
+                                    pick = v;
+                                    break;
+                                }
+                            }
+                            if (pick == null) throw new Exception("variant not found: " + variantSlug);
+                            final ThemeDownloader.CatalogEntry fe = entry;
+                            final ThemeDownloader.ThemeVariant fv = pick;
+                            runOnUiThreadSafe(new Runnable() {
+                                @Override
+                                public void run() {
+                                    if (isFinishing()) return;
+                                    applyThemeCatalog(catalog);
+                                    buildUnifiedThemesUI();
+                                    downloadAndApplyThemeVariant(fe, fv);
+                                }
+                            });
+                        } catch (final Exception e) {
+                            ThemeDownloader.dlLogError("theme_auto_variant", e);
+                        }
+                    }
+                }).start();
+            }
+        }, 4000);
+    }
+
     /** adb: am start -n com.solar.launcher/.MainActivity -e open_webserver true */
     private void handleLaunchIntentExtras() {
         Intent intent = getIntent();
@@ -10103,8 +10116,14 @@ public class MainActivity extends Activity {
     }
 
     private void createBrowserSectionHeader(String title) {
+        createBrowserSectionHeader(title, null);
+    }
+
+    /** Optional tag for async row insertion (e.g. Deezer playlist section). */
+    private void createBrowserSectionHeader(String title, Object tag) {
         TextView tv = new TextView(this);
         tv.setFocusable(false);
+        if (tag != null) tv.setTag(tag);
         tv.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
         tv.setText(title);
         int headerColor = ThemeManager.getSectionHeaderTextColor();
@@ -15385,6 +15404,13 @@ public class MainActivity extends Activity {
             });
         }
         if (currentScreenState == STATE_BROWSER && currentBrowserMode == BROWSER_PLAYLISTS) {
+            addContextAction(getString(R.string.library_new_playlist), new Runnable() {
+                @Override
+                public void run() {
+                    pendingPlaylistTracks = null;
+                    openPlaylistNameKeyboard(true);
+                }
+            });
             addContextAction(getString(R.string.library_save_queue_m3u), new Runnable() {
                 @Override
                 public void run() {
@@ -23002,10 +23028,21 @@ public class MainActivity extends Activity {
         });
         containerBrowserItems.addView(back);
 
-        if (!libraryPlaylists.isEmpty()) {
-            createBrowserSectionHeader(getString(R.string.browser_playlists).replace("📋 ", ""));
-        }
+        // Local M3U playlists first — distinct from Deezer cloud browsing below.
         libraryPlaylists = PlaylistManager.scan(rootFolder);
+        createBrowserSectionHeader(getString(R.string.library_playlists_local_section));
+
+        Button newPlaylist = createListButton(getString(R.string.library_new_playlist));
+        newPlaylist.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                pendingPlaylistTracks = null;
+                openPlaylistNameKeyboard(true);
+            }
+        });
+        containerBrowserItems.addView(newPlaylist);
+
         if (libraryPlaylists.isEmpty()) {
             Button empty = createListButton(getString(R.string.library_playlists_empty));
             empty.setEnabled(false);
@@ -23026,31 +23063,6 @@ public class MainActivity extends Activity {
             }
         }
 
-        if (deezerActive() && DeezerAccount.hasArl(prefs)) {
-            createBrowserSectionHeader(getString(R.string.deezer_playlists_section));
-            Button loading = createListButton(getString(R.string.deezer_playlists_loading));
-            loading.setEnabled(false);
-            loading.setTag("deezer_pl_loading");
-            containerBrowserItems.addView(loading);
-            loadDeezerPlaylistsAsync();
-        } else if (deezerActive()) {
-            createBrowserSectionHeader(getString(R.string.deezer_playlists_section));
-            Button unavailable = createListButton(getString(R.string.deezer_playlists_unavailable));
-            unavailable.setEnabled(false);
-            containerBrowserItems.addView(unavailable);
-        }
-
-        Button newPlaylist = createListButton(getString(R.string.library_new_playlist));
-        newPlaylist.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                clickFeedback();
-                pendingPlaylistTracks = null;
-                openPlaylistNameKeyboard(true);
-            }
-        });
-        containerBrowserItems.addView(newPlaylist);
-
         Button saveQueue = createListButton(getString(R.string.library_save_queue_m3u));
         saveQueue.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -23060,7 +23072,35 @@ public class MainActivity extends Activity {
             }
         });
         containerBrowserItems.addView(saveQueue);
-        if (containerBrowserItems.getChildCount() > 1) containerBrowserItems.getChildAt(1).requestFocus();
+
+        if (deezerActive() && DeezerAccount.hasArl(prefs)) {
+            createBrowserSectionHeader(getString(R.string.deezer_playlists_section), "deezer_pl_section");
+            Button loading = createListButton(getString(R.string.deezer_playlists_loading));
+            loading.setEnabled(false);
+            loading.setTag("deezer_pl_loading");
+            containerBrowserItems.addView(loading);
+            loadDeezerPlaylistsAsync();
+        } else if (deezerActive()) {
+            createBrowserSectionHeader(getString(R.string.deezer_playlists_section), "deezer_pl_section");
+            Button unavailable = createListButton(getString(R.string.deezer_playlists_unavailable));
+            unavailable.setEnabled(false);
+            containerBrowserItems.addView(unavailable);
+        }
+
+        // Default focus: first local action (new playlist, or first saved list).
+        int focusIdx = libraryPlaylists.isEmpty() ? 2 : 3;
+        if (focusIdx < containerBrowserItems.getChildCount()) {
+            containerBrowserItems.getChildAt(focusIdx).requestFocus();
+        }
+    }
+
+    /** Index inside containerBrowserItems for inserting Deezer cloud playlist rows. */
+    private int deezerPlaylistInsertIndex() {
+        View loading = containerBrowserItems.findViewWithTag("deezer_pl_loading");
+        if (loading != null) return containerBrowserItems.indexOfChild(loading);
+        View header = containerBrowserItems.findViewWithTag("deezer_pl_section");
+        if (header != null) return containerBrowserItems.indexOfChild(header) + 1;
+        return containerBrowserItems.getChildCount();
     }
 
     private void loadDeezerPlaylistsAsync() {
@@ -23089,13 +23129,17 @@ public class MainActivity extends Activity {
                         deezerPlaylistsCache.clear();
                         deezerPlaylistsCache.addAll(ff);
                         View loading = containerBrowserItems.findViewWithTag("deezer_pl_loading");
-                        if (loading != null) containerBrowserItems.removeView(loading);
+                        int insertAt = deezerPlaylistInsertIndex();
+                        if (loading != null) {
+                            insertAt = containerBrowserItems.indexOfChild(loading);
+                            containerBrowserItems.removeView(loading);
+                        }
                         if (ff.isEmpty()) {
                             Button empty = createListButton(ferr != null
                                     ? getString(R.string.deezer_playlist_save_failed, ferr)
                                     : getString(R.string.deezer_playlists_empty));
                             empty.setEnabled(false);
-                            containerBrowserItems.addView(empty);
+                            containerBrowserItems.addView(empty, insertAt);
                         } else {
                             for (final DeezerPlaylist pl : ff) {
                                 Button b = createListButton("♫ " + pl.title + " ("
@@ -23106,7 +23150,8 @@ public class MainActivity extends Activity {
                                         openDeezerPlaylistBrowse(pl);
                                     }
                                 });
-                                containerBrowserItems.addView(b);
+                                containerBrowserItems.addView(b, insertAt);
+                                insertAt++;
                             }
                         }
                     }
@@ -28379,7 +28424,14 @@ public class MainActivity extends Activity {
         themeCatalogLoading = false;
         themeBrowserOnlineRows.clear();
         themeDownloadGen++;
-        com.solar.launcher.theme.ThemeDownloader.requestCancel();
+        // ponytail: leaving settings must not abort in-flight theme downloads — only skip apply-on-complete.
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("themeDownloadGen", themeDownloadGen);
+            DebugSessionLog.log("MainActivity.teardownSettingsSession", "ui teardown only", "H3", d);
+        } catch (Exception ignored) {}
+        // #endregion
         if (layoutLoadingOverlay != null) layoutLoadingOverlay.setVisibility(View.GONE);
     }
 
@@ -31703,6 +31755,7 @@ public class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         scheduleAdbOpenSoulseekMessagesIfRequested();
+        scheduleThemeAutoVariantIfRequested();
         if (intent != null && intent.getBooleanExtra("solar_adb_goto", false)) {
             final int screen = intent.getIntExtra("solar_adb_screen", STATE_MENU);
             intent.removeExtra("solar_adb_goto");
