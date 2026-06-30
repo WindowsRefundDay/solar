@@ -48,6 +48,7 @@ public final class Y1UsbFocusHelper {
     private boolean usbConnected = false;
     private volatile boolean charging = false;
     private boolean polling = false;
+    private boolean pollingPaused = false;
 
     public Y1UsbFocusHelper(Activity activity, UsbListener listener) {
         this.activity = activity;
@@ -75,6 +76,25 @@ public final class Y1UsbFocusHelper {
             try { activity.unregisterReceiver(chargingReceiver); } catch (Exception ignored) {}
             chargingRegistered = false;
         }
+    }
+
+    /**
+     * Stop focus polling until the next charge state change (unplug/replug).
+     * Called when the user dismisses the Solar USB prompt — no need to keep
+     * reclaiming focus after that.
+     */
+    public void pausePolling() {
+        pollingPaused = true;
+        stopPolling();
+    }
+
+    /**
+     * Resume focus polling (if still charging).
+     * Called automatically when charge state changes.
+     */
+    public void resumePolling() {
+        pollingPaused = false;
+        updatePolling();
     }
 
     private Boolean lastConnectedState = null;
@@ -135,9 +155,11 @@ public final class Y1UsbFocusHelper {
                 String action = intent.getAction();
                 if (Intent.ACTION_POWER_CONNECTED.equals(action)) {
                     charging = true;
+                    pollingPaused = false; // reset pause on replug
                     updatePolling();
                 } else if (Intent.ACTION_POWER_DISCONNECTED.equals(action)) {
                     charging = false;
+                    pollingPaused = false; // reset pause on unplug
                     updatePolling();
                 }
             }
@@ -163,9 +185,9 @@ public final class Y1UsbFocusHelper {
     };
 
     private void updatePolling() {
-        if (charging && !polling) {
+        if (charging && !polling && !pollingPaused) {
             startPolling();
-        } else if (!charging && polling) {
+        } else if ((!charging || pollingPaused) && polling) {
             stopPolling();
         }
     }
