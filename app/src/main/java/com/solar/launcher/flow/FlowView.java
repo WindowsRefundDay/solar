@@ -75,6 +75,7 @@ public final class FlowView extends View {
     /** Debug: skip floor reflection draws — compare carousel perf on device. */
     private boolean noReflections = false;
     private static final float FLOW_REFLECTION_ALPHA = 0.18f;
+    private static final float FLOW_REFLECTION_CENTER_ALPHA = 0.50f;
     private static final int CENTER_REFLECTION_MAX_BANDS = 36;
     private static final int SIDE_REFLECTION_MAX_BANDS = 14;
     private boolean debugTheme;
@@ -1428,7 +1429,7 @@ public final class FlowView extends View {
                             totalRotY, t, metrics, false);
                     // #endregion
                     drawDynamicCoverAndReflection(canvas, bmp, drawRect, slotAlpha,
-                            reflectH, metrics, isVisualCenter);
+                            reflectH, metrics, isVisualCenter, totalRotY);
                 }
             } else {
                 if (isVisualCenter && handoffPinBitmap != null && !handoffPinBitmap.isRecycled()
@@ -1456,10 +1457,10 @@ public final class FlowView extends View {
     }
 
     private void drawDynamicCoverAndReflection(Canvas canvas, Bitmap bmp, RectF rect, float slotAlpha,
-            float reflectH, CoverFlowLayout.Metrics metrics, boolean isVisualCenter) {
+            float reflectH, CoverFlowLayout.Metrics metrics, boolean isVisualCenter, float totalRotY) {
         FlowAlbumArt3d.drawCover(canvas, bmp, rect, 0f, slotAlpha, coverPaint);
         if (reflectH <= 0f) return;
-        float reflectionAlpha = reflectionAlphaForDraw(slotAlpha, handoffReflectRevealAlpha, isVisualCenter);
+        float reflectionAlpha = reflectionAlphaForDraw(slotAlpha, handoffReflectRevealAlpha, totalRotY);
         int bands = isVisualCenter ? CENTER_REFLECTION_MAX_BANDS : SIDE_REFLECTION_MAX_BANDS;
         FlowAlbumArt3d.drawReflectionFloorCoarse(canvas, bmp, rect, reflectionAlpha,
                 reflectH, metrics.reflectTable, reflectionPaint, null, bands);
@@ -1620,14 +1621,27 @@ public final class FlowView extends View {
 
     /** Uniform reflection strength; only the global reveal fade changes it. */
     static float reflectionAlphaForSlot(float revealAlpha, boolean isVisualCenter) {
+        return reflectionAlphaForSlot(revealAlpha, isVisualCenter ? 0f : 65f);
+    }
+
+    static float reflectionAlphaForSlot(float revealAlpha, float totalRotY) {
         float alpha = Math.max(0f, Math.min(1f, revealAlpha));
-        return alpha * FLOW_REFLECTION_ALPHA;
+        // ponytail: upright cover at 0° has flat 2D reflection bands (no overlap -> needs 0.50f alpha).
+        // Tilted covers (side slots at ±65° or center flipping) overlap in 3D perspective clipping (~2.8x stacking -> needs 0.18f).
+        // Smoothly interpolate from 0.50f at 0° tilt down to 0.18f at >=30° tilt so reflections never brighten during flips.
+        float tiltDeg = Math.min(30f, Math.abs(totalRotY));
+        float baseAlpha = FLOW_REFLECTION_CENTER_ALPHA - (FLOW_REFLECTION_CENTER_ALPHA - FLOW_REFLECTION_ALPHA) * (tiltDeg / 30f);
+        return alpha * baseAlpha;
     }
 
     static float reflectionAlphaForDraw(float coverAlpha, float revealAlpha, boolean isVisualCenter) {
+        return reflectionAlphaForDraw(coverAlpha, revealAlpha, isVisualCenter ? 0f : 65f);
+    }
+
+    static float reflectionAlphaForDraw(float coverAlpha, float revealAlpha, float totalRotY) {
         // ponytail: reflection must track cover opacity so side covers dim reflections
         // during flip/tracklist browse — otherwise reflections are brighter than covers.
-        return coverAlpha * reflectionAlphaForSlot(revealAlpha, isVisualCenter);
+        return coverAlpha * reflectionAlphaForSlot(revealAlpha, totalRotY);
     }
 
     /** @deprecated use {@link #shouldSkipCoverReflection(boolean, boolean)} */

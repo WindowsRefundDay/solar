@@ -21,11 +21,16 @@ public class FlowViewReflectionTest {
 
     @Test
     public void reflectionAlphaIsUniformLowOpacity() {
-        assertEquals(0.18f, FlowView.reflectionAlphaForSlot(1f, true), 0.001f);
+        assertEquals(0.50f, FlowView.reflectionAlphaForSlot(1f, true), 0.001f);
         assertEquals(0.18f, FlowView.reflectionAlphaForSlot(1f, false), 0.001f);
         assertEquals(0.09f, FlowView.reflectionAlphaForSlot(0.5f, false), 0.001f);
         assertEquals(0.045f, FlowView.reflectionAlphaForDraw(0.25f, 1f, false), 0.001f);
-        assertEquals(0.18f, FlowView.reflectionAlphaForDraw(1f, 1f, true), 0.001f);
+        assertEquals(0.50f, FlowView.reflectionAlphaForDraw(1f, 1f, true), 0.001f);
+        // Tilt-aware interpolation during album flip / perspective rotation:
+        assertEquals(0.50f, FlowView.reflectionAlphaForSlot(1f, 0f), 0.001f);
+        assertEquals(0.34f, FlowView.reflectionAlphaForSlot(1f, 15f), 0.001f);
+        assertEquals(0.18f, FlowView.reflectionAlphaForSlot(1f, 30f), 0.001f);
+        assertEquals(0.18f, FlowView.reflectionAlphaForSlot(1f, 65f), 0.001f);
     }
 
     @Test

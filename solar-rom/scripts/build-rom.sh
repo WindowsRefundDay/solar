@@ -128,10 +128,8 @@ finalize_image_after_mount() {
     local shipped_path="$1"
     local mount_src="$2"
     if [ "$mount_src" != "$shipped_path" ]; then
-        require_cmd img2simg
-        echo "==> Repacking $(basename "$shipped_path") to Android sparse"
-        img2simg "$mount_src" "$shipped_path"
-        rm -f "$mount_src"
+        echo "==> Keeping raw image for SP Flash Tool compatibility ($(basename "$shipped_path"))"
+        mv -f "$mount_src" "$shipped_path"
     fi
 }
 
