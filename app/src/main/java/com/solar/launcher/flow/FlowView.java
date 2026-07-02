@@ -57,7 +57,6 @@ public final class FlowView extends View {
     private final Paint placeholderPaint = new Paint();
     private final Paint shadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF drawRect = new RectF();
-    private final RectF bakedDestRect = new RectF();
     private final RectF shadowRect = new RectF();
     private final Matrix matrix = new Matrix();
     private final Camera camera = new Camera();
@@ -74,7 +73,11 @@ public final class FlowView extends View {
     private Callback callback;
     private int reflectionTint = 0x44FFFFFF;
     /** Debug: skip floor reflection draws — compare carousel perf on device. */
-    private boolean noReflections;
+    private boolean noReflections = false;
+    private static final float FLOW_REFLECTION_ALPHA = 0.50f;
+    private static final int CENTER_REFLECTION_MAX_BANDS = 36;
+    private static final int SIDE_REFLECTION_MAX_BANDS = 14;
+    private boolean debugTheme;
     private int lastNotifiedFocus = -1;
     private float viewW;
     private float viewH;
@@ -213,7 +216,7 @@ public final class FlowView extends View {
         reflectionPaint.setFilterBitmap(false);
         textPaint.setColor(0xFFFFFFFF);
         textPaint.setTextAlign(Paint.Align.CENTER);
-        textPaint.setTypeface(ThemeManager.getCustomFont());
+        textPaint.setTypeface(ThemeManager.getFlowFont(debugTheme));
         backPaint.setColor(0xCC1A1A22);
         backRowPaint.setColor(0xFFFFFFFF);
         backRowPaint.setTextAlign(Paint.Align.LEFT);
@@ -272,6 +275,7 @@ public final class FlowView extends View {
     }
 
     public void setDebugTheme(boolean on) {
+        debugTheme = on;
         reflectionTint = on
                 ? (ThemeManager.getStatusBarBackgroundColor() & 0x00FFFFFF) | 0x55000000
                 : (ThemeManager.getListButtonNormalBg() & 0x00FFFFFF) | 0x55000000;
@@ -423,14 +427,14 @@ public final class FlowView extends View {
         invalidate();
     }
 
-    /** Flyer removed — clear pin, schedule bakes, fade floor reflection in. */
+    /** Flyer removed — clear pin, schedule bakes; floor reflection stays on during browse. */
     public void finishHandoffLanding() {
         handoffCenterRevealAlpha = 1f;
         handoffSideRevealAlpha = 1f;
         titleAlpha = 1f;
         clearHandoffPin();
-        handoffReflectRevealStartMs = System.currentTimeMillis();
-        handoffReflectRevealAlpha = 0f;
+        handoffReflectRevealStartMs = 0L;
+        handoffReflectRevealAlpha = 1f;
         invalidate();
         scheduleBakesAround(engine.getFocusIndex(), 2);
         postOnAnimation(animTick);
@@ -932,19 +936,8 @@ public final class FlowView extends View {
 
     /** Coalesced choreographer tick — idle cover decodes and scroll share one loop. */
     public void scheduleBakesAround(int center, int radius) {
-        if (cache == null || items.isEmpty()) return;
-        CoverFlowLayout.Metrics m = viewportMetrics();
-        int n = items.size();
-        for (int d = -radius; d <= radius; d++) {
-            int idx = center + d;
-            if (idx < 0 || idx >= n) continue;
-            FlowItem item = items.get(idx);
-            if (item == null || item.coverKey == null || item.coverKey.isEmpty()) continue;
-            Bitmap bmp = cache.get(item.coverKey);
-            if (bmp == null || bmp.isRecycled()) continue;
-            if (bakeCache.peek(item.coverKey, m, true) != null) continue;
-            bakeCache.scheduleBake(item.coverKey, bmp, m, true);
-        }
+        // Dynamic reflections are transformed with the slot; baked composites do not match tilted
+        // covers and cost worker CPU/RAM on MT6572/MT6582-class devices.
     }
 
     public void scheduleCarouselFrame() {
@@ -995,12 +988,15 @@ public final class FlowView extends View {
             drawEmptyHint(canvas, w, h);
             return;
         }
-        // Idle guard — handoff prep can zero side alpha while animTick is not posted.
+        // Idle guard — handoff prep can zero side/center alphas while animTick is not posted.
         if (!com.solar.launcher.flow.FlowPlayerHandoff.isHandoffAnimating()
                 && !handoffRevealActive
                 && !engine.isCarouselScrolling()) {
             if (handoffCenterRevealAlpha < 1f) handoffCenterRevealAlpha = 1f;
             if (handoffSideRevealAlpha < 1f) handoffSideRevealAlpha = 1f;
+            if (handoffReflectRevealStartMs <= 0L && handoffReflectRevealAlpha < 1f) {
+                handoffReflectRevealAlpha = 1f;
+            }
         }
 
         // #region agent log
@@ -1316,8 +1312,8 @@ public final class FlowView extends View {
         FlowItem item = items.get(index);
         Bitmap bmp = cache != null ? cache.get(item.coverKey) : null;
         bmp = coverBitmapForDraw(index, item, bmp);
+        final boolean isVisualCenter = index == engine.getVisualCenterIndex();
         if (bmp == null && callback != null && !backFace) {
-            boolean isVisualCenter = index == engine.getVisualCenterIndex();
             // Pinned NP art covers the center slot during crossfade — no async grey placeholder.
             if (!(isVisualCenter && handoffPinBitmap != null && !handoffPinBitmap.isRecycled())) {
                 callback.requestCover(index, item.coverKey, item);
@@ -1335,6 +1331,8 @@ public final class FlowView extends View {
             drawRect.set(cx - halfW, cy - halfH, cx + halfW, cy + halfH);
         }
 
+        // Upright center: draw floor gloss in-slot.
+
         canvas.save();
         float totalRotY = t.rotationYDeg + extraRotY;
         // Center OK-flip uses full 180° on card center; carousel scroll uses edge hinge.
@@ -1351,52 +1349,44 @@ public final class FlowView extends View {
         matrix.postTranslate(pivotX, t.centerY);
         // #region agent log
         boolean dbgUsingBaked = false;
-        if (!backFace && bmp != null && !bmp.isRecycled()) {
-            boolean skipReflectDbg = shouldSkipCoverReflection(noReflections,
-                    FlowPlayerHandoff.isHandoffAnimating(), engine.isCarouselScrolling(),
-                    index == engine.getVisualCenterIndex(), handoffReflectRevealAlpha);
-            if (!skipReflectDbg) {
-                Bitmap bakedDbg = bakeCache.peek(item.coverKey, metrics, true);
-                dbgUsingBaked = bakedDbg != null && !bakedDbg.isRecycled()
-                        && Math.abs(totalRotY) < 8f;
-            }
-        }
         logDrawCoverGlitchIfNeeded(index, totalRotY, pivotX, t, metrics, dbgUsingBaked);
         // #endregion
         canvas.concat(matrix);
 
+        float reflectH = 0f;
+        float slotAlpha = t.alpha * coverHandoffAlpha(isVisualCenter);
+        if (slotAlpha <= 0f) {
+            canvas.restore();
+            coverPaint.setAlpha(255);
+            return;
+        }
+        drawSlotShadow(canvas, t, slotAlpha);
+
         if (backFace) {
             drawBackFace(canvas, drawRect);
         } else {
-            boolean isVisualCenter = index == engine.getVisualCenterIndex();
-            float slotAlpha = t.alpha * coverHandoffAlpha(isVisualCenter);
-            if (slotAlpha <= 0f) {
-                canvas.restore();
-                coverPaint.setAlpha(255);
-                return;
-            }
-            // Floor shadow slab — outer covers recede into darkness during egress.
-            if (t.shadowStrength > 0.05f) {
-                float sh = t.shadowStrength;
-                shadowPaint.setColor(0xFF000000);
-                shadowPaint.setAlpha((int) (130 * sh * slotAlpha));
-                float padX = drawRect.width() * (0.05f + 0.06f * sh);
-                float padY = drawRect.height() * (0.08f + 0.10f * sh);
-                shadowRect.set(drawRect.left + padX, drawRect.top + padY * 1.4f,
-                        drawRect.right - padX * 0.4f, drawRect.bottom + padY);
-                canvas.drawRect(shadowRect, shadowPaint);
-            }
             coverPaint.setAlpha((int) (255 * slotAlpha));
             if (bmp != null && !bmp.isRecycled()) {
                 // iPod Classic: center cover keeps floor reflection while idle; deferred after handoff.
-                boolean skipReflect = shouldSkipCoverReflection(noReflections,
-                        FlowPlayerHandoff.isHandoffAnimating(), engine.isCarouselScrolling(),
-                        isVisualCenter, handoffReflectRevealAlpha);
+                boolean skipReflect = shouldSkipCoverReflection(noReflections, isVisualCenter);
                 // Scale reflection band with perspective-shrunk cover — baked bitmap is displaySize-native.
                 float coverScale = metrics.displaySize > 0f
                         ? drawRect.width() / metrics.displaySize : 1f;
-                float reflectH = metrics.reflectHeight * coverScale;
+                reflectH = skipReflect ? 0f : metrics.reflectHeight * coverScale;
                 // #region agent log
+                if (isVisualCenter && com.solar.launcher.Debug898913Log.ENABLED
+                        && System.currentTimeMillis() - debugReflectLogMs > 800L) {
+                    debugReflectLogMs = System.currentTimeMillis();
+                    try {
+                        org.json.JSONObject d = new org.json.JSONObject();
+                        d.put("skipReflect", skipReflect);
+                        d.put("reflectH", reflectH);
+                        d.put("reflectReveal", handoffReflectRevealAlpha);
+                        d.put("scrolling", engine.isCarouselScrolling());
+                        d.put("path", skipReflect || reflectH <= 0f ? "coverOnly" : "reflect");
+                        com.solar.launcher.Debug898913Log.log("FlowView.drawCoverAt", "center reflect", "H-REFL-C", d);
+                    } catch (Exception ignored) {}
+                }
                 if (com.solar.launcher.DebugSessionLog.ENABLED) {
                     int vCenter = engine.getVisualCenterIndex();
                     boolean logSlot = isVisualCenter || index == vCenter + 1;
@@ -1409,6 +1399,7 @@ public final class FlowView extends View {
                             d.put("visualCenter", vCenter);
                             d.put("isVisualCenter", isVisualCenter);
                             d.put("skipReflect", skipReflect);
+                            d.put("reflectReveal", handoffReflectRevealAlpha);
                             d.put("drawRectW", drawRect.width());
                             d.put("drawRectH", drawRect.height());
                             d.put("displaySize", metrics.displaySize);
@@ -1426,32 +1417,18 @@ public final class FlowView extends View {
                     }
                 }
                 // #endregion
-                if (skipReflect) {
+                if (skipReflect || reflectH <= 0f) {
                     // #region agent log
                     logDrawPathIfNeeded(index, "coverOnly", totalRotY, t, metrics, false);
                     // #endregion
                     FlowAlbumArt3d.drawCover(canvas, bmp, drawRect, 0f, slotAlpha, coverPaint);
                 } else {
-                    Bitmap baked = bakeCache.peek(item.coverKey, metrics, true);
-                    // Tall baked composite (cover+floor) shears into vertical stripes under edge-pivot rotateY.
-                    boolean bakeOkForTilt = Math.abs(totalRotY) < 8f;
-                    if (baked != null && !baked.isRecycled() && bakeOkForTilt) {
-                        // #region agent log
-                        logDrawPathIfNeeded(index, "baked", totalRotY, t, metrics, true);
-                        // #endregion
-                        bakedDestRect.set(drawRect.left, drawRect.top,
-                                drawRect.right, drawRect.top + drawRect.width() + reflectH);
-                        canvas.drawBitmap(baked, null, bakedDestRect, coverPaint);
-                    } else {
-                        // #region agent log
-                        logDrawPathIfNeeded(index, "reflect", totalRotY, t, metrics, false);
-                        // #endregion
-                        FlowAlbumArt3d.drawCoverWithReflection(canvas, bmp, drawRect, 0f, slotAlpha,
-                                reflectH, metrics.reflectTable, coverPaint, reflectionPaint);
-                        if (bakeOkForTilt) {
-                            bakeCache.scheduleBake(item.coverKey, bmp, metrics, true);
-                        }
-                    }
+                    // #region agent log
+                    logDrawPathIfNeeded(index, isVisualCenter ? "reflect-center" : "reflect-side",
+                            totalRotY, t, metrics, false);
+                    // #endregion
+                    drawDynamicCoverAndReflection(canvas, bmp, drawRect, slotAlpha,
+                            reflectH, metrics, isVisualCenter);
                 }
             } else {
                 if (isVisualCenter && handoffPinBitmap != null && !handoffPinBitmap.isRecycled()
@@ -1463,19 +1440,41 @@ public final class FlowView extends View {
                 if (bmp != null && !bmp.isRecycled()) {
                     FlowAlbumArt3d.drawCover(canvas, bmp, drawRect, 0f, slotAlpha, coverPaint);
                 } else {
-                Bitmap empty = cache != null
-                        ? cache.emptyPlaceholder((int) metrics.displaySize) : null;
-                placeholderPaint.setAlpha((int) (255 * slotAlpha));
-                if (empty != null && !empty.isRecycled()) {
-                    canvas.drawBitmap(empty, null, FlowAlbumArt3d.squareBounds(drawRect), placeholderPaint);
-                } else {
-                    canvas.drawRect(FlowAlbumArt3d.squareBounds(drawRect), placeholderPaint);
-                }
+                    Bitmap empty = cache != null
+                            ? cache.emptyPlaceholder((int) metrics.displaySize) : null;
+                    placeholderPaint.setAlpha((int) (255 * slotAlpha));
+                    if (empty != null && !empty.isRecycled()) {
+                        canvas.drawBitmap(empty, null, FlowAlbumArt3d.squareBounds(drawRect), placeholderPaint);
+                    } else {
+                        canvas.drawRect(FlowAlbumArt3d.squareBounds(drawRect), placeholderPaint);
+                    }
                 }
             }
         }
         canvas.restore();
         coverPaint.setAlpha(255);
+    }
+
+    private void drawDynamicCoverAndReflection(Canvas canvas, Bitmap bmp, RectF rect, float slotAlpha,
+            float reflectH, CoverFlowLayout.Metrics metrics, boolean isVisualCenter) {
+        FlowAlbumArt3d.drawCover(canvas, bmp, rect, 0f, slotAlpha, coverPaint);
+        if (reflectH <= 0f) return;
+        float reflectionAlpha = reflectionAlphaForDraw(slotAlpha, handoffReflectRevealAlpha, isVisualCenter);
+        int bands = isVisualCenter ? CENTER_REFLECTION_MAX_BANDS : SIDE_REFLECTION_MAX_BANDS;
+        FlowAlbumArt3d.drawReflectionFloorCoarse(canvas, bmp, rect, reflectionAlpha,
+                reflectH, metrics.reflectTable, reflectionPaint, null, bands);
+    }
+
+    private void drawSlotShadow(Canvas canvas, FlowEngine.SlotTransform t, float slotAlpha) {
+        if (slotAlpha <= 0f) return;
+        float sh = 0.45f;
+        shadowPaint.setColor(0xFF000000);
+        shadowPaint.setAlpha((int) (130 * sh * slotAlpha));
+        float padX = drawRect.width() * (0.05f + 0.06f * sh);
+        float padY = drawRect.height() * (0.08f + 0.10f * sh);
+        shadowRect.set(drawRect.left + padX, drawRect.top + padY * 1.4f,
+                drawRect.right - padX * 0.4f, drawRect.bottom + padY);
+        canvas.drawRect(shadowRect, shadowPaint);
     }
 
     private void drawBackFace(Canvas canvas, RectF rect) {
@@ -1521,7 +1520,7 @@ public final class FlowView extends View {
         canvas.drawRect(header, headerGrad);
 
         backRowPaint.setTextSize(headerTitlePx);
-        backRowPaint.setTypeface(Typeface.create(ThemeManager.getCustomFont(), Typeface.BOLD));
+        backRowPaint.setTypeface(Typeface.create(ThemeManager.getFlowFont(debugTheme), Typeface.BOLD));
         backRowPaint.setColor(0xFFFFFFFF);
         String title = flip.headerTitle() != null ? flip.headerTitle() : "";
         backTitleMarquee.draw(canvas, title, rect.left + pad,
@@ -1530,7 +1529,7 @@ public final class FlowView extends View {
         String subtitle = flip.headerSubtitle();
         if (subtitle != null && !subtitle.isEmpty()) {
             backRowPaint.setTextSize(headerSubPx);
-            backRowPaint.setTypeface(Typeface.create(ThemeManager.getCustomFont(), Typeface.NORMAL));
+            backRowPaint.setTypeface(Typeface.create(ThemeManager.getFlowFont(debugTheme), Typeface.NORMAL));
             backRowPaint.setColor(0xFFE0E8F0);
             backSubtitleMarquee.draw(canvas, subtitle, rect.left + pad,
                     rect.top + headerH * 0.76f, rect.width() - pad * 2f, backRowPaint);
@@ -1539,7 +1538,7 @@ public final class FlowView extends View {
         int count = flip.visibleBackRowCount();
         int start = flip.visibleBackRowStart();
         List<FlowScreenHost.FlowBackRow> rows = flip.backRows();
-        backRowPaint.setTypeface(Typeface.create(ThemeManager.getCustomFont(), Typeface.NORMAL));
+        backRowPaint.setTypeface(Typeface.create(ThemeManager.getFlowFont(debugTheme), Typeface.NORMAL));
         backRowPaint.setTextSize(rowTextPx);
         backSelPaint.setColor(0xFF0066CC);
         for (int i = 0; i < count; i++) {
@@ -1571,13 +1570,13 @@ public final class FlowView extends View {
         textPaint.setAlpha((int) (255 * titleAlpha));
         textPaint.setTextAlign(Paint.Align.LEFT);
         textPaint.setTextSize(w * 0.068f);
-        textPaint.setTypeface(Typeface.create(ThemeManager.getCustomFont(), Typeface.BOLD));
+        textPaint.setTypeface(Typeface.create(ThemeManager.getFlowFont(debugTheme), Typeface.BOLD));
         textPaint.setColor(0xFFFFFFFF);
         titleMarquee.draw(canvas, title != null ? title : "", x, titleY, maxW, textPaint);
         boolean titleOverflow = title != null && textPaint.measureText(title) > maxW;
         if (subtitle != null && !subtitle.isEmpty()) {
             textPaint.setTextSize(w * 0.046f);
-            textPaint.setTypeface(Typeface.create(ThemeManager.getCustomFont(), Typeface.NORMAL));
+            textPaint.setTypeface(Typeface.create(ThemeManager.getFlowFont(debugTheme), Typeface.NORMAL));
             textPaint.setColor(ThemeManager.getTextColorSecondary());
             subtitleMarquee.draw(canvas, subtitle, x, titleY + h * 0.055f, maxW, textPaint);
             if (!titleOverflow) {
@@ -1610,17 +1609,35 @@ public final class FlowView extends View {
         return handoffSideRevealAlpha;
     }
 
-    /** Center reflection when idle only; skip during handoff and reflection fade-in. */
-    static boolean shouldSkipCoverReflection(boolean noReflections, boolean handoffAnimating,
-            boolean carouselScrolling, boolean isVisualCenter) {
-        return shouldSkipCoverReflection(noReflections, handoffAnimating, carouselScrolling,
-                isVisualCenter, handoffAnimating ? 0f : 1f);
+    /** Floor reflection on every visible cover unless debug No Reflections is on. */
+    static boolean shouldSkipCoverReflection(boolean noReflections, boolean isVisualCenter) {
+        return noReflections;
     }
 
+    static boolean shouldSkipCoverReflection(boolean noReflections) {
+        return shouldSkipCoverReflection(noReflections, false);
+    }
+
+    /** Uniform reflection strength; only the global reveal fade changes it. */
+    static float reflectionAlphaForSlot(float revealAlpha, boolean isVisualCenter) {
+        float alpha = Math.max(0f, Math.min(1f, revealAlpha));
+        return alpha * FLOW_REFLECTION_ALPHA;
+    }
+
+    static float reflectionAlphaForDraw(float coverAlpha, float revealAlpha, boolean isVisualCenter) {
+        // Cover alpha can differ per slot during scroll/flip; reflections stay uniformly low.
+        return reflectionAlphaForSlot(revealAlpha, isVisualCenter);
+    }
+
+    /** @deprecated use {@link #shouldSkipCoverReflection(boolean, boolean)} */
+    static boolean shouldSkipCoverReflection(boolean noReflections, boolean handoffAnimating,
+            boolean carouselScrolling, boolean isVisualCenter) {
+        return shouldSkipCoverReflection(noReflections, isVisualCenter);
+    }
+
+    /** @deprecated use {@link #shouldSkipCoverReflection(boolean, boolean)} */
     static boolean shouldSkipCoverReflection(boolean noReflections, boolean handoffAnimating,
             boolean carouselScrolling, boolean isVisualCenter, float reflectRevealAlpha) {
-        if (noReflections || !isVisualCenter || carouselScrolling) return true;
-        if (handoffAnimating || reflectRevealAlpha < 1f) return true;
-        return false;
+        return shouldSkipCoverReflection(noReflections, isVisualCenter);
     }
 }

@@ -148,6 +148,7 @@ public class SolarWebServer extends Thread {
                             "</style></head><body>" +
                             "<h2>🎧 Solar Wireless Upload</h2>" +
                             "<p><a href='/deezer' style='color:#0ff'>Deezer account setup →</a></p>" +
+                            "<p><a href='/scan_stats' style='color:#0ff'>Last library scan stats →</a></p>" +
                             "<div class='box'><h3>1. Create Folder</h3>" +
                             "<input type='text' id='fName' placeholder='e.g., Pop, Jazz'>" +
                             "<button onclick='createFolder()'>Create</button></div>" +
@@ -253,6 +254,28 @@ public class SolarWebServer extends Thread {
                         }
                         writeDeezerSetupPage(os, msg);
                     }
+                }
+                else if (method.equals("GET") && path.equals("/scan_stats")) {
+                    ScanPerfLog.LastScan last = ScanPerfLog.last();
+                    org.json.JSONObject d = new org.json.JSONObject();
+                    try {
+                        if (last != null) {
+                            d.put("timestamp", last.timestamp);
+                            d.put("trackCount", last.trackCount);
+                            d.put("totalMs", last.totalMs);
+                            d.put("phases", new org.json.JSONObject(last.phaseBreakdown));
+                            d.put("tracksPerSecond",
+                                    last.totalMs > 0 ? (last.trackCount * 1000f / last.totalMs) : 0f);
+                        } else {
+                            d.put("timestamp", org.json.JSONObject.NULL);
+                            d.put("trackCount", 0);
+                            d.put("totalMs", 0);
+                            d.put("phases", new org.json.JSONObject());
+                            d.put("tracksPerSecond", 0f);
+                        }
+                    } catch (Exception ignored) {}
+                    String response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" + d.toString();
+                    os.write(response.getBytes("UTF-8"));
                 }
                 else if (method.equals("POST") && path.startsWith("/upload")) {
                     String q = path.split("\\?")[1];

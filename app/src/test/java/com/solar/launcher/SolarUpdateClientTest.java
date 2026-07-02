@@ -32,7 +32,7 @@ public class SolarUpdateClientTest {
     public void pickerCapsLargeCatalog() {
         String variant = SolarUpdateClient.deviceVariant();
         List<SolarUpdateClient.ReleaseInfo> many = new ArrayList<SolarUpdateClient.ReleaseInfo>();
-        for (int i = 1; i <= 30; i++) {
+        for (int i = 1; i <= SolarUpdateClient.MAX_PICKER_RELEASES + 10; i++) {
             String day = String.format(Locale.US, "%02d", (i % 28) + 1);
             String tag = String.format(Locale.US, "nightly-202406%s-%04d", day, 1000 + i);
             many.add(new SolarUpdateClient.ReleaseInfo(

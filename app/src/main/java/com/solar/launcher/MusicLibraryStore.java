@@ -3,8 +3,10 @@ package com.solar.launcher;
 import android.content.Context;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
-import android.database.sqlite.SQLiteOpenHelper;
 import android.database.sqlite.SQLiteStatement;
+
+import com.solar.launcher.db.SolarDatabase;
+import com.solar.launcher.db.SolarDbHelper;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -19,12 +21,36 @@ import java.util.Set;
  * SQLite cache for local Music library metadata — avoids re-reading ID3 on every scan.
  * ponytail: keyed by path + mtime + size; stale rows purged after each walk.
  */
-public class MusicLibraryStore extends SQLiteOpenHelper {
+public class MusicLibraryStore extends SolarDbHelper {
     private static final String DB_NAME = "music_library.db";
     private static final int DB_VERSION = 3;
 
     private static MusicLibraryStore instance;
     private boolean legacyTrackNumbersMigrated;
+
+    /** Batch upsert input — avoids per-row method-call overhead during scans. */
+    public static final class Upsert {
+        public final File file;
+        public final String title;
+        public final String artist;
+        public final String album;
+        public final String genre;
+        public final String albumArtist;
+        public final String durationMs;
+        public final int trackNumber;
+
+        public Upsert(File file, String title, String artist, String album,
+                String genre, String albumArtist, String durationMs, int trackNumber) {
+            this.file = file;
+            this.title = title != null ? title : "";
+            this.artist = artist != null ? artist : "";
+            this.album = album != null ? album : "";
+            this.genre = genre != null ? genre : "";
+            this.albumArtist = albumArtist != null ? albumArtist : "";
+            this.durationMs = durationMs != null ? durationMs : "";
+            this.trackNumber = trackNumber;
+        }
+    }
 
     /** Cached row — maps to {@link MainActivity}'s SongItem fields. */
     public static final class Track {
@@ -66,7 +92,11 @@ public class MusicLibraryStore extends SQLiteOpenHelper {
     }
 
     private MusicLibraryStore(Context ctx) {
-        super(ctx.getApplicationContext(), DB_NAME, null, DB_VERSION);
+        this(ctx, true);
+    }
+
+    private MusicLibraryStore(Context ctx, boolean walEnabled) {
+        super(ctx.getApplicationContext(), DB_NAME, DB_VERSION, walEnabled);
     }
 
     public static synchronized MusicLibraryStore getInstance(Context ctx) {
@@ -87,7 +117,7 @@ public class MusicLibraryStore extends SQLiteOpenHelper {
     public static MusicLibraryStore openForTest(Context ctx) {
         resetInstanceForTest();
         final SQLiteDatabase[] mem = new SQLiteDatabase[1];
-        instance = new MusicLibraryStore(ctx.getApplicationContext()) {
+        instance = new MusicLibraryStore(ctx.getApplicationContext(), false) {
             @Override
             public synchronized SQLiteDatabase getWritableDatabase() {
                 if (mem[0] == null) {
@@ -106,7 +136,7 @@ public class MusicLibraryStore extends SQLiteOpenHelper {
     }
 
     @Override
-    public void onCreate(SQLiteDatabase db) {
+    public void onCreate(SolarDatabase db) {
         db.execSQL("CREATE TABLE tracks ("
                 + "path TEXT PRIMARY KEY,"
                 + "mtime INTEGER NOT NULL DEFAULT 0,"
@@ -122,7 +152,7 @@ public class MusicLibraryStore extends SQLiteOpenHelper {
     }
 
     @Override
-    public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+    public void onUpgrade(SolarDatabase db, int oldVersion, int newVersion) {
         if (oldVersion < 2) {
             db.execSQL("ALTER TABLE tracks ADD COLUMN track_number INTEGER NOT NULL DEFAULT 0");
         }
@@ -162,6 +192,17 @@ public class MusicLibraryStore extends SQLiteOpenHelper {
         return null;
     }
 
+    /**
+     * Cached track only when it matches the current file stat.
+     * Single DB lookup instead of {@link #isFresh(File)} + {@link #get(String)}.
+     */
+    public Track getFresh(File file) {
+        if (file == null || !file.isFile()) return null;
+        Track t = get(file.getAbsolutePath());
+        if (t == null) return null;
+        return t.mtime == file.lastModified() && t.size == file.length() ? t : null;
+    }
+
     /** True when cached row matches current file stat — skip MediaMetadataRetriever. */
     public boolean isFresh(File file) {
         migrateLegacyZeroTrackNumbers();
@@ -188,6 +229,43 @@ public class MusicLibraryStore extends SQLiteOpenHelper {
                 "INSERT OR REPLACE INTO tracks"
                         + " (path,mtime,size,title,artist,album,genre,album_artist,duration_ms,track_number)"
                         + " VALUES (?,?,?,?,?,?,?,?,?,?)");
+        try {
+            bindUpsert(st, file, title, artist, album, genre, albumArtist, durationMs, trackNumber);
+            st.executeInsert();
+        } finally {
+            st.close();
+        }
+    }
+
+    /**
+     * Batch upsert inside a single transaction — much faster than one transaction per row
+     * when importing thousands of tracks during a library scan.
+     */
+    public void upsertBatch(List<Upsert> tracks) {
+        if (tracks == null || tracks.isEmpty()) return;
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        SQLiteStatement st = db.compileStatement(
+                "INSERT OR REPLACE INTO tracks"
+                        + " (path,mtime,size,title,artist,album,genre,album_artist,duration_ms,track_number)"
+                        + " VALUES (?,?,?,?,?,?,?,?,?,?)");
+        try {
+            for (Upsert t : tracks) {
+                bindUpsert(st, t.file, t.title, t.artist, t.album, t.genre,
+                        t.albumArtist, t.durationMs, t.trackNumber);
+                st.executeInsert();
+                st.clearBindings();
+            }
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+            st.close();
+        }
+    }
+
+    private static void bindUpsert(SQLiteStatement st, File file, String title, String artist,
+            String album, String genre, String albumArtist, String durationMs, int trackNumber) {
+        if (trackNumber == 0) trackNumber = -1;
         st.bindString(1, file.getAbsolutePath());
         st.bindLong(2, file.lastModified());
         st.bindLong(3, file.length());
@@ -198,7 +276,6 @@ public class MusicLibraryStore extends SQLiteOpenHelper {
         st.bindString(8, albumArtist != null ? albumArtist : "");
         st.bindString(9, durationMs != null ? durationMs : "");
         st.bindLong(10, trackNumber);
-        st.executeInsert();
     }
 
     /** Wipe all cached track rows — Settings reset / cache clear. */
@@ -210,23 +287,43 @@ public class MusicLibraryStore extends SQLiteOpenHelper {
     /** Remove DB rows whose paths were not seen in the latest filesystem walk. */
     public void deleteExcept(Set<String> keepPaths) {
         if (keepPaths == null) return;
+        if (keepPaths.isEmpty()) {
+            clearAll();
+            return;
+        }
         SQLiteDatabase db = getWritableDatabase();
         db.beginTransaction();
+        Cursor c = null;
         try {
-            Cursor c = db.query("tracks", new String[] { "path" }, null, null, null, null, null);
+            c = db.query("tracks", new String[] { "path" }, null, null, null, null, null);
             List<String> stale = new ArrayList<String>();
             while (c.moveToNext()) {
                 String p = c.getString(0);
                 if (!keepPaths.contains(p)) stale.add(p);
             }
             c.close();
-            for (String p : stale) {
-                db.delete("tracks", "path=?", new String[] { p });
+            c = null;
+            // Batch stale paths into a single DELETE per chunk (SQLite max host params is 999).
+            final int chunk = 500;
+            for (int i = 0; i < stale.size(); i += chunk) {
+                int end = Math.min(i + chunk, stale.size());
+                String[] args = stale.subList(i, end).toArray(new String[0]);
+                db.delete("tracks", "path IN (" + placeholders(args.length) + ")", args);
             }
             db.setTransactionSuccessful();
         } finally {
+            if (c != null) c.close();
             db.endTransaction();
         }
+    }
+
+    private static String placeholders(int count) {
+        StringBuilder sb = new StringBuilder(count * 2);
+        for (int i = 0; i < count; i++) {
+            if (i > 0) sb.append(',');
+            sb.append('?');
+        }
+        return sb.toString();
     }
 
     /** path → durationSec for Soulseek share scan (avoids second MMR pass). */

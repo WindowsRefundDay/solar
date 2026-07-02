@@ -16,12 +16,16 @@ public final class FlowAlbumArt3d {
 
     /** Classipod / iPod Now Playing resting Y tilt — opposite lean from carousel center. */
     public static final float PLAYER_ROT_Y_DEG = 14f;
-    /** Idle carousel reflection peak — keep floor gloss subtle so title text stays legible. */
-    public static final float REFLECT_PEAK_FRAC = 0.28f;
+    /** Idle carousel reflection peak — glossy floor reflection. */
+    public static final float REFLECT_PEAK_FRAC = 0.55f;
 
     private static final Camera camera = new Camera();
     private static final Matrix matrix = new Matrix();
     private static final RectF bitmapSrc = new RectF();
+    private static final Matrix reflectionFlipMatrix = new Matrix();
+    private static final Matrix reflectionMatrix = new Matrix();
+    private static final RectF reflectionRowRect = new RectF();
+    private static final RectF reflectionParentClipRect = new RectF();
 
     private FlowAlbumArt3d() {}
 
@@ -130,39 +134,78 @@ public final class FlowAlbumArt3d {
         if (canvas == null || bmp == null || bmp.isRecycled() || rect == null) return;
         RectF square = squareBounds(rect);
         drawCover(canvas, bmp, square, rotationYDeg, alpha, coverPaint);
+        drawReflectionFloor(canvas, bmp, square, alpha, reflectHeight, reflectTable, reflectionPaint, null);
+    }
 
+    public static void drawReflectionFloor(Canvas canvas, Bitmap bmp, RectF squareRect,
+            float alpha, float reflectHeight, int[] reflectTable, Paint reflectionPaint, Matrix slotMatrix) {
+        drawReflectionFloorInternal(canvas, bmp, squareRect, alpha, reflectHeight, reflectTable,
+                reflectionPaint, slotMatrix, 0);
+    }
+
+    public static void drawReflectionFloorCoarse(Canvas canvas, Bitmap bmp, RectF squareRect,
+            float alpha, float reflectHeight, int[] reflectTable, Paint reflectionPaint,
+            Matrix slotMatrix, int maxBands) {
+        drawReflectionFloorInternal(canvas, bmp, squareRect, alpha, reflectHeight, reflectTable,
+                reflectionPaint, slotMatrix, Math.max(1, maxBands));
+    }
+
+    private static void drawReflectionFloorInternal(Canvas canvas, Bitmap bmp, RectF squareRect,
+            float alpha, float reflectHeight, int[] reflectTable, Paint reflectionPaint,
+            Matrix slotMatrix, int maxBands) {
+        if (canvas == null || bmp == null || bmp.isRecycled() || squareRect == null) return;
         if (reflectHeight <= 0f || reflectionPaint == null) return;
-        RectF refRect = new RectF(square.left, square.bottom,
-                square.right, square.bottom + reflectHeight);
-        // ponytail: per-row Rockbox reflect_table — saveLayer+DST_IN painted white on MT6572.
+        RectF square = squareBounds(squareRect);
+
         int rows = reflectTable != null && reflectTable.length > 0
                 ? reflectTable.length : Math.max(1, Math.round(reflectHeight));
         float rowH = reflectHeight / rows;
-        bitmapSrc.set(0f, 0f, bmp.getWidth(), bmp.getHeight());
-        matrix.reset();
-        matrix.setRectToRect(bitmapSrc, square, Matrix.ScaleToFit.FILL);
-        matrix.postScale(1f, -1f, square.centerX(), square.bottom);
+        int bands = maxBands > 0 ? Math.min(rows, maxBands) : rows;
 
-        canvas.save();
-        canvas.clipRect(refRect);
+        bitmapSrc.set(0f, 0f, bmp.getWidth(), bmp.getHeight());
+
+        reflectionFlipMatrix.reset();
+        reflectionFlipMatrix.setRectToRect(bitmapSrc, square, Matrix.ScaleToFit.FILL);
+        reflectionFlipMatrix.postScale(1f, -1f, square.centerX(), square.bottom);
+
+        reflectionMatrix.set(reflectionFlipMatrix);
+        if (slotMatrix != null) {
+            reflectionMatrix.postConcat(slotMatrix);
+        }
+
         int oldAlpha = reflectionPaint.getAlpha();
         reflectionPaint.setShader(null);
-        for (int row = 0; row < rows; row++) {
-            int tableA = reflectTable != null && row < reflectTable.length
-                    ? reflectTable[row] : (768 * (rows - row) / rows);
+
+        for (int band = 0; band < bands; band++) {
+            int rowStart = band * rows / bands;
+            int rowEnd = (band + 1) * rows / bands;
+            if (rowEnd <= rowStart) rowEnd = rowStart + 1;
+            int sampleRow = (rowStart + rowEnd - 1) / 2;
+            int tableA = reflectTable != null && sampleRow < reflectTable.length
+                    ? reflectTable[sampleRow] : (768 * (rows - sampleRow) / rows);
             int peakAlpha = (tableA * Math.round(alpha * 256) + 129) >> 8;
             peakAlpha = Math.min(255, Math.max(0, peakAlpha * 255 / 768));
             peakAlpha = Math.round(peakAlpha * REFLECT_PEAK_FRAC);
             if (peakAlpha <= 0) continue;
-            float y0 = refRect.top + row * rowH;
-            float y1 = (row == rows - 1) ? refRect.bottom : y0 + rowH;
+
+            float y0 = square.bottom + rowStart * rowH;
+            float y1 = (band == bands - 1) ? (square.bottom + reflectHeight)
+                    : (square.bottom + rowEnd * rowH);
+
+            reflectionRowRect.set(square.left, y0, square.right, y1);
+
             canvas.save();
-            canvas.clipRect(square.left, y0, square.right, y1);
+            if (slotMatrix != null) {
+                slotMatrix.mapRect(reflectionParentClipRect, reflectionRowRect);
+                canvas.clipRect(reflectionParentClipRect);
+            } else {
+                canvas.clipRect(reflectionRowRect);
+            }
+
             reflectionPaint.setAlpha(peakAlpha);
-            canvas.drawBitmap(bmp, matrix, reflectionPaint);
+            canvas.drawBitmap(bmp, reflectionMatrix, reflectionPaint);
             canvas.restore();
         }
         reflectionPaint.setAlpha(oldAlpha);
-        canvas.restore();
     }
 }

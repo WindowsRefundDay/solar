@@ -59,64 +59,95 @@ public final class SolarDiagSessionManager {
                     && System.currentTimeMillis() - lastConnectFailMs < CONNECT_BACKOFF_MS) {
                 return false;
             }
+        }
+        // Connect outside the lock so a slow/blocking handshake cannot stall the UI thread
+        // when it briefly enters ensureSession() during onCreate.
+        SoulseekMessagingSession newSession = null;
+        try {
+            newSession = new SoulseekMessagingSession(context, diag.username, diag.password, false);
+            newSession.ensureConnected();
+        } catch (Exception e) {
+            synchronized (LOCK) {
+                lastConnectFailMs = System.currentTimeMillis();
+            }
+            // #region agent log
+            try {
+                JSONObject d = new JSONObject();
+                d.put("diagUser", diag.username);
+                d.put("err", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
+                Debug843b96Log.log(context, "SolarDiagSessionManager.ensureSessionSync",
+                        "session fail", "G", d);
+            } catch (Exception ignored) {}
+            // #endregion
+            if (newSession != null) {
+                newSession.shutdown();
+            }
+            return false;
+        }
+        synchronized (LOCK) {
+            // Another thread may have beaten us to a logged-in session while we were connecting.
+            if (session != null && diag.username.equals(sessionUser) && session.isLoggedIn()) {
+                newSession.shutdown();
+                return true;
+            }
             if (session != null) {
                 session.shutdown();
-                session = null;
-                sessionUser = null;
             }
+            session = newSession;
+            sessionUser = diag.username;
+            lastConnectFailMs = 0;
+            // #region agent log
             try {
-                // Server-only PM — Nicotine+ 160 for relay to legacy dev inboxes.
-                session = new SoulseekMessagingSession(context, diag.username, diag.password, false);
-                session.ensureConnected();
-                sessionUser = diag.username;
-                lastConnectFailMs = 0;
-                // #region agent log
-                try {
-                    JSONObject d = new JSONObject();
-                    d.put("diagUser", diag.username);
-                    Debug843b96Log.log(context, "SolarDiagSessionManager.ensureSessionSync",
-                            "session up", "G", d);
-                } catch (Exception ignored) {}
-                // #endregion
-                return true;
-            } catch (Exception e) {
-                lastConnectFailMs = System.currentTimeMillis();
-                // #region agent log
-                try {
-                    JSONObject d = new JSONObject();
-                    d.put("diagUser", diag.username);
-                    d.put("err", e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
-                    Debug843b96Log.log(context, "SolarDiagSessionManager.ensureSessionSync",
-                            "session fail", "G", d);
-                } catch (Exception ignored) {}
-                // #endregion
-                if (session != null) {
+                JSONObject d = new JSONObject();
+                d.put("diagUser", diag.username);
+                Debug843b96Log.log(context, "SolarDiagSessionManager.ensureSessionSync",
+                        "session up", "G", d);
+            } catch (Exception ignored) {}
+            // #endregion
+            return true;
+        }
+    }
+
+    /** Fan-out PM via diag session; per-recipient success flags. */
+    public static SolarDeveloperMessaging.FanOutResult sendToRecipients(Context context,
+            SharedPreferences prefs, String[] recipients, String text) {
+        if (recipients == null || recipients.length == 0 || text == null || text.isEmpty()) {
+            return SolarDeveloperMessaging.FanOutResult.allFailed(recipients);
+        }
+        if (!ensureSessionSync(context, prefs)) {
+            return SolarDeveloperMessaging.FanOutResult.allFailed(recipients);
+        }
+        SoulseekMessagingSession activeSession;
+        synchronized (LOCK) {
+            activeSession = session;
+        }
+        if (activeSession == null) {
+            return SolarDeveloperMessaging.FanOutResult.allFailed(recipients);
+        }
+        boolean[] per = activeSession.sendToRecipients(recipients, text);
+        boolean allOk = true;
+        for (boolean ok : per) {
+            if (!ok) {
+                allOk = false;
+                break;
+            }
+        }
+        if (!allOk && !activeSession.isLoggedIn()) {
+            synchronized (LOCK) {
+                if (session == activeSession) {
                     session.shutdown();
                     session = null;
                     sessionUser = null;
                 }
-                return false;
             }
         }
+        return SolarDeveloperMessaging.FanOutResult.from(recipients, per);
     }
 
-    /** Fan-out PM via diag session; ensures connect first. */
+    /** True only when every recipient succeeded. */
     public static boolean sendToAll(Context context, SharedPreferences prefs,
             String[] recipients, String text) {
-        if (recipients == null || recipients.length == 0 || text == null || text.isEmpty()) {
-            return false;
-        }
-        if (!ensureSessionSync(context, prefs)) return false;
-        synchronized (LOCK) {
-            if (session == null) return false;
-            boolean ok = session.sendToAll(recipients, text);
-            if (!ok && session != null && !session.isLoggedIn()) {
-                session.shutdown();
-                session = null;
-                sessionUser = null;
-            }
-            return ok;
-        }
+        return sendToRecipients(context, prefs, recipients, text).allSucceeded();
     }
 
     public static void shutdown() {
