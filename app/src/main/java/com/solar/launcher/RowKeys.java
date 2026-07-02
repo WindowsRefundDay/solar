@@ -77,6 +77,7 @@ public final class RowKeys {
     public static final String DEBUG_SHOW_ERROR_TOASTS = "settings.debug.show_error_toasts";
     public static final String DEBUG_DEV_SUPPORT_EXPERIMENT = "settings.debug.dev_support_experiment";
     public static final String DEBUG_RADIO_EXPERIMENT = "settings.debug.radio_experiment";
+    public static final String DEBUG_BLUETOOTH_EXPERIMENT = "settings.debug.bluetooth_experiment";
     public static final String DEBUG_FLOW_ENABLED = "settings.debug.flow_enabled";
     public static final String DEBUG_FLOW_OK_LIBRARY = "settings.debug.flow_ok_library";
     public static final String DEBUG_FLOW_THEME = "settings.debug.flow_theme";
@@ -227,6 +228,7 @@ public final class RowKeys {
         if (DEBUG_SHOW_ERROR_TOASTS.equals(rowKey)) return R.string.settings_debug_show_error_toasts;
         if (DEBUG_DEV_SUPPORT_EXPERIMENT.equals(rowKey)) return R.string.settings_debug_dev_support_experiment;
         if (DEBUG_RADIO_EXPERIMENT.equals(rowKey)) return R.string.settings_debug_radio_experiment;
+        if (DEBUG_BLUETOOTH_EXPERIMENT.equals(rowKey)) return R.string.settings_debug_bluetooth_experiment;
         if (DEBUG_FLOW_ENABLED.equals(rowKey)) return R.string.settings_debug_flow_enabled;
         if (DEBUG_FLOW_OK_LIBRARY.equals(rowKey)) return R.string.settings_debug_flow_ok_library;
         if (DEBUG_FLOW_THEME.equals(rowKey)) return R.string.settings_debug_flow_theme;

@@ -16,20 +16,33 @@ public class RadioExperimentTest {
     @Before
     public void setUp() {
         prefs = new MemPrefs();
+        com.solar.launcher.DeviceFeatures.setCachedFamilyForTest("y2");
     }
 
     @Test
-    public void disabledByDefault() {
+    public void disabledByDefaultOnY2() {
         if (RadioExperiment.isEnabled(prefs)) {
-            throw new AssertionError("radio experiment should default off");
+            throw new AssertionError("radio experiment should default off on Y2");
         }
     }
 
     @Test
-    public void enabledWhenPrefOn() {
+    public void enabledWhenPrefOnOnY2() {
         prefs.edit().putBoolean(RadioExperiment.PREF_RADIO_EXPERIMENT, true).commit();
         if (!RadioExperiment.isEnabled(prefs)) {
-            throw new AssertionError("radio experiment should be on");
+            throw new AssertionError("radio experiment should be on on Y2 when pref is set");
+        }
+    }
+
+    @Test
+    public void alwaysEnabledOnY1() {
+        com.solar.launcher.DeviceFeatures.setCachedFamilyForTest("y1");
+        if (!RadioExperiment.isEnabled(prefs)) {
+            throw new AssertionError("radio experiment should be enabled by default on Y1");
+        }
+        prefs.edit().putBoolean(RadioExperiment.PREF_RADIO_EXPERIMENT, false).commit();
+        if (!RadioExperiment.isEnabled(prefs)) {
+            throw new AssertionError("radio experiment should remain enabled on Y1 even if pref is false");
         }
     }
 

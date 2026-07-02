@@ -63,6 +63,10 @@ public final class DeviceFeatures {
         return !isY2();
     }
 
+    public static void setCachedFamilyForTest(String family) {
+        cachedFamily = family;
+    }
+
     static void resetCacheForTest() {
         cachedFamily = null;
     }

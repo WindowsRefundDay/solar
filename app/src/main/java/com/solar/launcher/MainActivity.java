@@ -1072,6 +1072,11 @@ public class MainActivity extends Activity {
     private volatile long wifiConfiguredNetworksCacheAtMs;
     private boolean btContextPendingDisable = false;
     private boolean btContextPendingEnable = false;
+
+    // ponytail: FM Radio airplane mode restore — save radios state before disabling airplane mode.
+    private boolean fmRadioAirplaneRestore = false;
+    private boolean fmRadioSavedWifiOn = false;
+    private boolean fmRadioSavedBtOn = false;
     private static final long NETWORK_RESCAN_INTERVAL_MS = 18_000L;
     private static final long WIFI_CONTEXT_REFRESH_DEBOUNCE_MS = 1_200L;
     private static final long WIFI_CONTEXT_SCAN_DEBOUNCE_MS = 900L;
@@ -2107,6 +2112,11 @@ public class MainActivity extends Activity {
         // Both are registered as launchers — only one should be enabled at a time.
         LauncherSwitch.ensureRockboxDisabled(this);
 
+        // ponytail: Force Y2 to run in Landscape orientation 480x360p.
+        if (DeviceFeatures.isY2()) {
+            setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+        }
+
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
         setContentView(R.layout.activity_main);
@@ -2581,7 +2591,7 @@ public class MainActivity extends Activity {
         initFlowScreen();
         layoutVolumeOverlay = findViewById(R.id.layout_volume_overlay);
         volumeProgress = findViewById(R.id.volume_progress);
-        volumeProgress.setMax(audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC));
+        volumeProgress.setMax(audioManager.getStreamMaxVolume(activeVolumeStream()));
 
         layoutSettingsMode = findViewById(R.id.layout_settings_mode);
         containerSettingsItems = findViewById(R.id.container_settings_items);
@@ -7913,11 +7923,19 @@ public class MainActivity extends Activity {
             currentBrowserMode = BROWSER_ROOT;
             changeScreen(STATE_BROWSER);
         } else if (HomeMenuConfig.ID_BLUETOOTH.equals(id)) {
-            openScreenWithReturn(STATE_BLUETOOTH);
+            if (BluetoothExperiment.isEnabled(prefs)) {
+                openScreenWithReturn(STATE_BLUETOOTH);
+            } else {
+                launchAndroidBluetoothSettings();
+            }
         } else if (HomeMenuConfig.ID_SETTINGS.equals(id)) {
             changeScreen(STATE_SETTINGS);
         } else if (HomeMenuConfig.ID_RADIO.equals(id) || HomeMenuConfig.ID_FM.equals(id)) {
-            changeScreen(MediaSuiteHost.STATE_RADIO);
+            if (com.solar.launcher.radio.RadioExperiment.isEnabled(prefs)) {
+                changeScreen(MediaSuiteHost.STATE_RADIO);
+            } else {
+                launchMtkFmRadio();
+            }
         } else if (HomeMenuConfig.ID_PC_UPLOAD.equals(id)) {
             if (!ConnectivityHelper.hasLocalNetwork(this)) {
                 Toast.makeText(this, getString(R.string.toast_requires_wifi), Toast.LENGTH_SHORT).show();
@@ -13392,6 +13410,9 @@ public class MainActivity extends Activity {
         if (RowKeys.DEBUG_RADIO_EXPERIMENT.equals(rowKey)) {
             return stateOnOff(com.solar.launcher.radio.RadioExperiment.isEnabled(prefs));
         }
+        if (RowKeys.DEBUG_BLUETOOTH_EXPERIMENT.equals(rowKey)) {
+            return stateOnOff(BluetoothExperiment.isEnabled(prefs));
+        }
         if (RowKeys.DEBUG_FLOW_ENABLED.equals(rowKey) || RowKeys.FLOW.equals(rowKey)) {
             return stateOnOff(isFlowEnabled());
         }
@@ -14581,9 +14602,9 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
         // #endregion
         int volMax = audioManager != null
-                ? audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) : 15;
+                ? audioManager.getStreamMaxVolume(activeVolumeStream()) : 15;
         int volCur = audioManager != null
-                ? audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) : 0;
+                ? audioManager.getStreamVolume(activeVolumeStream()) : 0;
         int volIcon = ThemedContextMenu.volumeIconResForLevel(volCur, volMax);
         int brightIcon = ThemedContextMenu.brightnessIconResForLevel(currentSystemBrightness, 255);
         return new ThemedContextMenu.QuickItem[] {
@@ -15032,8 +15053,8 @@ public class MainActivity extends Activity {
         contextMenuInVolumeSlider = true;
         contextMenuVolumeOnly = false;
         volumeHandler.removeCallbacks(hideVolumeContextTask);
-        int volMax = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
-        int volCur = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+        int volMax = audioManager.getStreamMaxVolume(activeVolumeStream());
+        int volCur = audioManager.getStreamVolume(activeVolumeStream());
         try {
             currentSystemBrightness = Settings.System.getInt(getContentResolver(),
                     Settings.System.SCREEN_BRIGHTNESS, currentSystemBrightness);
@@ -15051,8 +15072,8 @@ public class MainActivity extends Activity {
         if (audioManager == null || themedContextMenu == null) return;
         if (backKeyHeld) return;
         if (layoutVolumeOverlay != null) layoutVolumeOverlay.setVisibility(View.GONE);
-        int max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
-        int cur = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+        int max = audioManager.getStreamMaxVolume(activeVolumeStream());
+        int cur = audioManager.getStreamVolume(activeVolumeStream());
         contextMenuInVolumeSlider = true;
         contextMenuVolumeOnly = true;
         volumeHandler.removeCallbacks(hideVolumeContextTask);
@@ -15080,8 +15101,8 @@ public class MainActivity extends Activity {
 
     private void refreshContextMediaSlidersUi() {
         if (themedContextMenu == null || audioManager == null || !contextMenuInVolumeSlider) return;
-        int max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
-        int cur = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+        int max = audioManager.getStreamMaxVolume(activeVolumeStream());
+        int cur = audioManager.getStreamVolume(activeVolumeStream());
         themedContextMenu.updateVolumeSlider(cur, max);
         themedContextMenu.updateBrightnessSlider(currentSystemBrightness, 255);
         if (contextMenuVolumeOnly) {
@@ -16300,6 +16321,79 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {}
             // #endregion
         } catch (Exception ignored) {}
+    }
+
+    /** ponytail: Y1-only — disable airplane mode, save Wi-Fi/BT state, launch MTK FM Radio. */
+    private void launchMtkFmRadio() {
+        try {
+            android.content.ContentResolver cr = getContentResolver();
+            boolean airplaneOn = android.provider.Settings.Global.getInt(
+                    cr, android.provider.Settings.Global.AIRPLANE_MODE_ON, 0) != 0;
+            if (airplaneOn) {
+                android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
+                        getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
+                fmRadioSavedWifiOn = wm != null && wm.isWifiEnabled();
+                fmRadioSavedBtOn = ba != null && ba.isEnabled();
+                fmRadioAirplaneRestore = true;
+                android.provider.Settings.Global.putInt(cr,
+                        android.provider.Settings.Global.AIRPLANE_MODE_ON, 0);
+                sendBroadcast(new android.content.Intent(
+                        android.content.Intent.ACTION_AIRPLANE_MODE_CHANGED)
+                        .putExtra("state", false));
+            }
+            android.content.Intent fmIntent = new android.content.Intent();
+            fmIntent.setComponent(new android.content.ComponentName(
+                    "com.mediatek.FMRadio", "com.mediatek.FMRadio.FMRadioActivity"));
+            fmIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(fmIntent);
+        } catch (Exception e) {
+            Toast.makeText(this, "FM Radio app not found", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /** ponytail: restore airplane mode + revert Wi-Fi/BT to the state before FM Radio launch. */
+    private void restoreAirplaneModeAfterFmRadio() {
+        if (!fmRadioAirplaneRestore) return;
+        fmRadioAirplaneRestore = false;
+        try {
+            android.content.ContentResolver cr = getContentResolver();
+            android.provider.Settings.Global.putInt(cr,
+                    android.provider.Settings.Global.AIRPLANE_MODE_ON, 1);
+            sendBroadcast(new android.content.Intent(
+                    android.content.Intent.ACTION_AIRPLANE_MODE_CHANGED)
+                    .putExtra("state", true));
+            // Restore radios to whatever the user had before — airplane mode kill-all is async,
+            // so post the restore after a short delay to let the mode change settle.
+            final boolean restoreWifi = fmRadioSavedWifiOn;
+            final boolean restoreBt = fmRadioSavedBtOn;
+            new android.os.Handler(getMainLooper()).postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        if (restoreWifi) {
+                            android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager)
+                                    getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                            if (wm != null) wm.setWifiEnabled(true);
+                        }
+                        if (restoreBt) {
+                            BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
+                            if (ba != null) ba.enable();
+                        }
+                    } catch (Exception ignored) {}
+                }
+            }, 1200);
+        } catch (Exception ignored) {}
+    }
+
+    /** Launch the system Bluetooth settings activity (fallback when BT experiment is off). */
+    private void launchAndroidBluetoothSettings() {
+        try {
+            startActivity(new android.content.Intent(
+                    android.provider.Settings.ACTION_BLUETOOTH_SETTINGS));
+        } catch (Exception e) {
+            Toast.makeText(this, "Bluetooth settings not available", Toast.LENGTH_SHORT).show();
+        }
     }
 
     @android.annotation.SuppressLint("MissingPermission")
@@ -23302,8 +23396,12 @@ public class MainActivity extends Activity {
         btnBtMenu.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                openScreenWithReturn(STATE_BLUETOOTH);
                 clickFeedback();
+                if (BluetoothExperiment.isEnabled(prefs)) {
+                    openScreenWithReturn(STATE_BLUETOOTH);
+                } else {
+                    launchAndroidBluetoothSettings();
+                }
             }
         });
         containerSettingsItems.addView(btnBtMenu);
@@ -27203,6 +27301,10 @@ public class MainActivity extends Activity {
         btnRadioExperiment.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                if (com.solar.launcher.DeviceFeatures.isY1()) {
+                    // ponytail: Y1 FM radio experiment is forced enabled and cannot be turned off.
+                    return;
+                }
                 clickFeedback();
                 boolean enable = !com.solar.launcher.radio.RadioExperiment.isEnabled(prefs);
                 prefs.edit().putBoolean(com.solar.launcher.radio.RadioExperiment.PREF_RADIO_EXPERIMENT,
@@ -27213,6 +27315,21 @@ public class MainActivity extends Activity {
         });
         containerSettingsItems.addView(btnRadioExperiment);
         refreshSettingsPreview(RowKeys.DEBUG_RADIO_EXPERIMENT);
+
+        final LinearLayout btnBtExperiment = createSettingsRow(RowKeys.DEBUG_BLUETOOTH_EXPERIMENT,
+                R.string.settings_debug_bluetooth_experiment, false);
+        btnBtExperiment.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                clickFeedback();
+                boolean enable = !BluetoothExperiment.isEnabled(prefs);
+                prefs.edit().putBoolean(BluetoothExperiment.PREF_BLUETOOTH_EXPERIMENT,
+                        enable).apply();
+                refreshSettingsPreview(RowKeys.DEBUG_BLUETOOTH_EXPERIMENT);
+            }
+        });
+        containerSettingsItems.addView(btnBtExperiment);
+        refreshSettingsPreview(RowKeys.DEBUG_BLUETOOTH_EXPERIMENT);
 
         final LinearLayout btnDiag = createSettingsRow(RowKeys.DIAG_AUTO_REPORT,
                 R.string.settings_diag_auto_report, false);
@@ -39015,14 +39132,20 @@ public class MainActivity extends Activity {
         return true;
     }
 
+    /** ponytail: active audio stream — STREAM_FM (10) for FM Radio, STREAM_MUSIC otherwise. */
+    private int activeVolumeStream() {
+        return (playback != null && playback.isFmActive()) ? 10 : AudioManager.STREAM_MUSIC;
+    }
+
     private void adjustVolume(boolean up) {
-        int currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
-        int maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+        int stream = activeVolumeStream();
+        int currentVol = audioManager.getStreamVolume(stream);
+        int maxVol = audioManager.getStreamMaxVolume(stream);
         if (up && currentVol < maxVol)
             currentVol++;
         else if (!up && currentVol > 0)
             currentVol--;
-        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, currentVol, 0);
+        audioManager.setStreamVolume(stream, currentVol, 0);
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
@@ -39769,6 +39892,7 @@ public class MainActivity extends Activity {
             scheduleAdbOpenSoulseekMessagesIfRequested();
         }
         scheduleAdbFlowCarouselIfRequested();
+        restoreAirplaneModeAfterFmRadio();
     }
 
     @Override

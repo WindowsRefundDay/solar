@@ -74,7 +74,7 @@ public final class FlowView extends View {
     private int reflectionTint = 0x44FFFFFF;
     /** Debug: skip floor reflection draws — compare carousel perf on device. */
     private boolean noReflections = false;
-    private static final float FLOW_REFLECTION_ALPHA = 0.50f;
+    private static final float FLOW_REFLECTION_ALPHA = 0.18f;
     private static final int CENTER_REFLECTION_MAX_BANDS = 36;
     private static final int SIDE_REFLECTION_MAX_BANDS = 14;
     private boolean debugTheme;
@@ -1625,8 +1625,9 @@ public final class FlowView extends View {
     }
 
     static float reflectionAlphaForDraw(float coverAlpha, float revealAlpha, boolean isVisualCenter) {
-        // Cover alpha can differ per slot during scroll/flip; reflections stay uniformly low.
-        return reflectionAlphaForSlot(revealAlpha, isVisualCenter);
+        // ponytail: reflection must track cover opacity so side covers dim reflections
+        // during flip/tracklist browse — otherwise reflections are brighter than covers.
+        return coverAlpha * reflectionAlphaForSlot(revealAlpha, isVisualCenter);
     }
 
     /** @deprecated use {@link #shouldSkipCoverReflection(boolean, boolean)} */

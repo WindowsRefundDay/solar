@@ -10,8 +10,11 @@ public final class RadioExperiment {
 
     private RadioExperiment() {}
 
-    /** Off by default; enable from Settings → Debug and Experiments. */
+    /** Enabled by default (and locked) for Y1; off by default for Y2. */
     public static boolean isEnabled(SharedPreferences prefs) {
+        if (com.solar.launcher.DeviceFeatures.isY1()) {
+            return true;
+        }
         return prefs != null && prefs.getBoolean(PREF_RADIO_EXPERIMENT, false);
     }
 
