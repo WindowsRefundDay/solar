@@ -27580,23 +27580,25 @@ public class MainActivity extends Activity {
             @Override public int progressInterval() { return progressInterval; }
         };
         long tScan0 = System.currentTimeMillis();
-        java.util.List<SongItem> found = LibraryScanner.scan(rootFolder, store,
+        LibraryScanner.ScanResult result = LibraryScanner.scan(rootFolder, store,
                 blacklist, prefs, seenPaths, scanCb);
         if (libraryScanGen != gen) {
             abortLibraryScanWorker(gen);
             return;
         }
-        scanned.addAll(found);
+        scanned.addAll(result.items);
+        long scanMs = System.currentTimeMillis() - tScan0;
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
             d.put("gen", gen);
             d.put("scanned", scanned.size());
-            d.put("ms", System.currentTimeMillis() - tScan0);
+            d.put("ms", scanMs);
             Debug898913Log.logAlways("MainActivity.runLibraryScanWorker",
                     "parallel scan done", "H3,H4", d);
         } catch (Exception ignored) {}
         // #endregion
+        // Perf log: full scan timing is recorded after album-art ingest below.
         store.deleteExcept(seenPaths);
         reconcileCustomLibrary(scanned);
         normalizeLibraryAlbumTitles();
@@ -27617,6 +27619,7 @@ public class MainActivity extends Activity {
                     "scan ui finish scheduled, art async", "H5", d);
         } catch (Exception ignored) {}
         // #endregion
+        ScanPerfLog.record(scanned.size(), scanMs, result.phases());
         if (libraryScanGen != gen) {
             abortLibraryScanWorker(gen);
             return;

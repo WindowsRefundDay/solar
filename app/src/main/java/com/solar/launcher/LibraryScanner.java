@@ -16,6 +16,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import org.json.JSONObject;
+
 /**
  * Parallel library scan worker.
  *
@@ -43,6 +45,32 @@ public final class LibraryScanner {
         int progressInterval();
     }
 
+    /** Result of a scan: resolved items plus per-phase timing. */
+    public static final class ScanResult {
+        public final List<MainActivity.SongItem> items;
+        public final long totalMs;
+        public final long collectMs;
+        public final long partitionMs;
+        public final long tagReadMs;
+        public final long persistMs;
+        public final long mergeMs;
+
+        ScanResult(List<MainActivity.SongItem> items, long totalMs, long collectMs,
+                long partitionMs, long tagReadMs, long persistMs, long mergeMs) {
+            this.items = items;
+            this.totalMs = totalMs;
+            this.collectMs = collectMs;
+            this.partitionMs = partitionMs;
+            this.tagReadMs = tagReadMs;
+            this.persistMs = persistMs;
+            this.mergeMs = mergeMs;
+        }
+
+        public JSONObject phases() {
+            return ScanPerfLog.phases(collectMs, partitionMs, tagReadMs, persistMs, mergeMs);
+        }
+    }
+
     /**
      * Scan {@code root} for audio files and return a deduplicated list of library items.
      *
@@ -54,31 +82,49 @@ public final class LibraryScanner {
      * @param cb          cancellation/progress callback
      * @return resolved song items, never null
      */
-    public static List<MainActivity.SongItem> scan(File root, MusicLibraryStore store,
+    public static ScanResult scan(File root, MusicLibraryStore store,
             Set<String> blacklist, SharedPreferences prefs, Set<String> seenPaths, Callback cb) {
         if (root == null || !root.isDirectory() || cb == null || seenPaths == null) {
-            return Collections.emptyList();
+            return emptyResult();
         }
-        if (cb.isCancelled()) return Collections.emptyList();
+        long t0 = System.currentTimeMillis();
+        if (cb.isCancelled()) return emptyResult();
 
+        long t1 = System.currentTimeMillis();
         List<File> audioFiles = collectAudioFiles(root, blacklist, seenPaths, cb);
+        long collectMs = System.currentTimeMillis() - t1;
         if (audioFiles.isEmpty() || cb.isCancelled()) {
-            return Collections.emptyList();
+            return emptyResult();
         }
 
+        t1 = System.currentTimeMillis();
         List<MainActivity.SongItem> freshItems = new ArrayList<MainActivity.SongItem>();
         List<File> staleFiles = new ArrayList<File>();
         partitionByFreshness(audioFiles, store, freshItems, staleFiles);
+        long partitionMs = System.currentTimeMillis() - t1;
 
-        if (cb.isCancelled()) return Collections.emptyList();
+        if (cb.isCancelled()) return emptyResult();
 
+        t1 = System.currentTimeMillis();
         List<TagResult> staleResults = readTagsParallel(staleFiles, prefs, cb);
+        long tagReadMs = System.currentTimeMillis() - t1;
 
+        t1 = System.currentTimeMillis();
         if (!staleResults.isEmpty()) {
             persistBatch(staleResults, store);
         }
+        long persistMs = System.currentTimeMillis() - t1;
 
-        return mergeAndDedup(freshItems, staleResults, cb);
+        t1 = System.currentTimeMillis();
+        List<MainActivity.SongItem> items = mergeAndDedup(freshItems, staleResults, cb);
+        long mergeMs = System.currentTimeMillis() - t1;
+
+        long totalMs = System.currentTimeMillis() - t0;
+        return new ScanResult(items, totalMs, collectMs, partitionMs, tagReadMs, persistMs, mergeMs);
+    }
+
+    private static ScanResult emptyResult() {
+        return new ScanResult(Collections.<MainActivity.SongItem>emptyList(), 0, 0, 0, 0, 0, 0);
     }
 
     private static List<File> collectAudioFiles(File root, Set<String> blacklist,
