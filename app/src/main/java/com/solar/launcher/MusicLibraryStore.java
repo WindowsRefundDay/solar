@@ -28,6 +28,30 @@ public class MusicLibraryStore extends SolarDbHelper {
     private static MusicLibraryStore instance;
     private boolean legacyTrackNumbersMigrated;
 
+    /** Batch upsert input — avoids per-row method-call overhead during scans. */
+    public static final class Upsert {
+        public final File file;
+        public final String title;
+        public final String artist;
+        public final String album;
+        public final String genre;
+        public final String albumArtist;
+        public final String durationMs;
+        public final int trackNumber;
+
+        public Upsert(File file, String title, String artist, String album,
+                String genre, String albumArtist, String durationMs, int trackNumber) {
+            this.file = file;
+            this.title = title != null ? title : "";
+            this.artist = artist != null ? artist : "";
+            this.album = album != null ? album : "";
+            this.genre = genre != null ? genre : "";
+            this.albumArtist = albumArtist != null ? albumArtist : "";
+            this.durationMs = durationMs != null ? durationMs : "";
+            this.trackNumber = trackNumber;
+        }
+    }
+
     /** Cached row — maps to {@link MainActivity}'s SongItem fields. */
     public static final class Track {
         public final String path;
@@ -168,6 +192,17 @@ public class MusicLibraryStore extends SolarDbHelper {
         return null;
     }
 
+    /**
+     * Cached track only when it matches the current file stat.
+     * Single DB lookup instead of {@link #isFresh(File)} + {@link #get(String)}.
+     */
+    public Track getFresh(File file) {
+        if (file == null || !file.isFile()) return null;
+        Track t = get(file.getAbsolutePath());
+        if (t == null) return null;
+        return t.mtime == file.lastModified() && t.size == file.length() ? t : null;
+    }
+
     /** True when cached row matches current file stat — skip MediaMetadataRetriever. */
     public boolean isFresh(File file) {
         migrateLegacyZeroTrackNumbers();
@@ -194,6 +229,43 @@ public class MusicLibraryStore extends SolarDbHelper {
                 "INSERT OR REPLACE INTO tracks"
                         + " (path,mtime,size,title,artist,album,genre,album_artist,duration_ms,track_number)"
                         + " VALUES (?,?,?,?,?,?,?,?,?,?)");
+        try {
+            bindUpsert(st, file, title, artist, album, genre, albumArtist, durationMs, trackNumber);
+            st.executeInsert();
+        } finally {
+            st.close();
+        }
+    }
+
+    /**
+     * Batch upsert inside a single transaction — much faster than one transaction per row
+     * when importing thousands of tracks during a library scan.
+     */
+    public void upsertBatch(List<Upsert> tracks) {
+        if (tracks == null || tracks.isEmpty()) return;
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        SQLiteStatement st = db.compileStatement(
+                "INSERT OR REPLACE INTO tracks"
+                        + " (path,mtime,size,title,artist,album,genre,album_artist,duration_ms,track_number)"
+                        + " VALUES (?,?,?,?,?,?,?,?,?,?)");
+        try {
+            for (Upsert t : tracks) {
+                bindUpsert(st, t.file, t.title, t.artist, t.album, t.genre,
+                        t.albumArtist, t.durationMs, t.trackNumber);
+                st.executeInsert();
+                st.clearBindings();
+            }
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+            st.close();
+        }
+    }
+
+    private static void bindUpsert(SQLiteStatement st, File file, String title, String artist,
+            String album, String genre, String albumArtist, String durationMs, int trackNumber) {
+        if (trackNumber == 0) trackNumber = -1;
         st.bindString(1, file.getAbsolutePath());
         st.bindLong(2, file.lastModified());
         st.bindLong(3, file.length());
@@ -204,7 +276,6 @@ public class MusicLibraryStore extends SolarDbHelper {
         st.bindString(8, albumArtist != null ? albumArtist : "");
         st.bindString(9, durationMs != null ? durationMs : "");
         st.bindLong(10, trackNumber);
-        st.executeInsert();
     }
 
     /** Wipe all cached track rows — Settings reset / cache clear. */
