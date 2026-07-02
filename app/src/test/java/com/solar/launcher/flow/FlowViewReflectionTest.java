@@ -2,6 +2,7 @@ package com.solar.launcher.flow;
 
 import org.junit.Test;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -11,6 +12,20 @@ public class FlowViewReflectionTest {
     public void reflectionsOnUnlessDebugPref() {
         assertFalse(FlowView.shouldSkipCoverReflection(false));
         assertTrue(FlowView.shouldSkipCoverReflection(true));
+    }
+
+    @Test
+    public void sideCoverReflectionsOnByDefault() {
+        assertFalse(FlowView.shouldSkipCoverReflection(false, false));
+    }
+
+    @Test
+    public void reflectionAlphaIsUniformLowOpacity() {
+        assertEquals(0.5f, FlowView.reflectionAlphaForSlot(1f, true), 0.001f);
+        assertEquals(0.5f, FlowView.reflectionAlphaForSlot(1f, false), 0.001f);
+        assertEquals(0.25f, FlowView.reflectionAlphaForSlot(0.5f, false), 0.001f);
+        assertEquals(0.5f, FlowView.reflectionAlphaForDraw(0.25f, 1f, false), 0.001f);
+        assertEquals(0.5f, FlowView.reflectionAlphaForDraw(1f, 1f, true), 0.001f);
     }
 
     @Test

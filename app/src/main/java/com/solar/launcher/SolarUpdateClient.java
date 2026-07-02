@@ -286,7 +286,7 @@ public final class SolarUpdateClient {
             if (onNightly) {
                 if (!r.nightly) continue;
                 if (!includeInNightlyPicker(r, localCode, local)) continue;
-            } else if (r.nightly) {
+            } else if (r.nightly && !isTimestampNightly(r.tag)) {
                 continue;
             }
             channel.add(r);
@@ -341,7 +341,7 @@ public final class SolarUpdateClient {
         List<ReleaseInfo> stables = new ArrayList<ReleaseInfo>();
         List<ReleaseInfo> nightlies = new ArrayList<ReleaseInfo>();
         for (ReleaseInfo r : all) {
-            if (r.nightly && isTimestampNightly(r.tag)) nightlies.add(r);
+            if (r.nightly) nightlies.add(r);
             else stables.add(r);
         }
         sortNewestFirst(stables);

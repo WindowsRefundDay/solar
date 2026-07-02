@@ -22,6 +22,10 @@ public final class FlowAlbumArt3d {
     private static final Camera camera = new Camera();
     private static final Matrix matrix = new Matrix();
     private static final RectF bitmapSrc = new RectF();
+    private static final Matrix reflectionFlipMatrix = new Matrix();
+    private static final Matrix reflectionMatrix = new Matrix();
+    private static final RectF reflectionRowRect = new RectF();
+    private static final RectF reflectionParentClipRect = new RectF();
 
     private FlowAlbumArt3d() {}
 
@@ -135,6 +139,20 @@ public final class FlowAlbumArt3d {
 
     public static void drawReflectionFloor(Canvas canvas, Bitmap bmp, RectF squareRect,
             float alpha, float reflectHeight, int[] reflectTable, Paint reflectionPaint, Matrix slotMatrix) {
+        drawReflectionFloorInternal(canvas, bmp, squareRect, alpha, reflectHeight, reflectTable,
+                reflectionPaint, slotMatrix, 0);
+    }
+
+    public static void drawReflectionFloorCoarse(Canvas canvas, Bitmap bmp, RectF squareRect,
+            float alpha, float reflectHeight, int[] reflectTable, Paint reflectionPaint,
+            Matrix slotMatrix, int maxBands) {
+        drawReflectionFloorInternal(canvas, bmp, squareRect, alpha, reflectHeight, reflectTable,
+                reflectionPaint, slotMatrix, Math.max(1, maxBands));
+    }
+
+    private static void drawReflectionFloorInternal(Canvas canvas, Bitmap bmp, RectF squareRect,
+            float alpha, float reflectHeight, int[] reflectTable, Paint reflectionPaint,
+            Matrix slotMatrix, int maxBands) {
         if (canvas == null || bmp == null || bmp.isRecycled() || squareRect == null) return;
         if (reflectHeight <= 0f || reflectionPaint == null) return;
         RectF square = squareBounds(squareRect);
@@ -142,14 +160,15 @@ public final class FlowAlbumArt3d {
         int rows = reflectTable != null && reflectTable.length > 0
                 ? reflectTable.length : Math.max(1, Math.round(reflectHeight));
         float rowH = reflectHeight / rows;
+        int bands = maxBands > 0 ? Math.min(rows, maxBands) : rows;
 
         bitmapSrc.set(0f, 0f, bmp.getWidth(), bmp.getHeight());
 
-        Matrix flipMatrix = new Matrix();
-        flipMatrix.setRectToRect(bitmapSrc, square, Matrix.ScaleToFit.FILL);
-        flipMatrix.postScale(1f, -1f, square.centerX(), square.bottom);
+        reflectionFlipMatrix.reset();
+        reflectionFlipMatrix.setRectToRect(bitmapSrc, square, Matrix.ScaleToFit.FILL);
+        reflectionFlipMatrix.postScale(1f, -1f, square.centerX(), square.bottom);
 
-        Matrix reflectionMatrix = new Matrix(flipMatrix);
+        reflectionMatrix.set(reflectionFlipMatrix);
         if (slotMatrix != null) {
             reflectionMatrix.postConcat(slotMatrix);
         }
@@ -157,28 +176,30 @@ public final class FlowAlbumArt3d {
         int oldAlpha = reflectionPaint.getAlpha();
         reflectionPaint.setShader(null);
 
-        RectF rowRect = new RectF();
-        RectF parentClipRect = new RectF();
-
-        for (int row = 0; row < rows; row++) {
-            int tableA = reflectTable != null && row < reflectTable.length
-                    ? reflectTable[row] : (768 * (rows - row) / rows);
+        for (int band = 0; band < bands; band++) {
+            int rowStart = band * rows / bands;
+            int rowEnd = (band + 1) * rows / bands;
+            if (rowEnd <= rowStart) rowEnd = rowStart + 1;
+            int sampleRow = (rowStart + rowEnd - 1) / 2;
+            int tableA = reflectTable != null && sampleRow < reflectTable.length
+                    ? reflectTable[sampleRow] : (768 * (rows - sampleRow) / rows);
             int peakAlpha = (tableA * Math.round(alpha * 256) + 129) >> 8;
             peakAlpha = Math.min(255, Math.max(0, peakAlpha * 255 / 768));
             peakAlpha = Math.round(peakAlpha * REFLECT_PEAK_FRAC);
             if (peakAlpha <= 0) continue;
 
-            float y0 = square.bottom + row * rowH;
-            float y1 = (row == rows - 1) ? (square.bottom + reflectHeight) : y0 + rowH;
+            float y0 = square.bottom + rowStart * rowH;
+            float y1 = (band == bands - 1) ? (square.bottom + reflectHeight)
+                    : (square.bottom + rowEnd * rowH);
 
-            rowRect.set(square.left, y0, square.right, y1);
+            reflectionRowRect.set(square.left, y0, square.right, y1);
 
             canvas.save();
             if (slotMatrix != null) {
-                slotMatrix.mapRect(parentClipRect, rowRect);
-                canvas.clipRect(parentClipRect);
+                slotMatrix.mapRect(reflectionParentClipRect, reflectionRowRect);
+                canvas.clipRect(reflectionParentClipRect);
             } else {
-                canvas.clipRect(rowRect);
+                canvas.clipRect(reflectionRowRect);
             }
 
             reflectionPaint.setAlpha(peakAlpha);

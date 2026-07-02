@@ -145,17 +145,61 @@ public final class PlaylistManager {
     w.close();
   }
 
-  /** ponytail: URI relativize — M3U paths use forward slashes on all platforms. */
+  /** ponytail: M3U paths use forward slashes and may point to sibling folders. */
   static String relativize(File baseDir, File file) {
     if (baseDir == null || file == null) return file != null ? file.getAbsolutePath() : "";
     try {
-      java.net.URI baseUri = baseDir.getCanonicalFile().toURI();
-      java.net.URI fileUri = file.getCanonicalFile().toURI();
-      String path = baseUri.relativize(fileUri).getPath();
+      String path = relativePath(baseDir.getCanonicalPath(), file.getCanonicalPath());
       if (path == null || path.isEmpty()) return file.getName();
       return path;
     } catch (Exception ignored) {}
     return file.getAbsolutePath();
+  }
+
+  private static String relativePath(String baseDir, String file) {
+    String base = normalizePath(baseDir);
+    String target = normalizePath(file);
+    if (!sameRoot(base, target)) return target;
+    String[] baseParts = pathParts(base);
+    String[] targetParts = pathParts(target);
+    int common = 0;
+    int max = Math.min(baseParts.length, targetParts.length);
+    while (common < max && baseParts[common].equals(targetParts[common])) common++;
+
+    StringBuilder out = new StringBuilder();
+    for (int i = common; i < baseParts.length; i++) {
+      if (baseParts[i].length() == 0) continue;
+      if (out.length() > 0) out.append('/');
+      out.append("..");
+    }
+    for (int i = common; i < targetParts.length; i++) {
+      if (targetParts[i].length() == 0) continue;
+      if (out.length() > 0) out.append('/');
+      out.append(targetParts[i]);
+    }
+    return out.toString();
+  }
+
+  private static String normalizePath(String path) {
+    return path == null ? "" : path.replace('\\', '/');
+  }
+
+  private static String[] pathParts(String path) {
+    String p = path;
+    while (p.startsWith("/")) p = p.substring(1);
+    while (p.endsWith("/") && p.length() > 1) p = p.substring(0, p.length() - 1);
+    if (p.isEmpty() || "/".equals(p)) return new String[0];
+    return p.split("/");
+  }
+
+  private static boolean sameRoot(String a, String b) {
+    boolean aAbs = a.startsWith("/");
+    boolean bAbs = b.startsWith("/");
+    if (aAbs != bAbs) return false;
+    if (a.length() >= 2 && b.length() >= 2 && a.charAt(1) == ':' && b.charAt(1) == ':') {
+      return Character.toLowerCase(a.charAt(0)) == Character.toLowerCase(b.charAt(0));
+    }
+    return true;
   }
 
   public static Entry fromTracks(String name, List<File> tracks) {

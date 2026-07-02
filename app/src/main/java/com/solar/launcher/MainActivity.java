@@ -283,7 +283,7 @@ public class MainActivity extends Activity {
     private Object mediaSessionShim;
     private AvrcpTrackInfoWriter avrcpTrackInfoWriter;
     // 💡 [추가] OS 스캐너를 대체할 '자체 미디어 라이브러리 엔진' 변수들
-    private static class SongItem {
+    static class SongItem {
         File file;
         String title;
         String artist;
@@ -1956,7 +1956,7 @@ public class MainActivity extends Activity {
 
     /** ponytail: register receivers, library scan, and full theme bootstrap after home is visible. */
     private void scheduleDeferredColdStartWork() {
-        clockHandler.post(new Runnable() {
+        Runnable work = new Runnable() {
             @Override
             public void run() {
                 registerDeferredSystemReceivers();
@@ -1971,7 +1971,13 @@ public class MainActivity extends Activity {
                     startLibraryScan(false);
                 }
             }
-        });
+        };
+        long delayMs = 250L;
+        if (layoutMainMenu != null) {
+            layoutMainMenu.postDelayed(work, delayMs);
+        } else {
+            clockHandler.postDelayed(work, delayMs);
+        }
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -9192,6 +9198,9 @@ public class MainActivity extends Activity {
                 }
                 return;
             }
+            if (currentScreenState == STATE_BLUETOOTH && !isBluetoothListFocusValid()) {
+                restoreBluetoothListFocus(null, false);
+            }
             View c = getCurrentFocus();
             if (c != null) {
                 if (System.currentTimeMillis() < suppressListClickUntil) return;
@@ -11565,6 +11574,7 @@ public class MainActivity extends Activity {
     private void startBluetoothScan(boolean requestFocus) {
         updateStatusBarTitle();
         syncBluetoothContextPendingFlags();
+        final String restoreFocusAddress = requestFocus ? null : bluetoothFocusedAddress();
         final BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
         boolean isOn = false;
         String statusText = "OFF";
@@ -11610,9 +11620,7 @@ public class MainActivity extends Activity {
         }
 
         if (!isOn) {
-            if (requestFocus && containerBtItems.getChildCount() > 0) {
-                containerBtItems.getChildAt(0).requestFocus();
-            }
+            restoreBluetoothListFocus(restoreFocusAddress, requestFocus);
             updateNetworkRescanLoop();
             return;
         }
@@ -11630,9 +11638,7 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
         }
 
-        if (requestFocus && containerBtItems.getChildCount() > 0) {
-            containerBtItems.getChildAt(0).requestFocus();
-        }
+        restoreBluetoothListFocus(restoreFocusAddress, requestFocus);
 
         triggerBluetoothDiscovery(false);
         updateNetworkRescanLoop();
@@ -11678,6 +11684,51 @@ public class MainActivity extends Activity {
         containerBtItems.addView(row);
     }
 
+    @android.annotation.SuppressLint("MissingPermission")
+    private String bluetoothFocusedAddress() {
+        View c = getCurrentFocus();
+        while (c != null) {
+            Object tag = c.getTag();
+            if (tag instanceof BluetoothDevice) {
+                return ((BluetoothDevice) tag).getAddress();
+            }
+            if (c == containerBtItems) return null;
+            Object parent = c.getParent();
+            c = parent instanceof View ? (View) parent : null;
+        }
+        return null;
+    }
+
+    private boolean isBluetoothListFocusValid() {
+        View focused = getCurrentFocus();
+        return focused != null && focused.isShown() && focused.isFocusable()
+                && containerBtItems != null && isViewDescendantOf(focused, containerBtItems);
+    }
+
+    @android.annotation.SuppressLint("MissingPermission")
+    private boolean restoreBluetoothListFocus(String preferredAddress, boolean forceFirst) {
+        if (containerBtItems == null || containerBtItems.getChildCount() == 0) return false;
+        if (!forceFirst && preferredAddress == null && isBluetoothListFocusValid()) return true;
+        if (!forceFirst && preferredAddress != null) {
+            for (int i = 0; i < containerBtItems.getChildCount(); i++) {
+                View row = containerBtItems.getChildAt(i);
+                Object tag = row != null ? row.getTag() : null;
+                if (!(tag instanceof BluetoothDevice)) continue;
+                String addr = ((BluetoothDevice) tag).getAddress();
+                if (preferredAddress.equals(addr) && row.requestFocus()) return true;
+            }
+        }
+        if (!forceFirst && isBluetoothListFocusValid()) return true;
+        for (int i = 0; i < containerBtItems.getChildCount(); i++) {
+            View row = containerBtItems.getChildAt(i);
+            if (row != null && row.getVisibility() == View.VISIBLE && row.isEnabled()
+                    && row.isFocusable() && row.requestFocus()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Bluetooth settings list row — themed like other Y1 menus with inline connection state. */
     private LinearLayout createBluetoothDeviceRow(String name, BluetoothDevice device) {
         final int rowKind = y1RowKindForScreen();
@@ -11685,7 +11736,7 @@ public class MainActivity extends Activity {
         layout.setTag(device);
         layout.setSoundEffectsEnabled(false);
         layout.setOrientation(LinearLayout.HORIZONTAL);
-        layout.setFocusable(true);
+        applySettingsRowFocusability(layout);
         layout.setGravity(android.view.Gravity.CENTER_VERTICAL);
         int hPad = (int) (10 * getResources().getDisplayMetrics().density);
         layout.setPadding(hPad, 0, hPad, 0);
@@ -11706,8 +11757,9 @@ public class MainActivity extends Activity {
 
         final android.widget.FrameLayout stateSlot = new android.widget.FrameLayout(this);
         int spinSize = (int) (y1RowHeightPx * 0.55f);
+        int stateSlotW = Math.max(spinSize + hPad, (int) (76 * getResources().getDisplayMetrics().density));
         stateSlot.setLayoutParams(new LinearLayout.LayoutParams(
-                spinSize + hPad, y1RowHeightPx));
+                stateSlotW, y1RowHeightPx));
         applyBluetoothRowState(stateSlot, bluetoothDeviceStateText(device), spinSize, hPad);
         layout.addView(stateSlot);
 
@@ -19170,7 +19222,7 @@ public class MainActivity extends Activity {
             return;
         }
         if ("usb_storage".equals(tier)) {
-            addContextAction(getString(R.string.usb_connection_title), null, null, null, true);
+            addContextSectionHeader(getString(R.string.usb_connection_title));
             addContextAction(getString(R.string.usb_mass_storage_turn_on), new Runnable() {
                 @Override
                 public void run() {
@@ -27813,7 +27865,7 @@ public class MainActivity extends Activity {
             containerSettingsItems.getChildAt(1).requestFocus();
         }
     }
-    private boolean isAudioFile(File f) {
+    static boolean isAudioFile(File f) {
         if (f == null || !f.isFile())
             return false;
         String name = f.getName().toLowerCase();
@@ -39453,6 +39505,10 @@ public class MainActivity extends Activity {
                 if (moveHomeMenuFocus(Y1InputKeys.isWheelUp(keyCode) ? -1 : 1)) clickFeedback();
                 return true;
             }
+            if (currentScreenState == STATE_BLUETOOTH && Y1InputKeys.isWheelKey(keyCode)
+                    && !isBluetoothListFocusValid()) {
+                restoreBluetoothListFocus(null, false);
+            }
             if ((currentScreenState == STATE_BROWSER || currentScreenState == STATE_PODCASTS
                     || currentScreenState == STATE_SOULSEEK || currentScreenState == STATE_DEEZER
                     || currentScreenState == STATE_APPS || currentScreenState == STATE_MORE
@@ -40220,138 +40276,146 @@ public class MainActivity extends Activity {
             if (!Intent.ACTION_MEDIA_BUTTON.equals(intent.getAction()) || MainActivity.instance == null) {
                 return;
             }
-            KeyEvent event = intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
+            final MainActivity activity = MainActivity.instance;
+            final KeyEvent event = intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
             if (event == null) return;
-            MainActivity activity = MainActivity.instance;
-            int keyCode = event.getKeyCode();
-            
-            if (activity.currentScreenState == STATE_USB_STORAGE && !activity.hasWindowFocus()) {
-                if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                    if (keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS) {
-                        try { Runtime.getRuntime().exec(new String[]{"su", "-c", "input keyevent 21"}); } catch (Exception ignored) {}
-                    } else if (keyCode == KeyEvent.KEYCODE_MEDIA_NEXT) {
-                        try { Runtime.getRuntime().exec(new String[]{"su", "-c", "input keyevent 22"}); } catch (Exception ignored) {}
-                    } else if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || keyCode == KeyEvent.KEYCODE_MEDIA_PLAY) {
-                        try { Runtime.getRuntime().exec(new String[]{"su", "-c", "input keyevent 23"}); } catch (Exception ignored) {}
-                    }
-                }
-                return;
-            }
-
-            boolean allowBt = activity.isScreenOffControlEnabled || activity.hasActiveMediaPlayback();
-            if (!allowBt) return;
-
-            // ponytail: wheel is 126/127 (and 19/20) — never transport via ACTION_MEDIA_BUTTON (no InputDevice).
-            if (Y1InputKeys.isWheelKey(keyCode)) {
-                // #region agent log
-                try {
-                    org.json.JSONObject d = new org.json.JSONObject();
-                    d.put("keyCode", keyCode);
-                    d.put("action", event.getAction());
-                    DebugSessionLog.log("MainActivity.MediaBtnReceiver", "wheel ignored screen off", "H-SOFF2", d);
-                } catch (Exception ignored) {}
-                // #endregion
-                return;
-            }
-
-            if (Y1BluetoothInput.isMediaButtonTransportKeyCode(keyCode)) {
-                if (Y1InputKeys.isAvrcpSkipKey(keyCode)) {
-                    if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                        activity.handleMediaSkipKeyDown(keyCode, event);
-                    } else if (event.getAction() == KeyEvent.ACTION_UP) {
-                        activity.handleMediaSkipKeyUp(keyCode, event);
-                    }
-                    return;
-                }
-                if (event.getAction() != KeyEvent.ACTION_DOWN) return;
-                if (event.getRepeatCount() > 0) return;
-                if (Y1InputKeys.isDiscreteMediaPlay(keyCode)) {
-                    if (activity.hasActiveMediaPlayback()) {
-                        if (activity.playback.isPodcastActive() && activity.podcastIjkPlayer != null
-                                && !activity.podcastIjkPlayer.isPlaying()) {
-                            activity.podcastIjkPlayer.start();
-                            activity.applyPlaybackSpeed();
-                            activity.isPausedByHand = false;
-                            activity.updatePlayerUI();
-                        } else if (activity.mediaPlayer != null && !activity.mediaPlayer.isPlaying()) {
-                            activity.mediaPlayer.start();
-                            activity.applyPlaybackSpeed();
-                            activity.isPausedByHand = false;
-                            activity.updatePlayerUI();
-                        } else {
-                            activity.playOrPauseMusic();
+            final BroadcastReceiver.PendingResult pending = goAsync();
+            activity.runOnUiThreadSafe(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        int keyCode = event.getKeyCode();
+                        if (activity.currentScreenState == STATE_USB_STORAGE && !activity.hasWindowFocus()) {
+                            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                                if (keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS) {
+                                    try { Runtime.getRuntime().exec(new String[]{"su", "-c", "input keyevent 21"}); } catch (Exception ignored) {}
+                                } else if (keyCode == KeyEvent.KEYCODE_MEDIA_NEXT) {
+                                    try { Runtime.getRuntime().exec(new String[]{"su", "-c", "input keyevent 22"}); } catch (Exception ignored) {}
+                                } else if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || keyCode == KeyEvent.KEYCODE_MEDIA_PLAY) {
+                                    try { Runtime.getRuntime().exec(new String[]{"su", "-c", "input keyevent 23"}); } catch (Exception ignored) {}
+                                }
+                            }
+                            return;
                         }
-                    } else {
-                        activity.playOrPauseMusic();
-                    }
-                    activity.clickFeedback();
-                    return;
-                }
-                if (Y1InputKeys.isDiscreteMediaPause(keyCode)) {
-                    if (activity.playback.isPodcastActive() && activity.podcastIjkPlayer != null
-                            && activity.podcastIjkPlayer.isPlaying()) {
-                        activity.podcastIjkPlayer.pause();
-                        activity.isPausedByHand = true;
-                        activity.updatePlayerUI();
-                    } else if (activity.mediaPlayer != null && activity.mediaPlayer.isPlaying()) {
-                        activity.mediaPlayer.pause();
-                        activity.isPausedByHand = true;
-                        activity.updatePlayerUI();
-                    }
-                    activity.clickFeedback();
-                    return;
-                }
-                if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || keyCode == 85
-                        || keyCode == 86 || keyCode == KeyEvent.KEYCODE_HEADSETHOOK || keyCode == 79) {
-                    if (event.getRepeatCount() > 0) {
-                        if (!activity.globalPpLongFlowHandled && activity.isFlowEnabled()
-                                && System.currentTimeMillis() - activity.globalPpKeyDownAt >= FLOW_LAUNCH_HOLD_MS) {
-                            activity.openFlowFromMediaButton();
-                            activity.globalPpLongFlowHandled = true;
+
+                        boolean allowBt = activity.isScreenOffControlEnabled || activity.hasActiveMediaPlayback();
+                        if (!allowBt) return;
+
+                        // ponytail: wheel is 126/127 (and 19/20) — never transport via ACTION_MEDIA_BUTTON (no InputDevice).
+                        if (Y1InputKeys.isWheelKey(keyCode)) {
+                            // #region agent log
+                            try {
+                                org.json.JSONObject d = new org.json.JSONObject();
+                                d.put("keyCode", keyCode);
+                                d.put("action", event.getAction());
+                                DebugSessionLog.log("MainActivity.MediaBtnReceiver", "wheel ignored screen off", "H-SOFF2", d);
+                            } catch (Exception ignored) {}
+                            // #endregion
+                            return;
+                        }
+
+                        if (Y1BluetoothInput.isMediaButtonTransportKeyCode(keyCode)) {
+                            if (Y1InputKeys.isAvrcpSkipKey(keyCode)) {
+                                if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                                    activity.handleMediaSkipKeyDown(keyCode, event);
+                                } else if (event.getAction() == KeyEvent.ACTION_UP) {
+                                    activity.handleMediaSkipKeyUp(keyCode, event);
+                                }
+                                return;
+                            }
+                            if (event.getAction() != KeyEvent.ACTION_DOWN) return;
+                            if (event.getRepeatCount() > 0) return;
+                            if (Y1InputKeys.isDiscreteMediaPlay(keyCode)) {
+                                if (activity.hasActiveMediaPlayback()) {
+                                    if (activity.playback.isPodcastActive() && activity.podcastIjkPlayer != null
+                                            && !activity.podcastIjkPlayer.isPlaying()) {
+                                        activity.podcastIjkPlayer.start();
+                                        activity.applyPlaybackSpeed();
+                                        activity.isPausedByHand = false;
+                                        activity.updatePlayerUI();
+                                    } else if (activity.mediaPlayer != null && !activity.mediaPlayer.isPlaying()) {
+                                        activity.mediaPlayer.start();
+                                        activity.applyPlaybackSpeed();
+                                        activity.isPausedByHand = false;
+                                        activity.updatePlayerUI();
+                                    } else {
+                                        activity.playOrPauseMusic();
+                                    }
+                                } else {
+                                    activity.playOrPauseMusic();
+                                }
+                                activity.clickFeedback();
+                                return;
+                            }
+                            if (Y1InputKeys.isDiscreteMediaPause(keyCode)) {
+                                if (activity.playback.isPodcastActive() && activity.podcastIjkPlayer != null
+                                        && activity.podcastIjkPlayer.isPlaying()) {
+                                    activity.podcastIjkPlayer.pause();
+                                    activity.isPausedByHand = true;
+                                    activity.updatePlayerUI();
+                                } else if (activity.mediaPlayer != null && activity.mediaPlayer.isPlaying()) {
+                                    activity.mediaPlayer.pause();
+                                    activity.isPausedByHand = true;
+                                    activity.updatePlayerUI();
+                                }
+                                activity.clickFeedback();
+                                return;
+                            }
+                            if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || keyCode == 85
+                                    || keyCode == 86 || keyCode == KeyEvent.KEYCODE_HEADSETHOOK || keyCode == 79) {
+                                if (event.getRepeatCount() > 0) {
+                                    if (!activity.globalPpLongFlowHandled && activity.isFlowEnabled()
+                                            && System.currentTimeMillis() - activity.globalPpKeyDownAt >= FLOW_LAUNCH_HOLD_MS) {
+                                        activity.openFlowFromMediaButton();
+                                        activity.globalPpLongFlowHandled = true;
+                                        activity.clickFeedback();
+                                    }
+                                    return;
+                                }
+                                activity.globalPpKeyDownAt = System.currentTimeMillis();
+                                activity.globalPpLongFlowHandled = false;
+                                activity.playOrPauseMusic();
+                                activity.clickFeedback();
+                                return;
+                            }
+                            if (Y1InputKeys.isVolumeDownKey(keyCode)) {
+                                activity.adjustVolume(false);
+                                activity.clickFeedback();
+                                return;
+                            }
+                            if (Y1InputKeys.isVolumeUpKey(keyCode)) {
+                                activity.adjustVolume(true);
+                                activity.clickFeedback();
+                                return;
+                            }
+                        }
+
+                        if (!activity.isScreenOffControlEnabled) return;
+
+                        if (activity.isMediaSkipKey(keyCode)) {
+                            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                                activity.handleMediaSkipKeyDown(keyCode, event);
+                            } else if (event.getAction() == KeyEvent.ACTION_UP) {
+                                activity.handleMediaSkipKeyUp(keyCode, event);
+                            }
+                            return;
+                        }
+                        if (event.getAction() != KeyEvent.ACTION_DOWN) return;
+
+                        if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || keyCode == 85 || keyCode == 86) {
+                            activity.playOrPauseMusic();
+                            activity.clickFeedback();
+                        } else if (Y1InputKeys.isVolumeDownKey(keyCode)) {
+                            activity.adjustVolume(false);
+                            activity.clickFeedback();
+                        } else if (Y1InputKeys.isVolumeUpKey(keyCode)) {
+                            activity.adjustVolume(true);
                             activity.clickFeedback();
                         }
-                        return;
-                    }
-                    activity.globalPpKeyDownAt = System.currentTimeMillis();
-                    activity.globalPpLongFlowHandled = false;
-                    activity.playOrPauseMusic();
-                    activity.clickFeedback();
-                    return;
+                    } catch (Exception ignored) {}
                 }
-                if (Y1InputKeys.isVolumeDownKey(keyCode)) {
-                    activity.adjustVolume(false);
-                    activity.clickFeedback();
-                    return;
-                }
-                if (Y1InputKeys.isVolumeUpKey(keyCode)) {
-                    activity.adjustVolume(true);
-                    activity.clickFeedback();
-                    return;
-                }
-            }
-
-            if (!activity.isScreenOffControlEnabled) return;
-
-            if (activity.isMediaSkipKey(keyCode)) {
-                if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                    activity.handleMediaSkipKeyDown(keyCode, event);
-                } else if (event.getAction() == KeyEvent.ACTION_UP) {
-                    activity.handleMediaSkipKeyUp(keyCode, event);
-                }
-                return;
-            }
-            if (event.getAction() != KeyEvent.ACTION_DOWN) return;
-
-            if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || keyCode == 85 || keyCode == 86) {
-                activity.playOrPauseMusic();
-                activity.clickFeedback();
-            } else if (Y1InputKeys.isVolumeDownKey(keyCode)) {
-                activity.adjustVolume(false);
-                activity.clickFeedback();
-            } else if (Y1InputKeys.isVolumeUpKey(keyCode)) {
-                activity.adjustVolume(true);
-                activity.clickFeedback();
-            }
+            });
+            pending.finish();
         }
     }
     // 💡 [수정] 메인 화면 미리보기도 재생 상태에 따라 아이콘을 똑똑하게 바꿉니다.

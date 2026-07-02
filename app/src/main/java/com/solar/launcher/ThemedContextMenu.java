@@ -3659,7 +3659,7 @@ public final class ThemedContextMenu {
     private int lastFocusableIndex() {
         if (labels == null) return 0;
         for (int i = labels.length - 1; i >= 0; i--) {
-            if (!isHeaderRow(i)) return i;
+            if (!isHeaderRow(i) && !isDecorRow(i)) return i;
         }
         return 0;
     }
@@ -3691,7 +3691,7 @@ public final class ThemedContextMenu {
     private int clampFocusableIndex(int idx) {
         if (labels == null || labels.length == 0) return 0;
         idx = Math.max(0, Math.min(idx, labels.length - 1));
-        if (!isHeaderRow(idx)) return idx;
+        if (!isHeaderRow(idx) && !isDecorRow(idx)) return idx;
         int next = nextFocusableIndex(idx, 1);
         return next >= 0 ? next : firstFocusableIndex(0);
     }

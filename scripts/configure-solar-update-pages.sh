@@ -21,10 +21,21 @@ HTTP_CODE="$(curl -sS -o /tmp/solar-pages.json -w "%{http_code}" \
   -H "Accept: application/vnd.github+json" \
   "https://api.github.com/repos/${UPDATE_REPO}/pages" \
   -d '{"build_type":"legacy","source":{"branch":"main","path":"/"}}')"
-if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "201" ]]; then
+if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "201" && "$HTTP_CODE" != "204" ]]; then
   echo "::error::Pages API returned HTTP ${HTTP_CODE} for ${UPDATE_REPO} — PAT needs admin:repo_hook or Pages admin on solar-update." >&2
   cat /tmp/solar-pages.json >&2 || true
   exit 1
+fi
+if [[ "$HTTP_CODE" == "204" ]]; then
+  HTTP_CODE="$(curl -sS -o /tmp/solar-pages.json -w "%{http_code}" \
+    -H "Authorization: token ${PAT}" \
+    -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/${UPDATE_REPO}/pages")"
+  if [[ "$HTTP_CODE" != "200" ]]; then
+    echo "::error::Pages API verify returned HTTP ${HTTP_CODE} for ${UPDATE_REPO}." >&2
+    cat /tmp/solar-pages.json >&2 || true
+    exit 1
+  fi
 fi
 python3 - /tmp/solar-pages.json <<'PY'
 import json, sys

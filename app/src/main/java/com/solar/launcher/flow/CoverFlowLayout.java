@@ -286,7 +286,6 @@ public final class CoverFlowLayout {
             float shrink = 1f - sh * 0.07f;
             t.width *= shrink;
             t.height *= shrink;
-            t.alpha *= 1f - sh * 0.18f;
         }
         // Inner-edge pivot like Classipod — avoids full-texture spin that reads as a 3D cube.
         if (pose.angle > m.sideTilt / 6) {
