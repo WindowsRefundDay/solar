@@ -8216,6 +8216,11 @@ public class MainActivity extends Activity {
     private void handleLaunchIntentExtras() {
         Intent intent = getIntent();
         if (intent == null) return;
+        if (intent.getBooleanExtra(ScanTriggerReceiver.EXTRA_TRIGGER, false)) {
+            intent.removeExtra(ScanTriggerReceiver.EXTRA_TRIGGER);
+            scanMediaLibraryAsync();
+            return;
+        }
         boolean open = intent.getBooleanExtra("open_webserver", false);
         if (!open) {
             String s = intent.getStringExtra("open_webserver");
