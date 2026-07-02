@@ -8273,6 +8273,11 @@ public class MainActivity extends Activity {
     private void handleLaunchIntentExtras() {
         Intent intent = getIntent();
         if (intent == null) return;
+        if (intent.getBooleanExtra(ScanTriggerReceiver.EXTRA_TRIGGER, false)) {
+            intent.removeExtra(ScanTriggerReceiver.EXTRA_TRIGGER);
+            scanMediaLibraryAsync();
+            return;
+        }
         boolean open = intent.getBooleanExtra("open_webserver", false);
         if (!open) {
             String s = intent.getStringExtra("open_webserver");
@@ -27901,10 +27906,6 @@ public class MainActivity extends Activity {
     }
 
     // 💡 1. Incremental library scan — SQLite cache + ID3 only for new/changed files.
-    // ponytail: dedupe by path; secondary by title+artist+duration hash — may collapse distinct files
-    private final java.util.HashSet<String> libraryScanPaths = new java.util.HashSet<String>();
-    private final java.util.HashSet<String> libraryScanMetaKeys = new java.util.HashSet<String>();
-
     private static final class LibraryScanResolved {
         SongItem item;
         String metaKey;
@@ -27958,25 +27959,37 @@ public class MainActivity extends Activity {
         if (!userInitiated && tryFinishScanFromFreshCache(gen, userInitiated)) {
             return;
         }
-        libraryScanPaths.clear();
-        libraryScanMetaKeys.clear();
-        java.util.HashSet<String> seenPaths = MusicLibraryStore.newKeepSet();
-        java.util.ArrayList<SongItem> scanned = new java.util.ArrayList<SongItem>();
-        buildCustomLibraryIncremental(rootFolder, store, seenPaths, scanned, gen);
+        final java.util.HashSet<String> seenPaths = MusicLibraryStore.newKeepSet();
+        final java.util.ArrayList<SongItem> scanned = new java.util.ArrayList<SongItem>();
+        final int progressInterval = 25;
+        LibraryScanner.Callback scanCb = new LibraryScanner.Callback() {
+            @Override public boolean isCancelled() { return libraryScanGen != gen; }
+            @Override public void onProgress(int resolvedCount) {
+                libraryScanTrackCount = resolvedCount;
+                postLibraryScanProgress(gen, resolvedCount);
+            }
+            @Override public int progressInterval() { return progressInterval; }
+        };
+        long tScan0 = System.currentTimeMillis();
+        LibraryScanner.ScanResult result = LibraryScanner.scan(rootFolder, store,
+                blacklist, prefs, seenPaths, scanCb);
+        if (libraryScanGen != gen) {
+            abortLibraryScanWorker(gen);
+            return;
+        }
+        scanned.addAll(result.items);
+        long scanMs = System.currentTimeMillis() - tScan0;
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
             d.put("gen", gen);
             d.put("scanned", scanned.size());
-            d.put("ms", System.currentTimeMillis());
+            d.put("ms", scanMs);
             Debug898913Log.logAlways("MainActivity.runLibraryScanWorker",
-                    "filesystem walk done", "H3,H4", d);
+                    "parallel scan done", "H3,H4", d);
         } catch (Exception ignored) {}
         // #endregion
-        if (libraryScanGen != gen) {
-            abortLibraryScanWorker(gen);
-            return;
-        }
+        // Perf log: full scan timing is recorded after album-art ingest below.
         store.deleteExcept(seenPaths);
         reconcileCustomLibrary(scanned);
         normalizeLibraryAlbumTitles();
@@ -27997,6 +28010,7 @@ public class MainActivity extends Activity {
                     "scan ui finish scheduled, art async", "H5", d);
         } catch (Exception ignored) {}
         // #endregion
+        ScanPerfLog.record(scanned.size(), scanMs, result.phases());
         if (libraryScanGen != gen) {
             abortLibraryScanWorker(gen);
             return;
@@ -28474,35 +28488,6 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void buildCustomLibraryIncremental(File folder, MusicLibraryStore store,
-            java.util.HashSet<String> seenPaths, java.util.ArrayList<SongItem> out, int gen) {
-        if (libraryScanGen != gen) return;
-        File[] files = folder.listFiles();
-        if (files == null) return;
-        for (File f : files) {
-            if (libraryScanGen != gen) return;
-            if (f.isDirectory()) {
-                buildCustomLibraryIncremental(f, store, seenPaths, out, gen);
-            } else if (isAudioFile(f)) {
-                if (blacklist.contains(f.getAbsolutePath())) continue;
-                seenPaths.add(f.getAbsolutePath());
-                String normPath = f.getAbsolutePath().toLowerCase(java.util.Locale.US);
-                if (!libraryScanPaths.add(normPath)) continue;
-                LibraryScanResolved resolved = resolveSongItemForScan(f, store, gen);
-                if (resolved == null || resolved.item == null) continue;
-                if (!libraryScanMetaKeys.add(resolved.metaKey)) continue;
-                out.add(resolved.item);
-                int n = out.size();
-                if (n != libraryScanTrackCount) {
-                    libraryScanTrackCount = n;
-                    if (n % 25 == 0) {
-                        postLibraryScanProgress(gen, n);
-                    }
-                }
-            }
-        }
-    }
-
     private LibraryScanResolved resolveSongItemForScan(File f, MusicLibraryStore store, int gen) {
         try {
             if (libraryScanGen != gen) return null;
@@ -28513,9 +28498,8 @@ public class MainActivity extends Activity {
             String albumArtist;
             String durationMs;
             int trackNumber = 0;
-            if (store.isFresh(f)) {
-                MusicLibraryStore.Track cached = store.get(f.getAbsolutePath());
-                if (cached == null) return null;
+            MusicLibraryStore.Track cached = store.getFresh(f);
+            if (cached != null) {
                 title = cached.title;
                 artist = cached.artist;
                 album = cached.album;
