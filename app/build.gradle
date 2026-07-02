@@ -53,8 +53,8 @@ android {
         applicationId "com.solar.launcher"
         minSdk 17
         targetSdk 35
-        versionCode 3419870
-        versionName "nightly-20260702-2150"
+        versionCode 3419877
+        versionName "nightly-20260702-2157"
         buildConfigField "boolean", "FEATURE_OTA_UPDATE", "true"
         buildConfigField "String", "OTA_UPDATES_URL", "\"https://thesolarproject.github.io/solar-update/updates.xml\""
         def podcastIndexKey = project.findProperty("PODCAST_INDEX_API_KEY") ?: ""
