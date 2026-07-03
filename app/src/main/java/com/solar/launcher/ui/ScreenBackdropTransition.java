@@ -161,7 +161,7 @@ public final class ScreenBackdropTransition {
     }
 
     public View inSlot() {
-        return crossfadeOnly || backdropInSlot == null || backdropInSlot.getVisibility() != View.VISIBLE
+        return backdropInSlot == null || backdropInSlot.getVisibility() != View.VISIBLE
                 ? null : backdropInSlot;
     }
 

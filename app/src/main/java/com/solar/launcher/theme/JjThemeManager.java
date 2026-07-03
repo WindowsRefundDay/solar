@@ -11,7 +11,10 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -103,17 +106,35 @@ public final class JjThemeManager {
         availableThemes.add(builtIn);
 
         if (themeFolder == null) return;
-        if (!themeFolder.exists()) {
-            themeFolder.mkdirs();
-            return;
+
+        java.util.List<File> roots = new ArrayList<File>();
+        roots.add(themeFolder);
+        File secondaryStore = com.solar.launcher.DeviceFeatures.getSecondaryStorageRoot();
+        if (secondaryStore != null) {
+            File secondaryThemeFolder = new File(secondaryStore, "JJ_Themes");
+            if (!secondaryThemeFolder.equals(themeFolder)) {
+                roots.add(secondaryThemeFolder);
+            }
         }
 
-        extractZipThemes(themeFolder);
+        Set<String> seen = new HashSet<String>();
+        seen.add("default");
 
-        File[] folders = themeFolder.listFiles();
-        if (folders == null) return;
-        for (File subFolder : folders) {
-            if (!subFolder.isDirectory()) continue;
+        for (File root : roots) {
+            if (!root.exists()) {
+                root.mkdirs();
+                continue;
+            }
+
+            extractZipThemes(root);
+
+            File[] folders = root.listFiles();
+            if (folders == null) continue;
+            for (File subFolder : folders) {
+                if (!subFolder.isDirectory()) continue;
+                String name = subFolder.getName().toLowerCase(Locale.US);
+                if (seen.contains(name)) continue;
+                seen.add(name);
             File configFile = new File(subFolder, "config.json");
             if (!configFile.isFile()) continue;
             try {
@@ -177,6 +198,7 @@ public final class JjThemeManager {
                 }
                 availableThemes.add(theme);
             } catch (Exception ignored) {}
+        }
         }
     }
 

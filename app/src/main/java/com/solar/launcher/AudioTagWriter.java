@@ -104,7 +104,9 @@ public final class AudioTagWriter {
             }
             temp = null;
             return EmbedResult.EMBEDDED;
-        } catch (Exception ignored) {
+        } catch (Throwable ignored) {
+            // ponytail: jaudiotagger throws VerifyError on Android 4.2.2 (API 17) due to Java NIO dependencies in FlacTagWriter.
+            // Catching Throwable prevents crashes and falls back to SQLite/prefs metadata overlay.
             return EmbedResult.FAILED;
         } finally {
             if (temp != null && temp.exists()) temp.delete();

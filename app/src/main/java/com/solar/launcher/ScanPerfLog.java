@@ -23,7 +23,9 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class ScanPerfLog {
 
     private static final String TAG = "SolarScanPerf";
-    private static final String FILE = "/storage/sdcard0/solar/scan-perf.log";
+    private static File getLogFile() {
+        return new File(com.solar.launcher.DeviceFeatures.getPrimaryStorageRoot(), "solar/scan-perf.log");
+    }
     private static final long MAX_SIZE = 256 * 1024;
 
     private static final AtomicReference<LastScan> LAST = new AtomicReference<LastScan>();
@@ -85,11 +87,11 @@ public final class ScanPerfLog {
 
     private static void appendLine(String line) {
         try {
-            File f = new File(FILE);
+            File f = getLogFile();
             File parent = f.getParentFile();
             if (parent != null && !parent.exists()) parent.mkdirs();
             if (f.length() > MAX_SIZE) {
-                File backup = new File(FILE + ".old");
+                File backup = new File(getLogFile().getAbsolutePath() + ".old");
                 if (backup.exists()) backup.delete();
                 f.renameTo(backup);
             }

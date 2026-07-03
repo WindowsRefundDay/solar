@@ -128,6 +128,9 @@ public final class FlowView extends View {
     private long lastScrollWheelLogMs;
     /** Coalesce anim ticks when frames arrive faster than display can show. */
     private long lastAnimInvalidateMs;
+    /** ponytail: debounce rapid wheel inputs — coalesce ticks faster than animation can settle. */
+    private static final long SCROLL_DEBOUNCE_MS = 80L;
+    private long lastScrollWheelMs;
     /** Front-face title marquee — invalidate loop while text overflows clip. */
     private final Runnable frontMarqueeTick = new Runnable() {
         @Override
@@ -649,6 +652,15 @@ public final class FlowView extends View {
             return true;
         }
         if (flip.blocksCarouselScroll()) return false;
+        // ponytail: debounce rapid wheel inputs so the animation engine isn't flooded
+        // with queued scroll steps faster than the easing curve can settle. Without this,
+        // large libraries stutter because each input queues a new targetIndex before the
+        // previous segment finishes, causing the animation to never reach steady state.
+        long now = System.currentTimeMillis();
+        if (now - lastScrollWheelMs < SCROLL_DEBOUNCE_MS && engine.isCarouselScrolling()) {
+            return true; // swallow — animation is already heading the right direction
+        }
+        lastScrollWheelMs = now;
         engine.setViewport(viewW, viewH);
         boolean moved = engine.scrollByReturningMoved(delta);
         if (moved) {
@@ -664,7 +676,6 @@ public final class FlowView extends View {
                 }
                 // #region agent log
                 if (com.solar.launcher.DebugSessionLog.ENABLED) {
-                    long now = System.currentTimeMillis();
                     if (now - lastScrollWheelLogMs >= 300L) {
                         lastScrollWheelLogMs = now;
                         try {

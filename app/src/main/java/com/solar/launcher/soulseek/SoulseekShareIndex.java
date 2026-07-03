@@ -50,12 +50,12 @@ public final class SoulseekShareIndex {
         return new SoulseekShareIndex();
     }
 
-    public synchronized void scan(String username, File musicRoot, File podcastRoot) {
+    public void scan(String username, File musicRoot, File podcastRoot) {
         scan(username, musicRoot, podcastRoot, null, null);
     }
 
     /** @param cachedDurationSecByPath lower-case absolute path → duration seconds from library cache */
-    public synchronized void scan(String username, File musicRoot, File podcastRoot,
+    public void scan(String username, File musicRoot, File podcastRoot,
             Map<String, Integer> cachedDurationSecByPath) {
         scan(username, musicRoot, podcastRoot, cachedDurationSecByPath, null);
     }
@@ -64,7 +64,7 @@ public final class SoulseekShareIndex {
      * @param knownMusicFiles when non-empty, index Music from this list instead of re-walking the tree
      *        (ponytail: avoids a second O(files) filesystem walk after library scan).
      */
-    public synchronized void scan(String username, File musicRoot, File podcastRoot,
+    public void scan(String username, File musicRoot, File podcastRoot,
             Map<String, Integer> cachedDurationSecByPath, List<File> knownMusicFiles) {
         List<Entry> newEntries = new ArrayList<Entry>();
         Map<String, File> newByVirtualPath = new HashMap<String, File>();
@@ -95,12 +95,14 @@ public final class SoulseekShareIndex {
                 list.add(e);
             }
         }
-        entries.clear();
-        entries.addAll(newEntries);
-        byVirtualPath.clear();
-        byVirtualPath.putAll(newByVirtualPath);
-        byDir.clear();
-        byDir.putAll(newByDir);
+        synchronized (this) {
+            entries.clear();
+            entries.addAll(newEntries);
+            byVirtualPath.clear();
+            byVirtualPath.putAll(newByVirtualPath);
+            byDir.clear();
+            byDir.putAll(newByDir);
+        }
     }
 
     private void scanRoot(String user, String libName, File root, File dir,

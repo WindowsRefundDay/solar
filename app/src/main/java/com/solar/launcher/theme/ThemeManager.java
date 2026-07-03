@@ -79,7 +79,7 @@ public class ThemeManager {
     public static String resolveThemesRoot(Context ctx) {
         if (ctx != null) {
             try {
-                File ext = Environment.getExternalStorageDirectory();
+                File ext = com.solar.launcher.DeviceFeatures.getPrimaryStorageRoot();
                 if (ext != null) {
                     return new File(ext, "Themes").getAbsolutePath();
                 }
@@ -150,9 +150,12 @@ public class ThemeManager {
             return false;
         }
         try {
-            File ext = Environment.getExternalStorageDirectory();
+            File ext = com.solar.launcher.DeviceFeatures.getPrimaryStorageRoot();
             if (ext != null && path.startsWith(ext.getAbsolutePath())) return true;
         } catch (Exception ignored) {}
+        for (File root : com.solar.launcher.DeviceFeatures.getStorageRoots()) {
+            if (path.startsWith(root.getAbsolutePath())) return true;
+        }
         return path.startsWith("/storage/sdcard") || path.startsWith(PATH_THEMES);
     }
 
@@ -1444,11 +1447,12 @@ public class ThemeManager {
     public static Typeface getCustomFont() {
         if (ActiveThemeEngine.isJjMode()) return JjThemeManager.getCustomFont();
         ThemeEntry t = getCurrentTheme();
+        // ponytail: cache both custom AND default results to avoid repeated JSON/file lookups
+        String key = t.folderPath + ":" + t.root.optString("fontFamily", "");
+        if (key.equals(cachedFontKey) && cachedFont != null) return cachedFont;
         Typeface tf = getThemeFont(t);
-        if (tf != Typeface.DEFAULT) {
-            cachedFont = tf;
-            cachedFontKey = t.folderPath + ":" + t.root.optString("fontFamily", "");
-        }
+        cachedFont = tf;
+        cachedFontKey = key;
         return tf;
     }
 
@@ -1620,12 +1624,15 @@ public class ThemeManager {
     public static Bitmap getThemeBitmap(String relativePath) {
         if (relativePath == null || relativePath.isEmpty()) return null;
         ThemeEntry t = getCurrentTheme();
-        if (shouldSkipExternalThemeFile(t.folderPath)) {
+        String cacheKey = (t != null ? t.folderPath : "") + ":" + relativePath;
+        if (bitmapCache.containsKey(cacheKey)) return bitmapCache.get(cacheKey);
+        if (t != null && shouldSkipExternalThemeFile(t.folderPath)) {
             preferInternalCacheForActiveTheme(assetContext);
             t = getCurrentTheme();
+            cacheKey = (t != null ? t.folderPath : "") + ":" + relativePath;
+            if (bitmapCache.containsKey(cacheKey)) return bitmapCache.get(cacheKey);
         }
-        String cacheKey = t.folderPath + ":" + relativePath;
-        if (bitmapCache.containsKey(cacheKey)) return bitmapCache.get(cacheKey);
+        if (t == null) return null;
         Bitmap bmp = decodeThemeBitmapForEntry(t, relativePath, 0);
         if (bmp != null) bitmapCache.put(cacheKey, bmp);
         return bmp;
@@ -1690,11 +1697,17 @@ public class ThemeManager {
     /** {@code settingConfig} asset from active theme only. */
     public static Bitmap getThemeSettingBitmap(String key) {
         if (key == null || key.isEmpty()) return null;
-        JSONObject setting = getCurrentTheme().root.optJSONObject("settingConfig");
+        // ponytail: check cache before JSON parse — settings rows re-query on every scroll
+        ThemeEntry t = getCurrentTheme();
+        String cacheKey = t.folderPath + ":setting:" + key;
+        if (bitmapCache.containsKey(cacheKey)) return bitmapCache.get(cacheKey);
+        JSONObject setting = t.root.optJSONObject("settingConfig");
         if (setting == null) return null;
         String path = setting.optString(key, "").trim();
         if (path.isEmpty()) return null;
-        return getThemeBitmapFromActiveThemeOnly(path);
+        Bitmap bmp = getThemeBitmapFromActiveThemeOnly(path);
+        if (bmp != null) bitmapCache.put(cacheKey, bmp);
+        return bmp;
     }
 
     /** Decode a theme asset path without bundled-default or Android drawable fallbacks. */
@@ -1771,14 +1784,15 @@ public class ThemeManager {
      * App labels use {@link #solarAppConfigKey}: e.g. "PC Upload" → {@code appPC_Upload}.
      */
     public static Bitmap getSolarConfigIcon(String key) {
-        // ponytail: icons are per-theme only — never merge bundled Aura solarConfig into third-party themes.
-        JSONObject solar = solarBlock(getCurrentTheme().root);
-        if (solar == null || key == null || key.isEmpty()) return null;
-        String path = solar.optString(key, "").trim();
-        if (path.isEmpty()) return null;
+        if (key == null || key.isEmpty()) return null;
+        // ponytail: cache check first — icons are per-theme only, never merge bundled Aura solarConfig into third-party themes.
         ThemeEntry t = getCurrentTheme();
         String cacheKey = t.folderPath + ":solar:" + key;
         if (bitmapCache.containsKey(cacheKey)) return bitmapCache.get(cacheKey);
+        JSONObject solar = solarBlock(t.root);
+        if (solar == null) return null;
+        String path = solar.optString(key, "").trim();
+        if (path.isEmpty()) return null;
         Bitmap bmp = null;
         File f = resolveThemeAssetFile(t.folderPath, path);
         if (f != null) {

@@ -1264,11 +1264,11 @@ public class MainActivity extends Activity {
     /** Podcast playback on IJK — API 17 has no MediaPlayer speed/pitch control. */
     private com.solar.launcher.podcast.PodcastIjkPlayer podcastIjkPlayer;
     private AudioManager audioManager;
-    private File rootFolder = new File("/storage/sdcard0/Music");
+    private File rootFolder = new File(com.solar.launcher.DeviceFeatures.getPrimaryStorageRoot(), "Music");
     private File currentFolder = rootFolder;
 
     private File getStorageRoot() {
-        return new File("/storage/sdcard0");
+        return com.solar.launcher.DeviceFeatures.getPrimaryStorageRoot();
     }
     private boolean isPausedByHand = true;
     private String podcastResumeKey = "";
@@ -5647,7 +5647,7 @@ public class MainActivity extends Activity {
                     if (gen != themeDownloadGen) return;
                     ActiveThemeEngine.loadThemes(MainActivity.this);
                     final String toastName = variant.displayName(entry.name);
-                    final String path = new File(ThemeManager.PATH_THEMES, installFolder).getAbsolutePath();
+                    final String path = new File(ThemeManager.themesRoot(), installFolder).getAbsolutePath();
                     int index = -1;
                     for (int i = 0; i < ThemeManager.availableThemes.size(); i++) {
                         if (path.equals(ThemeManager.availableThemes.get(i).folderPath)) {
@@ -5708,7 +5708,7 @@ public class MainActivity extends Activity {
                     }
                     if (gen != themeDownloadGen) return;
                     ActiveThemeEngine.loadThemes(MainActivity.this);
-                    final String installPath = new File(ThemeManager.PATH_THEMES,
+                    final String installPath = new File(ThemeManager.themesRoot(),
                             ThemeDownloader.installedFolderForEntry(entry)).getAbsolutePath();
                     final String themeName = entry.name;
                     int index = -1;
@@ -9077,7 +9077,7 @@ public class MainActivity extends Activity {
     // 💡 [완벽 수정] 스토리지 용량 계산 에러(오버플로우) 방지 및 진짜 테마 색상 적용
     private void loadStorageUI() {
         try {
-            android.os.StatFs stat = new android.os.StatFs("/storage/sdcard0");
+            android.os.StatFs stat = new android.os.StatFs(com.solar.launcher.DeviceFeatures.getPrimaryStorageRoot().getAbsolutePath());
 
             // 🚀 [버그 1 해결] 기기 용량이 클 때 숫자가 폭발(오버플로우)해서 에러가 나는 것을 막기 위해 (long)으로 강제 변환하여 계산합니다!
             long blockSize = (long) stat.getBlockSize();
@@ -9730,7 +9730,7 @@ public class MainActivity extends Activity {
             }
         });
 
-        if (!sender.isEmpty() && !SolarDeveloperAccounts.isVirtualPeer(soulseekMessagePeer) && !SolarDeveloperAccounts.hideFromReachUi(soulseekMessagePeer) && !SolarDeveloperAccounts.isVirtualPeer(peer) && !SolarDeveloperAccounts.hideFromReachUi(peer)) {
+        if (!sender.isEmpty() && !SolarDeveloperAccounts.isVirtualPeer(soulseekMessagePeer) && !SolarDeveloperAccounts.isVirtualPeer(peer)) {
             labels.add(getString(R.string.soulseek_block_user));
             states.add(null);
             headers.add(Boolean.FALSE);
@@ -9873,7 +9873,7 @@ public class MainActivity extends Activity {
             });
         }
 
-        if (!SolarDeveloperAccounts.isVirtualPeer(peer) && !SolarDeveloperAccounts.hideFromReachUi(peer)) {
+        if (!SolarDeveloperAccounts.isVirtualPeer(peer)) {
             final boolean ignored = SoulseekPeerPrefs.isIgnored(prefs, peer);
             labels.add(getString(ignored ? R.string.soulseek_unignore_user : R.string.soulseek_ignore_user));
             states.add(null);
@@ -9966,7 +9966,7 @@ public class MainActivity extends Activity {
             }
         });
 
-        if (!SolarDeveloperAccounts.isVirtualPeer(peer) && !SolarDeveloperAccounts.hideFromReachUi(peer)) {
+        if (!SolarDeveloperAccounts.isVirtualPeer(peer)) {
             labels.add(getString(ignored ? R.string.soulseek_unignore_user : R.string.soulseek_ignore_user));
             states.add(null);
             headers.add(Boolean.FALSE);
@@ -9995,7 +9995,6 @@ public class MainActivity extends Activity {
 
     private void showSoulseekPmNotification(final String fromUser, final String text) {
         if (fromUser == null || fromUser.trim().isEmpty()) return;
-        if (SolarDeveloperAccounts.hideFromReachUi(fromUser)) return;
         if (SoulseekPeerPrefs.isIgnored(prefs, fromUser)) return;
         contextReachPeerUser = fromUser.trim();
         contextReachPmBody = text != null ? text : "";
@@ -10338,7 +10337,7 @@ public class MainActivity extends Activity {
                 openSoulseekUserProfile(peer, null);
             }
         });
-        if (soulseekMessagingEnabled || SolarDeveloperAccounts.isVirtualPeer(peer) || SolarDeveloperAccounts.isDeveloper(peer) || SolarDeveloperAccounts.hideFromReachUi(peer)) {
+        if (soulseekMessagingEnabled) {
             labels.add(getString(R.string.soulseek_compose_message));
             states.add(null);
             iconKeys.add(null);
@@ -10377,7 +10376,7 @@ public class MainActivity extends Activity {
                 }
             });
         }
-        if (!SolarDeveloperAccounts.isVirtualPeer(peer) && !SolarDeveloperAccounts.hideFromReachUi(peer)) {
+        if (!SolarDeveloperAccounts.isVirtualPeer(peer)) {
             labels.add(getString(blocked ? R.string.soulseek_unblock_user : R.string.soulseek_block_user));
             states.add(null);
             iconKeys.add(null);
@@ -10796,6 +10795,7 @@ public class MainActivity extends Activity {
         }
         @Override public void onDeezerBackFromSearch() { returnFromDeezer(); }
         @Override public void openDeezerSearchKeyboard() { MainActivity.this.openDeezerSearchKeyboard(); }
+        @Override public void openDeezerSearchKeyboard(String initialQuery) { MainActivity.this.openDeezerSearchKeyboard(initialQuery); }
         @Override public boolean soulseekReachAvailable() {
             return soulseekActive() && ConnectivityHelper.isReachPeerOk();
         }
@@ -13423,7 +13423,7 @@ public class MainActivity extends Activity {
             return stateOnOff(prefs != null && prefs.getBoolean(PREF_DEBUG_FLOW_THEME, false));
         }
         if (RowKeys.DEBUG_FLOW_NO_REFLECTIONS.equals(rowKey)) {
-            return stateOnOff(prefs != null && prefs.getBoolean(PREF_DEBUG_FLOW_NO_REFLECTIONS, true));
+            return stateOnOff(prefs != null && prefs.getBoolean(PREF_DEBUG_FLOW_NO_REFLECTIONS, false));
         }
         if (RowKeys.FLOW_MULTI_TRACK_ALBUMS.equals(rowKey)) {
             return stateOnOff(prefs != null && prefs.getBoolean(PREF_FLOW_MULTI_TRACK_ALBUMS, false));
@@ -13916,7 +13916,7 @@ public class MainActivity extends Activity {
 
         if (isStorage) {
             try {
-                android.os.StatFs stat = new android.os.StatFs("/storage/sdcard0");
+                android.os.StatFs stat = new android.os.StatFs(com.solar.launcher.DeviceFeatures.getPrimaryStorageRoot().getAbsolutePath());
                 long total = (long) stat.getBlockCount() * stat.getBlockSize();
                 long avail = (long) stat.getAvailableBlocks() * stat.getBlockSize();
                 long used = total - avail;
@@ -14455,7 +14455,6 @@ public class MainActivity extends Activity {
                         && isViewDescendantOf(focused, layoutMainMenu);
             case STATE_BROWSER:
             case STATE_PODCASTS:
-            case STATE_SOULSEEK:
             case STATE_DEEZER:
             case STATE_APPS:
             case STATE_MORE:
@@ -14471,6 +14470,42 @@ public class MainActivity extends Activity {
                             && sel < listVirtualSongs.getCount();
                 }
                 return isViewDescendantOf(focused, layoutBrowserMode);
+            case STATE_SOULSEEK:
+                if (listConversationThread != null && listConversationThread.getVisibility() == View.VISIBLE) {
+                    if (listConversationThread.hasFocus()) return true;
+                    if (focused != null && isViewDescendantOf(focused, listConversationThread)) return true;
+                    int sel = listConversationThread.getSelectedItemPosition();
+                    return sel >= 0 && listConversationThread.getAdapter() != null
+                            && sel < listConversationThread.getCount();
+                }
+                if (listReachBrowse != null && listReachBrowse.getVisibility() == View.VISIBLE) {
+                    if (listReachBrowse.hasFocus()) return true;
+                    if (focused != null && isViewDescendantOf(focused, listReachBrowse)) return true;
+                    int sel = listReachBrowse.getSelectedItemPosition();
+                    return sel >= 0 && listReachBrowse.getAdapter() != null
+                            && sel < listReachBrowse.getCount();
+                }
+                // ponytail: recognise back button as valid focus on Soulseek/Reach screens
+                if (btnConversationBack != null && focused == btnConversationBack) return true;
+                return false;
+            case STATE_WIFI:
+                if (focused != null && focused.isShown() && focused.isFocusable()) {
+                    if (btnScanWifi != null && focused == btnScanWifi) return true;
+                    if (containerWifiItems != null && isViewDescendantOf(focused, containerWifiItems)) return true;
+                }
+                return false;
+            case STATE_BLUETOOTH:
+                if (focused != null && focused.isShown() && focused.isFocusable()) {
+                    if (btnScanBt != null && focused == btnScanBt) return true;
+                    if (containerBtItems != null && isViewDescendantOf(focused, containerBtItems)) return true;
+                }
+                return false;
+            case STATE_PLAYER:
+                if (focused != null && focused.isShown() && focused.isFocusable()) {
+                    if (playerProgressTrack != null && focused == playerProgressTrack) return true;
+                    if (layoutPlayerMode != null && focused == layoutPlayerMode) return true;
+                }
+                return false;
             default:
                 if (MediaSuiteHost.isMediaListBrowseState(currentScreenState)) {
                     if (layoutBrowserMode == null || layoutBrowserMode.getVisibility() != View.VISIBLE) {
@@ -14529,6 +14564,51 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void ensureSoulseekListFocus() {
+        if (listConversationThread != null && listConversationThread.getVisibility() == View.VISIBLE
+                && listConversationThread.getAdapter() != null && listConversationThread.getCount() > 0) {
+            int pos = listConversationThread.getSelectedItemPosition();
+            if (pos < 0) pos = 0;
+            if (pos >= listConversationThread.getCount()) pos = listConversationThread.getCount() - 1;
+            final int target = pos;
+            listConversationThread.setSelection(target);
+            listConversationThread.requestFocus();
+            listConversationThread.post(new Runnable() {
+                @Override
+                public void run() {
+                    if (listConversationThread == null) return;
+                    int childIdx = target - listConversationThread.getFirstVisiblePosition();
+                    if (childIdx >= 0 && childIdx < listConversationThread.getChildCount()) {
+                        View v = listConversationThread.getChildAt(childIdx);
+                        if (v != null && v.isFocusable()) v.requestFocus();
+                    }
+                }
+            });
+            return;
+        }
+        if (listReachBrowse != null && listReachBrowse.getVisibility() == View.VISIBLE
+                && listReachBrowse.getAdapter() != null && listReachBrowse.getCount() > 0) {
+            int pos = listReachBrowse.getSelectedItemPosition();
+            if (pos < 0) pos = 0;
+            if (pos >= listReachBrowse.getCount()) pos = listReachBrowse.getCount() - 1;
+            final int target = pos;
+            listReachBrowse.setSelection(target);
+            listReachBrowse.requestFocus();
+            listReachBrowse.post(new Runnable() {
+                @Override
+                public void run() {
+                    if (listReachBrowse == null) return;
+                    int childIdx = target - listReachBrowse.getFirstVisiblePosition();
+                    if (childIdx >= 0 && childIdx < listReachBrowse.getChildCount()) {
+                        View v = listReachBrowse.getChildAt(childIdx);
+                        if (v != null && v.isFocusable()) v.requestFocus();
+                    }
+                }
+            });
+            return;
+        }
+    }
+
     private void restoreFocusAfterContextMenuDismiss() {
         new Handler().post(new Runnable() {
             @Override
@@ -14549,27 +14629,33 @@ public class MainActivity extends Activity {
                         break;
                     case STATE_BROWSER:
                     case STATE_PODCASTS:
-                    case STATE_SOULSEEK:
                     case STATE_APPS:
                     case STATE_MORE:
                     case STATE_USB_STORAGE:
                         ensureBrowserListFocus();
                         break;
+                    case STATE_SOULSEEK:
+                        ensureSoulseekListFocus();
+                        break;
                     case STATE_WIFI:
                         if (containerWifiItems != null && containerWifiItems.getChildCount() > 0) {
                             containerWifiItems.getChildAt(0).requestFocus();
+                        } else if (btnScanWifi != null) {
+                            btnScanWifi.requestFocus();
                         }
                         break;
                     case STATE_BLUETOOTH:
                         if (containerBtItems != null && containerBtItems.getChildCount() > 0) {
                             containerBtItems.getChildAt(0).requestFocus();
+                        } else if (btnScanBt != null) {
+                            btnScanBt.requestFocus();
                         }
                         break;
                     case STATE_PLAYER:
-                        if (layoutPlayerMode != null && layoutPlayerMode.getVisibility() == View.VISIBLE) {
-                            layoutPlayerMode.requestFocus();
-                        } else if (playerProgressTrack != null) {
+                        if (playerProgressTrack != null) {
                             playerProgressTrack.requestFocus();
+                        } else if (layoutPlayerMode != null) {
+                            layoutPlayerMode.requestFocus();
                         }
                         break;
                     default:
@@ -14607,15 +14693,17 @@ public class MainActivity extends Activity {
                 ? audioManager.getStreamVolume(activeVolumeStream()) : 0;
         int volIcon = ThemedContextMenu.volumeIconResForLevel(volCur, volMax);
         int brightIcon = ThemedContextMenu.brightnessIconResForLevel(currentSystemBrightness, 255);
+        boolean rooted = DeviceFeatures.hasRootAccess();
+        boolean y1 = DeviceFeatures.isY1();
         return new ThemedContextMenu.QuickItem[] {
             new ThemedContextMenu.QuickItem(null, R.drawable.ic_home, getString(R.string.context_go_to_home), true),
             new ThemedContextMenu.QuickItem(null, R.drawable.ic_lock, getString(R.string.context_action_lock_screen), true),
             new ThemedContextMenu.QuickItem(null, R.drawable.ic_wifi, getString(R.string.context_tier_wifi), true),
             new ThemedContextMenu.QuickItem(null, R.drawable.ic_bluetooth, getString(R.string.home_menu_bluetooth), true),
-            new ThemedContextMenu.QuickItem(null, R.drawable.ic_power, getString(R.string.context_quick_power), true),
+            new ThemedContextMenu.QuickItem(null, R.drawable.ic_power, getString(R.string.context_quick_power), rooted),
             new ThemedContextMenu.QuickItem(null, endIcon, endLabel, true),
             new ThemedContextMenu.QuickItem(null, brightIcon, getString(R.string.context_quick_brightness), true),
-            new ThemedContextMenu.QuickItem(null, volIcon, getString(R.string.context_quick_volume), true)
+            new ThemedContextMenu.QuickItem(null, volIcon, getString(R.string.context_quick_volume), y1)
         };
     }
 
@@ -17955,9 +18043,49 @@ public class MainActivity extends Activity {
         showUsbMassStorageDialog();
     }
 
-    /** ponytail: su dumpsys — backing file is set only when the SD is exported to the PC. */
+    /** ponytail: check sysfs backing file directly for massive speedup, falling back to su dumpsys only if needed */
     private boolean querySystemUsbMassStorageExported() {
+        for (String path : new String[]{
+                "/sys/class/android_usb/android0/f_mass_storage/lun/file",
+                "/sys/class/android_usb/android0/f_mass_storage/lun0/file",
+                "/sys/class/android_usb/android0/f_mass_storage/lun1/file"
+        }) {
+            java.io.File file = new java.io.File(path);
+            if (file.exists() && file.canRead()) {
+                java.io.BufferedReader reader = null;
+                try {
+                    reader = new java.io.BufferedReader(new java.io.FileReader(file));
+                    String line = reader.readLine();
+                    if (line != null && line.trim().length() > 0) {
+                        return true;
+                    }
+                } catch (Exception ignored) {
+                } finally {
+                    if (reader != null) {
+                        try { reader.close(); } catch (Exception ignored) {}
+                    }
+                }
+            }
+        }
+
         java.io.BufferedReader br = null;
+        try {
+            Process p = Runtime.getRuntime().exec(new String[]{"su", "-c",
+                    "cat /sys/class/android_usb/android0/f_mass_storage/lun*/file 2>/dev/null"});
+            br = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()));
+            String line;
+            while ((line = br.readLine()) != null) {
+                if (line.trim().length() > 0) {
+                    return true;
+                }
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (br != null) {
+                try { br.close(); } catch (Exception ignored) {}
+            }
+        }
+
         try {
             Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", "dumpsys usb"});
             br = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()));
@@ -18861,8 +18989,18 @@ public class MainActivity extends Activity {
                         ? cur.reachMeta : cur.file.getName();
                 artist = cur.reachPeerUsername != null ? cur.reachPeerUsername : "";
             } else if (cur.kind == PlayQueue.ItemKind.DEEZER_STREAM) {
-                title = cur.deezerMeta != null && !cur.deezerMeta.isEmpty()
-                        ? cur.deezerMeta : cur.file.getName();
+                String meta = cur.deezerMeta != null ? cur.deezerMeta.trim() : "";
+                if (meta.isEmpty()) {
+                    title = cur.file.getName();
+                } else {
+                    int dash = meta.indexOf(" - ");
+                    if (dash > 0) {
+                        artist = meta.substring(0, dash).trim();
+                        title = meta.substring(dash + 3).trim();
+                    } else {
+                        title = meta;
+                    }
+                }
             } else {
                 SongItem si = findSongItem(cur.file);
                 title = si != null && si.title != null ? si.title : cur.file.getName();
@@ -21694,21 +21832,23 @@ public class MainActivity extends Activity {
         });
         containerSettingsItems.addView(btnReachMenu);
 
-        LinearLayout btnPower = createSettingsRow(RowKeys.POWER, R.string.settings_power, true);
-        powerSettingsMenuFocusIndex = containerSettingsItems.getChildCount();
-        btnPower.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                clickFeedback();
-                drillSettingsForward(new Runnable() {
-                    @Override
-                    public void run() {
-                        buildPowerSettingsUI();
-                    }
-                });
-            }
-        });
-        containerSettingsItems.addView(btnPower);
+        if (DeviceFeatures.hasRootAccess()) {
+            LinearLayout btnPower = createSettingsRow(RowKeys.POWER, R.string.settings_power, true);
+            powerSettingsMenuFocusIndex = containerSettingsItems.getChildCount();
+            btnPower.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    clickFeedback();
+                    drillSettingsForward(new Runnable() {
+                        @Override
+                        public void run() {
+                            buildPowerSettingsUI();
+                        }
+                    });
+                }
+            });
+            containerSettingsItems.addView(btnPower);
+        }
 
         if (LauncherSwitch.isRockboxAvailable(this) && LauncherSwitch.isSwitchScriptAvailable()) {
             LinearLayout btnRockbox = createSettingsRow(RowKeys.SWITCH_ROCKBOX,
@@ -23795,14 +23935,7 @@ public class MainActivity extends Activity {
     }
 
     private void showSoulseekUserLookupResult(final SoulseekUserDirectory.UserInfo info) {
-        if (info != null && info.username != null
-                && SolarDeveloperAccounts.isDeveloper(info.username)
-                && isDevSupportExperimentEnabled()) {
-            openSolarDevelopmentProfile();
-            return;
-        }
-        if (info == null || info.username == null
-                || SolarDeveloperAccounts.hideFromReachUi(info.username)) {
+        if (info == null || info.username == null) {
             Toast.makeText(this, getString(R.string.soulseek_user_lookup_failed,
                     info != null && info.username != null ? info.username : "?", "not found"),
                     Toast.LENGTH_LONG).show();
@@ -23867,7 +24000,6 @@ public class MainActivity extends Activity {
                                 if (u == null || u.trim().isEmpty()) continue;
                                 if (self.username != null
                                         && u.equalsIgnoreCase(self.username)) continue;
-                                if (SolarDeveloperAccounts.hideFromReachUi(u)) continue;
                                 users.add(new ReachDirectoryUser(u.trim(),
                                         DeviceFeatures.deviceModelLabel(), 0, 0));
                             }
@@ -23944,7 +24076,6 @@ public class MainActivity extends Activity {
         if (users != null) {
             for (ReachDirectoryUser u : users) {
                 if (u == null || u.username == null) continue;
-                if (SolarDeveloperAccounts.hideFromReachUi(u.username)) continue;
                 filtered.add(u);
             }
         }
@@ -23973,12 +24104,10 @@ public class MainActivity extends Activity {
             @Override
             public void onUserSelected(ReachDirectoryUser user) {
                 clickFeedback();
-                if (user != null && SolarDeveloperAccounts.isVirtualPeer(user.username)) {
-                    openSolarDevelopmentProfile();
-                    return;
+                if (user != null) {
+                    soulseekMessagePeer = user.username;
+                    buildSoulseekConversationUI(user.username);
                 }
-                soulseekMessagePeer = user.username;
-                buildSoulseekConversationUI(user.username);
             }
 
             @Override
@@ -24210,7 +24339,7 @@ public class MainActivity extends Activity {
             host.addView(btnBrowse);
         }
 
-        if (soulseekMessagingEnabled || SolarDeveloperAccounts.isVirtualPeer(peer) || SolarDeveloperAccounts.isDeveloper(peer) || SolarDeveloperAccounts.hideFromReachUi(peer)) {
+        if (soulseekMessagingEnabled) {
             Button btnMsg = createListButton(getString(R.string.soulseek_compose_message));
             btnMsg.setOnClickListener(new View.OnClickListener() {
                 @Override
@@ -24253,7 +24382,7 @@ public class MainActivity extends Activity {
             host.addView(btnClearNote);
         }
 
-        if (!SolarDeveloperAccounts.isVirtualPeer(peer) && !SolarDeveloperAccounts.hideFromReachUi(peer)) {
+        if (!SolarDeveloperAccounts.isVirtualPeer(peer)) {
             final boolean ignored = SoulseekPeerPrefs.isIgnored(prefs, peer);
             Button btnIgnore = createListButton(getString(ignored
                     ? R.string.soulseek_unignore_user : R.string.soulseek_ignore_user));
@@ -24293,7 +24422,7 @@ public class MainActivity extends Activity {
     }
 
     private void toggleSoulseekPeerBlocked(final String peer, final boolean block) {
-        if (peer == null || SolarDeveloperAccounts.isVirtualPeer(peer) || SolarDeveloperAccounts.hideFromReachUi(peer)) return;
+        if (peer == null || SolarDeveloperAccounts.isVirtualPeer(peer)) return;
         SoulseekPeerPrefs.setBlocked(prefs, peer, block);
         SoulseekClient client = ensureSoulseekClient();
         if (client != null) {
@@ -24306,7 +24435,7 @@ public class MainActivity extends Activity {
     }
 
     private void toggleSoulseekPeerIgnored(final String peer, final boolean ignore) {
-        if (peer == null || SolarDeveloperAccounts.isVirtualPeer(peer) || SolarDeveloperAccounts.hideFromReachUi(peer)) return;
+        if (peer == null || SolarDeveloperAccounts.isVirtualPeer(peer)) return;
         SoulseekPeerPrefs.setIgnored(prefs, peer, ignore);
         SoulseekClient client = ensureSoulseekClient();
         if (client != null) {
@@ -26357,9 +26486,7 @@ public class MainActivity extends Activity {
         dismissThemedContextMenu();
         contextReachMessagePosition = -1;
         containerSettingsItems.removeAllViews();
-        final String resolvedPeer = (SolarDeveloperAccounts.isDeveloper(peer) || SolarDeveloperAccounts.hideFromReachUi(peer))
-                ? SolarDeveloperAccounts.VIRTUAL_PEER : peer.trim();
-        soulseekMessagePeer = resolvedPeer;
+        soulseekMessagePeer = peer != null ? peer.trim() : "";
         setSettingsSubScreen(SettingsScreens.SOULSEEK_MESSAGES_THREAD, soulseekMessagePeer);
         updateStatusBarTitle();
         showReachBrowseList(false);
@@ -26454,9 +26581,7 @@ public class MainActivity extends Activity {
             restoreSettingsAfterSoulseekAccount();
             return;
         }
-        // Aggregated Solar Development — profile or PM thread, not raw Soulseek user lookup.
-        if (isDevSupportExperimentEnabled()
-                && SolarDeveloperAccounts.matchesDeveloperSearchQuery(user)) {
+        if (SolarDeveloperAccounts.isVirtualPeer(user)) {
             currentScreenState = STATE_SETTINGS;
             layoutWifiKeyboard.setVisibility(View.GONE);
             layoutSettingsMode.setVisibility(View.VISIBLE);
@@ -26602,20 +26727,13 @@ public class MainActivity extends Activity {
             buildSoulseekMessagesUI();
             return;
         }
-        if (SolarDeveloperAccounts.hideFromReachUi(user)) {
-            Toast.makeText(this, getString(R.string.soulseek_invalid_username), Toast.LENGTH_LONG).show();
-            buildSoulseekMessagesUI();
-            return;
-        }
         soulseekMessagePeer = user;
         buildSoulseekConversationUI(user);
     }
 
     /** True when compose keyboard fans out to hidden developer Soulseek accounts. */
     private boolean isDeveloperSupportMessageCompose() {
-        return SolarDeveloperAccounts.isVirtualPeer(soulseekKeyboardMessageTo)
-                || SolarDeveloperAccounts.isDeveloper(soulseekKeyboardMessageTo)
-                || SolarDeveloperAccounts.hideFromReachUi(soulseekKeyboardMessageTo);
+        return SolarDeveloperAccounts.isVirtualPeer(soulseekKeyboardMessageTo);
     }
 
     private void openSoulseekMessageCompose(final String peer) {
@@ -27435,7 +27553,7 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View v) {
                 clickFeedback();
-                boolean enable = !prefs.getBoolean(PREF_DEBUG_FLOW_NO_REFLECTIONS, true);
+                boolean enable = !prefs.getBoolean(PREF_DEBUG_FLOW_NO_REFLECTIONS, false);
                 prefs.edit().putBoolean(PREF_DEBUG_FLOW_NO_REFLECTIONS, enable).apply();
                 refreshSettingsPreview(RowKeys.DEBUG_FLOW_NO_REFLECTIONS);
                 applyFlowNoReflectionsPref(enable);
@@ -28088,13 +28206,19 @@ public class MainActivity extends Activity {
             @Override public int progressInterval() { return progressInterval; }
         };
         long tScan0 = System.currentTimeMillis();
-        LibraryScanner.ScanResult result = LibraryScanner.scan(rootFolder, store,
-                blacklist, prefs, seenPaths, scanCb);
-        if (libraryScanGen != gen) {
-            abortLibraryScanWorker(gen);
-            return;
+        LibraryScanner.ScanResult result = null;
+        for (File musicFolder : com.solar.launcher.DeviceFeatures.getMusicRoots()) {
+            if (!musicFolder.exists()) musicFolder.mkdirs();
+            result = LibraryScanner.scan(musicFolder, store,
+                    blacklist, prefs, seenPaths, scanCb);
+            if (libraryScanGen != gen) {
+                abortLibraryScanWorker(gen);
+                return;
+            }
+            if (result != null && result.items != null) {
+                scanned.addAll(result.items);
+            }
         }
-        scanned.addAll(result.items);
         long scanMs = System.currentTimeMillis() - tScan0;
         // #region agent log
         try {
@@ -28127,7 +28251,7 @@ public class MainActivity extends Activity {
                     "scan ui finish scheduled, art async", "H5", d);
         } catch (Exception ignored) {}
         // #endregion
-        ScanPerfLog.record(scanned.size(), scanMs, result.phases());
+        ScanPerfLog.record(scanned.size(), scanMs, result != null ? result.phases() : null);
         if (libraryScanGen != gen) {
             abortLibraryScanWorker(gen);
             return;
@@ -28687,16 +28811,28 @@ public class MainActivity extends Activity {
         }
     }
 
+    private String cleanPathLabel(String absolutePath) {
+        if (absolutePath == null) return "/";
+        String path = absolutePath;
+        for (File root : com.solar.launcher.DeviceFeatures.getStorageRoots()) {
+            String rootPath = root.getAbsolutePath();
+            if (path.startsWith(rootPath)) {
+                path = path.substring(rootPath.length());
+                break;
+            }
+        }
+        if (path.isEmpty()) path = "/";
+        return path;
+    }
+
     private String buildLibraryBreadcrumb() {
         if (isPickingBackground) {
-            String pathLabel = currentFolder.getAbsolutePath().replace("/storage/sdcard0", "");
-            if (pathLabel.isEmpty()) pathLabel = "/";
+            String pathLabel = cleanPathLabel(currentFolder.getAbsolutePath());
             return getString(R.string.path_library_pick_image, pathLabel);
         }
         switch (currentBrowserMode) {
             case BROWSER_FOLDER: {
-                String pathLabel = currentFolder.getAbsolutePath().replace("/storage/sdcard0", "");
-                if (pathLabel.isEmpty()) pathLabel = "/";
+                String pathLabel = cleanPathLabel(currentFolder.getAbsolutePath());
                 return getString(R.string.path_library_folders, pathLabel);
             }
             case BROWSER_ARTISTS:
@@ -30660,8 +30796,7 @@ public class MainActivity extends Activity {
     private void buildFolderBrowserUI() {
         folderBrowserEntries.clear();
         currentScrollIndexList.clear();
-        String pathLabel = currentFolder.getAbsolutePath().replace("/storage/sdcard0", "");
-        if (pathLabel.isEmpty()) pathLabel = "/";
+        String pathLabel = cleanPathLabel(currentFolder.getAbsolutePath());
         browserStatusTitle = getString(R.string.status_path, pathLabel);
         updateStatusBarTitle();
         updateLibraryBreadcrumb();
@@ -32696,7 +32831,6 @@ public class MainActivity extends Activity {
             d.put("sharingEnabled", soulseekSharingEnabled);
             d.put("policyState", soulseekSharePolicy.state().name());
             d.put("announce", soulseekSharePolicy.announceShares());
-            d.put("indexedFiles", soulseekShareIndex.fileCount());
             DebugAgentLog.log(this, "MainActivity.updateSoulseekSharePolicy",
                     "policy tick", "H1", d);
         } catch (Exception ignored) {}
@@ -32789,26 +32923,6 @@ public class MainActivity extends Activity {
             if (SolarDeveloperAccounts.isDiagHandle(fromUser)) {
                 return;
             }
-            if (SolarDeveloperAccounts.isDeveloper(fromUser)) {
-                if (!SolarDeveloperAccounts.isExperimentEnabled(prefs)) return;
-                SolarDeveloperMessaging.appendIncoming(
-                        MainActivity.this, prefs, fromUser, messageId, timestamp, text);
-                SolarDeveloperMessaging.forwardToOtherDevs(
-                        MainActivity.this, prefs, fromUser, text);
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        final boolean onDevThread =
-                                SettingsScreens.SOULSEEK_MESSAGES_THREAD.equals(settingsSubScreenKey)
-                                && SolarDeveloperAccounts.isVirtualPeer(soulseekMessagePeer);
-                        if (onDevThread) {
-                            refreshConversationThreadList();
-                        }
-                        showSolarDeveloperPmNotification(fromUser, text);
-                    }
-                });
-                return;
-            }
             SoulseekAccount acct = SoulseekAccount.load(prefs, MainActivity.this);
             final boolean persist = ReachIntroMessage.shouldPersistForReachClient(
                     text, fromUser, acct.username, prefs);
@@ -32876,7 +32990,6 @@ public class MainActivity extends Activity {
         @Override
         public void onRoomMessage(final String room, final String sender, final String text,
                 final int timestamp) {
-            if (SolarDeveloperAccounts.hideFromReachUi(sender)) return;
             SoulseekAccount acct = SoulseekAccount.load(prefs, MainActivity.this);
             boolean incoming = sender == null || !sender.equalsIgnoreCase(acct.username);
             final boolean persist = ReachIntroMessage.shouldPersistForReachClient(
@@ -32913,7 +33026,6 @@ public class MainActivity extends Activity {
         @Override
         public void onRoomUserJoined(String room, String username) {
             if (room == null || username == null) return;
-            if (SolarDeveloperAccounts.hideFromReachUi(username)) return;
             SoulseekChatRooms.appendRoomStatus(MainActivity.this, prefs, room, username, true);
             runOnUiThread(new Runnable() {
                 @Override
@@ -32929,7 +33041,6 @@ public class MainActivity extends Activity {
         @Override
         public void onRoomUserLeft(String room, String username) {
             if (room == null || username == null) return;
-            if (SolarDeveloperAccounts.hideFromReachUi(username)) return;
             SoulseekChatRooms.appendRoomStatus(MainActivity.this, prefs, room, username, false);
             runOnUiThread(new Runnable() {
                 @Override
@@ -34301,11 +34412,8 @@ public class MainActivity extends Activity {
                     @Override
                     public void onClick(View v) {
                         clickFeedback();
-                        if (requireInternet(getMusic ? R.string.toast_internet_required
-                                : R.string.soulseek_wifi_required)) {
-                            if (getMusic) fetchGetMusicResults(q);
-                            else fetchSoulseekResults(q);
-                        }
+                        if (getMusic) openGetMusicSearchKeyboard(q);
+                        else openSoulseekSearchKeyboard(q);
                     }
                 });
                 containerBrowserItems.addView(b);
@@ -38006,7 +38114,7 @@ public class MainActivity extends Activity {
                 public boolean onError(MediaPlayer mp, int what, int extra) {
                     String err = "Audio Error: what=" + what + " extra=" + extra;
                     try {
-                        java.io.File log = new java.io.File("/storage/sdcard0/solar_audio_error.txt");
+                        java.io.File log = new java.io.File(com.solar.launcher.DeviceFeatures.getPrimaryStorageRoot(), "solar_audio_error.txt");
                         java.io.FileOutputStream fos = new java.io.FileOutputStream(log, true);
                         fos.write((new java.util.Date().toString() + " - " + err + " File: " + track.getName() + "\n")
                                 .getBytes());
@@ -38032,10 +38140,12 @@ public class MainActivity extends Activity {
                     try {
                         setupVisualizer();
                         try {
-                            if (equalizer == null) {
-                                equalizer = new Equalizer(0, mediaPlayer.getAudioSessionId());
-                                equalizer.setEnabled(true);
+                            if (equalizer != null) {
+                                try { equalizer.release(); } catch (Exception ignored) {}
+                                equalizer = null;
                             }
+                            equalizer = new Equalizer(0, mediaPlayer.getAudioSessionId());
+                            equalizer.setEnabled(true);
                             if (currentEqPresetIndex < equalizer.getNumberOfPresets()) {
                                 equalizer.usePreset((short) currentEqPresetIndex);
                             }
@@ -38515,8 +38625,10 @@ public class MainActivity extends Activity {
     /** Called from MediaSessionShim (API 21+) for screen-off transport keys. */
     public boolean handleMediaSessionKey(int keyCode) {
         if (!isScreenOffControlEnabled) return false;
-        if (Y1InputKeys.isVolumeDownKey(keyCode)) { adjustVolume(false); clickFeedback(); return true; }
-        if (Y1InputKeys.isVolumeUpKey(keyCode)) { adjustVolume(true); clickFeedback(); return true; }
+        if (DeviceFeatures.isY1()) {
+            if (Y1InputKeys.isVolumeDownKey(keyCode)) { adjustVolume(false); clickFeedback(); return true; }
+            if (Y1InputKeys.isVolumeUpKey(keyCode)) { adjustVolume(true); clickFeedback(); return true; }
+        }
         // ponytail: Y1 wheel shares 126/127 with AVRCP — consume here so MediaSession does not play/pause.
         if (Y1InputKeys.isWheelKey(keyCode)) {
             // #region agent log
@@ -38528,7 +38640,7 @@ public class MainActivity extends Activity {
             // #endregion
             return true;
         }
-        if (Y1InputKeys.isTrackPreviousKey(keyCode) || Y1InputKeys.isTrackNextKey(keyCode)) {
+        if (isMediaPrevKey(keyCode) || isMediaNextKey(keyCode)) {
             return false; // ponytail: side prev/next while screen off — let system handle if needed
         }
         if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || keyCode == 85 || keyCode == 86) {
@@ -38663,11 +38775,36 @@ public class MainActivity extends Activity {
         refreshContextQueueTierIfOpen();
     }
 
+    private boolean isScreenOff() {
+        try {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (android.os.Build.VERSION.SDK_INT >= 20) {
+                return !pm.isInteractive();
+            } else {
+                return !pm.isScreenOn();
+            }
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private boolean isMediaNextKey(int keyCode) {
+        if (com.solar.launcher.DeviceFeatures.isY2()
+                && (currentScreenState == STATE_PLAYER || currentScreenState == STATE_WIFI_KEYBOARD || isScreenOff())) {
+            if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT || keyCode == 22) {
+                return true;
+            }
+        }
         return Y1InputKeys.isTrackNextKey(keyCode);
     }
 
     private boolean isMediaPrevKey(int keyCode) {
+        if (com.solar.launcher.DeviceFeatures.isY2()
+                && (currentScreenState == STATE_PLAYER || currentScreenState == STATE_WIFI_KEYBOARD || isScreenOff())) {
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == 21) {
+                return true;
+            }
+        }
         return Y1InputKeys.isTrackPreviousKey(keyCode);
     }
 
@@ -39005,15 +39142,17 @@ public class MainActivity extends Activity {
             clickFeedback();
             return true;
         }
-        if (Y1InputKeys.isVolumeDownKey(keyCode)) {
-            adjustVolume(false);
-            clickFeedback();
-            return true;
-        }
-        if (Y1InputKeys.isVolumeUpKey(keyCode)) {
-            adjustVolume(true);
-            clickFeedback();
-            return true;
+        if (DeviceFeatures.isY1()) {
+            if (Y1InputKeys.isVolumeDownKey(keyCode)) {
+                adjustVolume(false);
+                clickFeedback();
+                return true;
+            }
+            if (Y1InputKeys.isVolumeUpKey(keyCode)) {
+                adjustVolume(true);
+                clickFeedback();
+                return true;
+            }
         }
         return false;
     }
@@ -39138,6 +39277,7 @@ public class MainActivity extends Activity {
     }
 
     private void adjustVolume(boolean up) {
+        if (DeviceFeatures.isY2()) return; // Y2 has dedicated side volume buttons; let the OS handle them.
         int stream = activeVolumeStream();
         int currentVol = audioManager.getStreamVolume(stream);
         int maxVol = audioManager.getStreamMaxVolume(stream);
@@ -39284,6 +39424,11 @@ public class MainActivity extends Activity {
         if (handleThemedContextMenuKeyDown(keyCode, event)) return true;
         if (handleBluetoothTransportKeyDown(keyCode, event)) return true;
 
+        // Y2 has dedicated side volume buttons; always let the OS handle them.
+        if (DeviceFeatures.isY2() && (Y1InputKeys.isVolumeDownKey(keyCode) || Y1InputKeys.isVolumeUpKey(keyCode))) {
+            return false;
+        }
+
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
         boolean isScreenOn = true;
         try {
@@ -39303,22 +39448,24 @@ public class MainActivity extends Activity {
             }
 
             if (isScreenOffControlEnabled && currentScreenState == STATE_PLAYER) {
-                if (Y1InputKeys.isVolumeDownKey(keyCode) || Y1InputKeys.isWheelUp(keyCode)) {
-                    // Block volume briefly after track change.
-                    if (System.currentTimeMillis() - lastTrackChangeTime > 300) {
-                        adjustVolume(false);
-                        clickFeedback();
+                if (DeviceFeatures.isY1()) {
+                    if (Y1InputKeys.isVolumeDownKey(keyCode) || Y1InputKeys.isWheelUp(keyCode)) {
+                        // Block volume briefly after track change.
+                        if (System.currentTimeMillis() - lastTrackChangeTime > 300) {
+                            adjustVolume(false);
+                            clickFeedback();
+                        }
+                        return true;
                     }
-                    return true;
-                }
-                if (Y1InputKeys.isVolumeUpKey(keyCode) || Y1InputKeys.isWheelDown(keyCode)) {
-                    if (System.currentTimeMillis() - lastTrackChangeTime > 300) {
-                        adjustVolume(true);
-                        clickFeedback();
+                    if (Y1InputKeys.isVolumeUpKey(keyCode) || Y1InputKeys.isWheelDown(keyCode)) {
+                        if (System.currentTimeMillis() - lastTrackChangeTime > 300) {
+                            adjustVolume(true);
+                            clickFeedback();
+                        }
+                        return true;
                     }
-                    return true;
                 }
-                if (Y1InputKeys.isTrackPreviousKey(keyCode) || Y1InputKeys.isTrackNextKey(keyCode)) {
+                if (isMediaPrevKey(keyCode) || isMediaNextKey(keyCode)) {
                     return handleMediaSkipKeyDown(keyCode, event);
                 }
                 if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || keyCode == 85 || keyCode == 86) {
@@ -39389,7 +39536,7 @@ public class MainActivity extends Activity {
             return true;
         }
 
-        if (Y1InputKeys.isTrackPreviousKey(keyCode) || Y1InputKeys.isTrackNextKey(keyCode)) {
+        if (isMediaPrevKey(keyCode) || isMediaNextKey(keyCode)) {
             if (currentScreenState == STATE_PLAYER || hasActiveMediaPlayback()
                     || currentScreenState == MediaSuiteHost.STATE_VIDEO_PLAYER) {
                 return handleMediaSkipKeyDown(keyCode, event);
@@ -40131,7 +40278,7 @@ public class MainActivity extends Activity {
     }
 
     private File getCoversFolder() {
-        File covers = new File("/storage/sdcard0/Solar_Covers");
+        File covers = new File(com.solar.launcher.DeviceFeatures.getPrimaryStorageRoot(), "Solar_Covers");
         if (!covers.exists()) covers.mkdirs();
         return covers;
     }
@@ -40486,15 +40633,17 @@ public class MainActivity extends Activity {
                                 activity.clickFeedback();
                                 return;
                             }
-                            if (Y1InputKeys.isVolumeDownKey(keyCode)) {
-                                activity.adjustVolume(false);
-                                activity.clickFeedback();
-                                return;
-                            }
-                            if (Y1InputKeys.isVolumeUpKey(keyCode)) {
-                                activity.adjustVolume(true);
-                                activity.clickFeedback();
-                                return;
+                            if (DeviceFeatures.isY1()) {
+                                if (Y1InputKeys.isVolumeDownKey(keyCode)) {
+                                    activity.adjustVolume(false);
+                                    activity.clickFeedback();
+                                    return;
+                                }
+                                if (Y1InputKeys.isVolumeUpKey(keyCode)) {
+                                    activity.adjustVolume(true);
+                                    activity.clickFeedback();
+                                    return;
+                                }
                             }
                         }
 
@@ -40513,10 +40662,10 @@ public class MainActivity extends Activity {
                         if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || keyCode == 85 || keyCode == 86) {
                             activity.playOrPauseMusic();
                             activity.clickFeedback();
-                        } else if (Y1InputKeys.isVolumeDownKey(keyCode)) {
+                        } else if (DeviceFeatures.isY1() && Y1InputKeys.isVolumeDownKey(keyCode)) {
                             activity.adjustVolume(false);
                             activity.clickFeedback();
-                        } else if (Y1InputKeys.isVolumeUpKey(keyCode)) {
+                        } else if (DeviceFeatures.isY1() && Y1InputKeys.isVolumeUpKey(keyCode)) {
                             activity.adjustVolume(true);
                             activity.clickFeedback();
                         }
@@ -41742,7 +41891,7 @@ public class MainActivity extends Activity {
 
             @Override
             public boolean isDebugFlowNoReflections() {
-                return prefs.getBoolean(PREF_DEBUG_FLOW_NO_REFLECTIONS, true);
+                return prefs.getBoolean(PREF_DEBUG_FLOW_NO_REFLECTIONS, false);
             }
 
             @Override

@@ -13,7 +13,7 @@ import java.util.List;
 
 /** Saved podcast episodes on MicroSD: /storage/sdcard0/Podcasts/{show}/{episode}.ext */
 public final class PodcastLibrary {
-    public static final File ROOT = new File("/storage/sdcard0/Podcasts");
+    public static final File ROOT = new File(com.solar.launcher.DeviceFeatures.getPrimaryStorageRoot(), "Podcasts");
 
     private PodcastLibrary() {}
 
@@ -26,8 +26,15 @@ public final class PodcastLibrary {
     }
 
     public static File findSaved(String showTitle, String episodeTitle, String audioUrl) {
-        File f = destFile(showTitle, episodeTitle, audioUrl);
-        return f.isFile() && f.length() > 0 ? f : null;
+        for (File root : com.solar.launcher.DeviceFeatures.getPodcastRoots()) {
+            File showDir = new File(root, sanitize(showTitle, 60));
+            String ext = extensionFromUrl(audioUrl);
+            String base = sanitize(episodeTitle, 80);
+            if (base.isEmpty()) base = "episode_" + Integer.toHexString(audioUrl.hashCode());
+            File f = new File(showDir, base + ext);
+            if (f.isFile() && f.length() > 0) return f;
+        }
+        return null;
     }
 
     private static final String[] AUDIO_EXT = {".mp3", ".m4a", ".ogg", ".opus", ".aac", ".wav", ".flac"};
@@ -52,11 +59,18 @@ public final class PodcastLibrary {
 
     public static List<String> listSavedShows() {
         List<String> out = new ArrayList<String>();
-        if (!ROOT.isDirectory()) return out;
-        File[] dirs = ROOT.listFiles();
-        if (dirs == null) return out;
-        for (File d : dirs) {
-            if (d.isDirectory() && hasAudioFiles(d)) out.add(d.getName());
+        java.util.Set<String> seen = new java.util.HashSet<String>();
+        for (File root : com.solar.launcher.DeviceFeatures.getPodcastRoots()) {
+            if (!root.isDirectory()) continue;
+            File[] dirs = root.listFiles();
+            if (dirs == null) continue;
+            for (File d : dirs) {
+                if (d.isDirectory() && hasAudioFiles(d)) {
+                    if (seen.add(d.getName().toLowerCase(java.util.Locale.US))) {
+                        out.add(d.getName());
+                    }
+                }
+            }
         }
         Collections.sort(out, String.CASE_INSENSITIVE_ORDER);
         return out;
@@ -65,12 +79,19 @@ public final class PodcastLibrary {
     public static List<File> listSavedEpisodes(String showFolderName) {
         List<File> out = new ArrayList<File>();
         if (showFolderName == null) return out;
-        File dir = new File(ROOT, showFolderName);
-        if (!dir.isDirectory()) return out;
-        File[] files = dir.listFiles();
-        if (files == null) return out;
-        for (File f : files) {
-            if (f.isFile() && f.length() > 0 && isAudioFileName(f.getName())) out.add(f);
+        java.util.Set<String> seen = new java.util.HashSet<String>();
+        for (File root : com.solar.launcher.DeviceFeatures.getPodcastRoots()) {
+            File dir = new File(root, showFolderName);
+            if (!dir.isDirectory()) continue;
+            File[] files = dir.listFiles();
+            if (files == null) continue;
+            for (File f : files) {
+                if (f.isFile() && f.length() > 0 && isAudioFileName(f.getName())) {
+                    if (seen.add(f.getName().toLowerCase(java.util.Locale.US))) {
+                        out.add(f);
+                    }
+                }
+            }
         }
         Collections.sort(out, new Comparator<File>() {
             @Override
