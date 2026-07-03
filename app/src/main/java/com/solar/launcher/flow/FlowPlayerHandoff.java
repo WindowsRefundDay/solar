@@ -220,12 +220,37 @@ public final class FlowPlayerHandoff {
             final boolean reverse, final boolean landingRectMeasured,
             final Runnable onComplete, final int morphDurationMs) {
         if (host == null || host.activity() == null || cover == null || fromRect == null) {
+            if (host != null) {
+                // ponytail: fail-safe visibility reset if handoff is aborted
+                View player = host.playerLayout();
+                if (player != null) player.setAlpha(1f);
+                View flow = host.flowLayout();
+                if (flow != null) {
+                    if (reverse) {
+                        flow.setAlpha(1f);
+                        flow.setVisibility(View.VISIBLE);
+                    } else {
+                        flow.setVisibility(View.GONE);
+                    }
+                }
+            }
             if (onComplete != null) onComplete.run();
             return;
         }
         Activity act = host.activity();
         ViewGroup root = (ViewGroup) act.findViewById(android.R.id.content);
         if (root == null) {
+            View player = host.playerLayout();
+            if (player != null) player.setAlpha(1f);
+            View flow = host.flowLayout();
+            if (flow != null) {
+                if (reverse) {
+                    flow.setAlpha(1f);
+                    flow.setVisibility(View.VISIBLE);
+                } else {
+                    flow.setVisibility(View.GONE);
+                }
+            }
             if (onComplete != null) onComplete.run();
             return;
         }

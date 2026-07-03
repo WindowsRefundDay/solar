@@ -9,6 +9,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -79,6 +80,7 @@ public final class DeezerScreen {
         void showSearchServicePicker(String q, boolean openKeyboard);
         void onDeezerBackFromSearch();
         void openDeezerSearchKeyboard();
+        void openDeezerSearchKeyboard(String initialQuery);
         boolean soulseekReachAvailable();
         boolean deezerAvailable();
         String string(int res);
@@ -240,7 +242,7 @@ public final class DeezerScreen {
                 b.setOnClickListener(new View.OnClickListener() {
                     @Override public void onClick(View v) {
                         host.clickFeedback();
-                        if (host.requireInternet(R.string.deezer_wifi_required)) fetchResults(q);
+                        host.openDeezerSearchKeyboard(q);
                     }
                 });
                 container.addView(b);
@@ -994,9 +996,15 @@ public final class DeezerScreen {
         Button title = host.createListButton(r.displayTitle());
         title.setEnabled(false);
         container.addView(title);
-        searchStatusRow = host.createListButton(host.string(R.string.deezer_download_retrying));
-        searchStatusRow.setEnabled(false);
-        container.addView(searchStatusRow);
+        // ponytail: spinner instead of "Retrying download…" — looks like progress, not failure
+        ProgressBar spinner = new ProgressBar(host.context(), null, android.R.attr.progressBarStyleSmall);
+        LinearLayout.LayoutParams spinLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        spinLp.gravity = android.view.Gravity.CENTER_HORIZONTAL;
+        int pad = (int) (host.context().getResources().getDisplayMetrics().density * 16);
+        spinLp.topMargin = pad;
+        spinLp.bottomMargin = pad;
+        container.addView(spinner, spinLp);
     }
 
     private void cancelAutoRetrySchedule() {

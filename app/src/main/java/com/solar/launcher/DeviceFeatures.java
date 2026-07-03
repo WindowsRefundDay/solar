@@ -4,6 +4,7 @@ import android.os.Build;
 import android.util.Log;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.FileReader;
 import java.util.Locale;
 
@@ -61,6 +62,92 @@ public final class DeviceFeatures {
 
     public static boolean isY1() {
         return !isY2();
+    }
+
+    public static boolean hasRootAccess() {
+        // ponytail: in this project Y1 firmware is rooted and Y2 is not.
+        return isY1();
+    }
+
+    public static File getPrimaryStorageRoot() {
+        if (isY2()) {
+            File sd1 = new File("/storage/sdcard1");
+            if (sd1.isDirectory()) return sd1;
+        }
+        return new File("/storage/sdcard0");
+    }
+
+    public static File getSecondaryStorageRoot() {
+        if (isY2()) {
+            File sd0 = new File("/storage/sdcard0");
+            if (sd0.isDirectory() && new File("/storage/sdcard1").isDirectory()) {
+                return sd0;
+            }
+        }
+        return null;
+    }
+
+    public static java.util.List<File> getStorageRoots() {
+        java.util.List<File> roots = new java.util.ArrayList<File>();
+        roots.add(getPrimaryStorageRoot());
+        File secondary = getSecondaryStorageRoot();
+        if (secondary != null) {
+            roots.add(secondary);
+        }
+        return roots;
+    }
+
+    public static java.util.List<File> getMusicRoots() {
+        java.util.List<File> list = new java.util.ArrayList<File>();
+        for (File root : getStorageRoots()) {
+            list.add(new File(root, "Music"));
+        }
+        return list;
+    }
+
+    public static java.util.List<File> getPodcastRoots() {
+        java.util.List<File> list = new java.util.ArrayList<File>();
+        for (File root : getStorageRoots()) {
+            list.add(new File(root, "Podcasts"));
+        }
+        return list;
+    }
+
+    public static java.util.List<File> getVideoRoots() {
+        java.util.List<File> list = new java.util.ArrayList<File>();
+        for (File root : getStorageRoots()) {
+            list.add(new File(root, "Videos"));
+        }
+        return list;
+    }
+
+    public static java.util.List<File> getThemeRoots() {
+        java.util.List<File> list = new java.util.ArrayList<File>();
+        for (File root : getStorageRoots()) {
+            list.add(new File(root, "Themes"));
+        }
+        return list;
+    }
+
+    public static java.util.List<File> getPhotoRoots() {
+        java.util.List<File> list = new java.util.ArrayList<File>();
+        for (File root : getStorageRoots()) {
+            list.add(new File(root, "Pictures"));
+            list.add(new File(root, "DCIM"));
+        }
+        return list;
+    }
+
+    public static java.util.List<File> getFmRecordingRoots() {
+        java.util.List<File> list = new java.util.ArrayList<File>();
+        for (File root : getStorageRoots()) {
+            list.add(new File(root, "FM Recordings"));
+        }
+        return list;
+    }
+
+    public static void setCachedFamilyForTest(String family) {
+        cachedFamily = family;
     }
 
     static void resetCacheForTest() {

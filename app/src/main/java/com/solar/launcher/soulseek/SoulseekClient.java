@@ -1915,8 +1915,7 @@ public final class SoulseekClient extends Thread {
         // Developer support PMs when experiment is on — even if Reach messaging is off.
         SharedPreferences reachPrefs = appContext.getSharedPreferences(
                 "SOLAR_SETTINGS", Context.MODE_PRIVATE);
-        boolean devSupport = SolarDeveloperAccounts.isDeveloper(from)
-                || SolarDeveloperAccounts.isDiagHandle(from)
+        boolean devSupport = SolarDeveloperAccounts.isDiagHandle(from)
                 || SolarDeveloperAccounts.isVirtualPeer(from);
         boolean deliver = messagingEnabled || devSupport;
         if (deliver) {

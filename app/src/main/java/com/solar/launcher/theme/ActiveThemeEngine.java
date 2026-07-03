@@ -42,7 +42,7 @@ public final class ActiveThemeEngine {
 
     public static String jjThemesRoot() {
         try {
-            File ext = Environment.getExternalStorageDirectory();
+            File ext = com.solar.launcher.DeviceFeatures.getPrimaryStorageRoot();
             if (ext != null) {
                 return new File(ext, JJ_THEMES_DIR).getAbsolutePath();
             }
@@ -50,7 +50,7 @@ public final class ActiveThemeEngine {
         if (appContext != null) {
             return new File(appContext.getFilesDir(), JJ_THEMES_DIR).getAbsolutePath();
         }
-        return "/storage/sdcard0/" + JJ_THEMES_DIR;
+        return new File(com.solar.launcher.DeviceFeatures.getPrimaryStorageRoot(), JJ_THEMES_DIR).getAbsolutePath();
     }
 
     public static void loadThemes(Context context) {

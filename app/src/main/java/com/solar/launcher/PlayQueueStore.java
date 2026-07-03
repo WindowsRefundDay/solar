@@ -153,7 +153,10 @@ public final class PlayQueueStore {
             int missing = 0;
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject o = arr.getJSONObject(i);
-                if ("PODCAST_EPISODE".equals(o.optString("kind", ""))) continue;
+                // ponytail: stream kinds / radio stations are not static local files — skip check.
+                String kind = o.optString("kind", "");
+                if ("REACH_STREAM".equals(kind) || "DEEZER_STREAM".equals(kind) || "PODCAST_EPISODE".equals(kind)
+                        || "FM_STATION".equals(kind) || "INTERNET_RADIO_STATION".equals(kind)) continue;
                 String path = o.optString("path", "");
                 if (path.isEmpty()) continue;
                 if (!new File(path).isFile()) missing++;

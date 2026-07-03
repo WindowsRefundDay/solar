@@ -457,7 +457,6 @@ public class ReachDatabase extends SolarDbHelper {
                     while (c.moveToNext()) {
                         String peer = c.getString(0);
                         if (peer == null || peer.isEmpty()) continue;
-                        if (SolarDeveloperAccounts.hideFromReachUi(peer)) continue;
                         String text = c.getString(1);
                         int ts = c.getInt(2);
                         if (ReachIntroMessage.isIntro(text)

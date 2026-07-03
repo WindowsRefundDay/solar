@@ -48,9 +48,8 @@ public class SolarDeveloperAccountsTest {
             SolarDeveloperAccounts.resolveContactInput("solar dev"))) {
       throw new AssertionError("solar dev alias");
     }
-    if (!SolarDeveloperAccounts.VIRTUAL_PEER.equals(
-            SolarDeveloperAccounts.resolveContactInput("SolarDev"))) {
-      throw new AssertionError("wire dev maps to proxy");
+    if (SolarDeveloperAccounts.resolveContactInput("SolarDev") != null) {
+      throw new AssertionError("wire dev should not map to proxy");
     }
     if (!SolarDeveloperAccounts.isAggregatedDeveloperQuery("Solar Development")) {
       throw new AssertionError("aggregated query");

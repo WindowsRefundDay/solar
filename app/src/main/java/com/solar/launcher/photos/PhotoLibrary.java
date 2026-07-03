@@ -12,8 +12,8 @@ import java.util.Set;
 
 /** On-device photo roots: Pictures, DCIM on MicroSD and Environment paths. */
 public final class PhotoLibrary {
-    private static final File SDCARD_PICTURES = new File("/storage/sdcard0/Pictures");
-    private static final File SDCARD_DCIM = new File("/storage/sdcard0/DCIM");
+    private static final File SDCARD_PICTURES = new File(com.solar.launcher.DeviceFeatures.getPrimaryStorageRoot(), "Pictures");
+    private static final File SDCARD_DCIM = new File(com.solar.launcher.DeviceFeatures.getPrimaryStorageRoot(), "DCIM");
 
     private static final String[] IMAGE_EXT = {".jpg", ".jpeg", ".png"};
 
@@ -23,8 +23,9 @@ public final class PhotoLibrary {
     public static List<File> listFolders() {
         Set<String> seen = new LinkedHashSet<String>();
         List<File> out = new ArrayList<File>();
-        addRootIfNew(out, seen, SDCARD_PICTURES);
-        addRootIfNew(out, seen, SDCARD_DCIM);
+        for (File dir : com.solar.launcher.DeviceFeatures.getPhotoRoots()) {
+            scanAndAddPhotoFolders(out, seen, dir, 0);
+        }
         // ponytail: Environment throws on JVM unit tests — sdcard paths cover Y1 hardware
         addEnvRootIfNew(out, seen, Environment.DIRECTORY_PICTURES);
         addEnvRootIfNew(out, seen, Environment.DIRECTORY_DCIM);
@@ -66,9 +67,31 @@ public final class PhotoLibrary {
         if (seen.add(path)) out.add(dir);
     }
 
+    private static void scanAndAddPhotoFolders(List<File> out, Set<String> seen, File dir, int depth) {
+        if (dir == null || !dir.isDirectory() || depth > 3) return;
+        File[] files = dir.listFiles();
+        if (files == null) return;
+        boolean hasImages = false;
+        for (File f : files) {
+            if (f.isFile() && f.length() > 0 && isImageFile(f.getName())) {
+                hasImages = true;
+                break;
+            }
+        }
+        if (hasImages) {
+            addRootIfNew(out, seen, dir);
+        }
+        for (File f : files) {
+            if (f.isDirectory()) {
+                scanAndAddPhotoFolders(out, seen, f, depth + 1);
+            }
+        }
+    }
+
     private static void addEnvRootIfNew(List<File> out, Set<String> seen, String type) {
         try {
-            addRootIfNew(out, seen, Environment.getExternalStoragePublicDirectory(type));
+            File dir = Environment.getExternalStoragePublicDirectory(type);
+            scanAndAddPhotoFolders(out, seen, dir, 0);
         } catch (Throwable ignored) {
         }
     }

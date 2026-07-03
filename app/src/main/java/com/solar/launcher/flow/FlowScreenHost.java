@@ -138,6 +138,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
     private int uiMode = UI_PICKER;
     private int pickerIndex;
     private int coverGen;
+    private volatile int lastWarmCenter;
     private int flipGen;
     private List<FlowItem> catalog = new ArrayList<FlowItem>();
     private FlowItem focusedItem;
@@ -2325,6 +2326,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
     @Override
     public void warmCarouselCovers(int center, int radius) {
         if (catalog == null || catalog.isEmpty() || flowView == null) return;
+        lastWarmCenter = center;
         warmCatalogCoversAsync(catalog, center, radius);
     }
 
@@ -2363,6 +2365,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         int warmed = 0;
         // Center slot first — focused cover should land before side neighbors.
         for (int ring = 0; ring <= radius; ring++) {
+            if (Math.abs(center - lastWarmCenter) > radius + 1) return;
             if (ring == 0) {
                 warmed += warmCatalogCoverAt(items, center, center, thumb, n);
             } else {

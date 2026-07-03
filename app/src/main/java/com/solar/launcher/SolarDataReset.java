@@ -22,7 +22,7 @@ import java.util.List;
 public final class SolarDataReset {
 
     /** Y1 primary volume — user-facing "Internal Storage" / MicroSD mount. */
-    public static final File STORAGE_ROOT = new File("/storage/sdcard0");
+    public static final File STORAGE_ROOT = com.solar.launcher.DeviceFeatures.getPrimaryStorageRoot();
     public static final File ROCKBOX_DIR = new File(STORAGE_ROOT, ".rockbox");
 
     public static final class Selection {
@@ -89,7 +89,7 @@ public final class SolarDataReset {
 
     static void clearStoredThemes(Context app) {
         ThemeManager.releaseSdcardFileHandles();
-        clearDirectoryContents(new File(ThemeManager.PATH_THEMES), false);
+        clearDirectoryContents(new File(ThemeManager.themesRoot()), false);
         clearDirectoryContents(new File(ActiveThemeEngine.jjThemesRoot()), false);
         clearDirectoryContents(ThemeManager.internalThemesDir(app), false);
     }

@@ -56,103 +56,33 @@ public final class SolarDiagnosticReporter {
     private SolarDiagnosticReporter() {}
 
     public static boolean isEnabled(SharedPreferences prefs) {
-        return prefs != null && prefs.getBoolean(PREF_DIAG_AUTO_REPORT, true);
+        return false;
     }
 
-    /** Background boot/Wi‑Fi shipping — experiment on and user toggle on. */
     private static boolean isBackgroundShippingAllowed(SharedPreferences prefs) {
-        return isEnabled(prefs) && SolarDeveloperAccounts.isExperimentEnabled(prefs);
+        return false;
     }
 
-    /**
-     * Solar Development thread opened — always ship a full diagnostic bundle.
-     * Independent of {@link #PREF_DIAG_AUTO_REPORT} (background-only toggle).
-     */
     public static void shipOnDeveloperSupportOpen(final Context context, final SharedPreferences prefs) {
-        if (context == null || prefs == null) return;
-        if (!SolarDeveloperAccounts.isExperimentEnabled(prefs)) return;
-        if (!ReachPolicy.isMasterEnabled(prefs)) return;
-        startScan(context, prefs, ScanMode.SUPPORT_OPEN);
     }
 
-    /** Called from {@link com.solar.launcher.SolarApplication} on every process start. */
     public static void onProcessStart(final Context context) {
-        bootScanPending = true;
-        firstInternetScanDone = false;
-        if (context == null) return;
-        final Context app = context.getApplicationContext();
-        for (final long delayMs : BOOT_RETRY_MS) {
-            new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        Thread.sleep(delayMs);
-                    } catch (InterruptedException ignored) {}
-                    if (!bootScanPending) return;
-                    SharedPreferences prefs = app.getSharedPreferences("SOLAR_SETTINGS",
-                            Context.MODE_PRIVATE);
-                    if (!isBackgroundShippingAllowed(prefs) || !ReachPolicy.isMasterEnabled(prefs)) return;
-                    if (!ConnectivityHelper.isOnline(app)) return;
-                    onReachInternetAvailable(app, prefs);
-                }
-            }, "SolarDiagBoot").start();
-        }
     }
 
-    /**
-     * Reach master on + internet available — start -diag session and ship logs.
-     * First call each process run uses startup priority (post-crash log gather).
-     */
     public static void onReachInternetAvailable(final Context context, final SharedPreferences prefs) {
-        if (context == null || prefs == null || !isBackgroundShippingAllowed(prefs)) return;
-        if (!ReachPolicy.isMasterEnabled(prefs)) return;
-        SolarDiagSessionManager.ensureSession(context, prefs);
-        if (bootScanPending || !firstInternetScanDone) {
-            bootScanPending = false;
-            firstInternetScanDone = true;
-            startScan(context, prefs, ScanMode.STARTUP);
-            return;
-        }
-        long now = System.currentTimeMillis();
-        if (now - lastScanMs < MIN_RECONNECT_INTERVAL_MS) return;
-        startScan(context, prefs, ScanMode.ROUTINE);
     }
 
-    /** @deprecated use {@link #onReachInternetAvailable} */
     public static void onWifiAvailable(final Context context, final SharedPreferences prefs) {
-        onReachInternetAvailable(context, prefs);
     }
 
-    /** Schedule a background scan when Reach is on Wi‑Fi (PM-only — no NAT peer gate). */
     public static void scheduleIfNeeded(final Context context, final SharedPreferences prefs) {
-        if (context == null || prefs == null || !isBackgroundShippingAllowed(prefs)) return;
-        if (!ReachPolicy.isMasterEnabled(prefs)) return;
-        long now = System.currentTimeMillis();
-        if (now - lastScanMs < MIN_SCAN_INTERVAL_MS) return;
-        startScan(context, prefs, ScanMode.ROUTINE);
     }
 
-    /** Force startup scan (e.g. after new crash). */
     public static void scheduleUrgent(final Context context, final SharedPreferences prefs) {
-        if (context == null || prefs == null || !isBackgroundShippingAllowed(prefs)) return;
-        lastScanMs = 0;
-        startScan(context, prefs, ScanMode.STARTUP);
     }
 
     private static void startScan(final Context context, final SharedPreferences prefs,
             final ScanMode mode) {
-        if (!scanRunning.compareAndSet(false, true)) return;
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    runScan(context.getApplicationContext(), prefs, mode);
-                } finally {
-                    scanRunning.set(false);
-                    lastScanMs = System.currentTimeMillis();
-                }
-            }
-        }, "SolarDiagReport").start();
     }
 
     static void runScan(Context context, SharedPreferences prefs, ScanMode mode) {

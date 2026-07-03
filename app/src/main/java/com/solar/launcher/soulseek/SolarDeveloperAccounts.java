@@ -65,7 +65,7 @@ public final class SolarDeveloperAccounts {
 
     /** User-facing label for inbox and conversation title. */
     public static String displayNameForPeer(Context ctx, String peer) {
-        if ((isVirtualPeer(peer) || hideFromReachUi(peer)) && ctx != null) {
+        if (isVirtualPeer(peer) && ctx != null) {
             return ctx.getString(R.string.solar_development_display_name);
         }
         return peer != null ? peer : "";
@@ -86,7 +86,7 @@ public final class SolarDeveloperAccounts {
                 || "solar dev".equals(lower)) {
             return VIRTUAL_PEER;
         }
-        if (isDeveloper(t) || isDiagHandle(t)) return VIRTUAL_PEER;
+        if (isDiagHandle(t)) return VIRTUAL_PEER;
         return null;
     }
 
