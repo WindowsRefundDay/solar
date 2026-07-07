@@ -119,8 +119,8 @@ public class ScreenTransitionTest {
         float push = ScreenTransition.pushInterpolation(0.5f);
         float player = ScreenTransition.playerInterpolation(0.5f);
         float modal = ScreenTransition.modalInterpolation(0.5f);
-        assertTrue(player < push);
-        assertTrue(push < modal);
+        assertTrue(push < player);
+        assertTrue(player < modal);
         assertEquals(1f, ScreenTransition.pushInterpolation(1f), 0f);
         assertEquals(1f, ScreenTransition.playerInterpolation(1f), 0f);
         assertEquals(1f, ScreenTransition.modalInterpolation(1f), 0f);
