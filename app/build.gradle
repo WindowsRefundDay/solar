@@ -53,8 +53,8 @@ android {
         applicationId "com.solar.launcher"
         minSdk 17
         targetSdk 35
-        versionCode 3426546
-        versionName "nightly-20260707-1306"
+        versionCode 3426553
+        versionName "20260707-1313"
         versionCode 3423828
         versionName "20260705-1548"
         buildConfigField "boolean", "FEATURE_OTA_UPDATE", "true"
