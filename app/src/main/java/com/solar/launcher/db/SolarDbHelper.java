@@ -1,7 +1,9 @@
 package com.solar.launcher.db;
 
 import android.content.Context;
+import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteException;
 import android.database.sqlite.SQLiteOpenHelper;
 
 import com.solar.launcher.db.android.AndroidSolarDatabase;
@@ -36,11 +38,27 @@ public abstract class SolarDbHelper extends SQLiteOpenHelper {
         if (!walEnabled) return;
         // WAL already allows concurrent readers; NORMAL sync is durable enough
         // for a local media cache while keeping writes from fsync-blocking.
-        db.execSQL("PRAGMA synchronous=NORMAL");
+        execPragma(db, "PRAGMA synchronous=NORMAL");
         // Keep WAL files from growing without bound on the Y1's limited storage.
-        db.execSQL("PRAGMA journal_size_limit=1048576");
+        execPragma(db, "PRAGMA journal_size_limit=1048576");
         // Checkpoint after every 100 pages — balances read latency vs write throughput.
-        db.execSQL("PRAGMA wal_autocheckpoint=100");
+        execPragma(db, "PRAGMA wal_autocheckpoint=100");
+    }
+
+    private void execPragma(SQLiteDatabase db, String sql) {
+        try {
+            db.execSQL(sql);
+        } catch (SQLiteException e) {
+            if (e.getMessage() != null && e.getMessage().contains("Queries can be performed using SQLiteDatabase")) {
+                Cursor c = db.rawQuery(sql, null);
+                if (c != null) {
+                    c.moveToFirst();
+                    c.close();
+                }
+            } else {
+                throw e;
+            }
+        }
     }
 
     /** Borrow a readable database handle wrapped for portability. */

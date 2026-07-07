@@ -36,15 +36,16 @@ public class Y1SafeScrollView extends ScrollView {
 
     @Override
     public void draw(Canvas canvas) {
-        if (Build.VERSION.SDK_INT >= 19) {
+        try {
             super.draw(canvas);
-            return;
+        } catch (NullPointerException e) {
+            // ponytail: fallback if scrollbar drawing NPEs (happens on Y1 and Y2 MTK firmwares)
+            final int scrollX = getScrollX();
+            final int scrollY = getScrollY();
+            canvas.save();
+            canvas.clipRect(scrollX, scrollY, scrollX + getWidth(), scrollY + getHeight());
+            super.dispatchDraw(canvas);
+            canvas.restore();
         }
-        final int scrollX = getScrollX();
-        final int scrollY = getScrollY();
-        canvas.save();
-        canvas.clipRect(scrollX, scrollY, scrollX + getWidth(), scrollY + getHeight());
-        super.dispatchDraw(canvas);
-        canvas.restore();
     }
 }

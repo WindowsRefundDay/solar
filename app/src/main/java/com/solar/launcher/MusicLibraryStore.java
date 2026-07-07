@@ -1,10 +1,9 @@
 package com.solar.launcher;
 
 import android.content.Context;
-import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
-import android.database.sqlite.SQLiteStatement;
 
+import com.solar.launcher.db.SolarCursor;
 import com.solar.launcher.db.SolarDatabase;
 import com.solar.launcher.db.SolarDbHelper;
 
@@ -165,10 +164,10 @@ public class MusicLibraryStore extends SolarDbHelper {
     /** All cached tracks (may include files removed from disk until next purge). */
     public List<Track> loadAll() {
         List<Track> out = new ArrayList<Track>();
-        SQLiteDatabase db = getReadableDatabase();
-        Cursor c = null;
+        SolarDatabase db = openReadable();
+        SolarCursor c = null;
         try {
-            c = db.query("tracks", null, null, null, null, null, "path ASC");
+            c = db.query("tracks", null, null, null, "path ASC");
             while (c.moveToNext()) {
                 out.add(rowToTrack(c));
             }
@@ -181,10 +180,10 @@ public class MusicLibraryStore extends SolarDbHelper {
     /** Lookup by absolute path; null when not cached. */
     public Track get(String path) {
         if (path == null) return null;
-        SQLiteDatabase db = getReadableDatabase();
-        Cursor c = null;
+        SolarDatabase db = openReadable();
+        SolarCursor c = null;
         try {
-            c = db.query("tracks", null, "path=?", new String[] { path }, null, null, null);
+            c = db.query("tracks", null, "path=?", new String[] { path }, null);
             if (c.moveToFirst()) return rowToTrack(c);
         } finally {
             if (c != null) c.close();
@@ -216,7 +215,7 @@ public class MusicLibraryStore extends SolarDbHelper {
     private void migrateLegacyZeroTrackNumbers() {
         if (legacyTrackNumbersMigrated) return;
         legacyTrackNumbersMigrated = true;
-        SQLiteDatabase db = getWritableDatabase();
+        SolarDatabase db = openWritable();
         db.execSQL("UPDATE tracks SET track_number = -1 WHERE track_number = 0");
     }
 
@@ -224,17 +223,23 @@ public class MusicLibraryStore extends SolarDbHelper {
             String genre, String albumArtist, String durationMs, int trackNumber) {
         if (file == null || !file.isFile()) return;
         if (trackNumber == 0) trackNumber = -1;
-        SQLiteDatabase db = getWritableDatabase();
-        SQLiteStatement st = db.compileStatement(
+        SolarDatabase db = openWritable();
+        db.execSQL(
                 "INSERT OR REPLACE INTO tracks"
                         + " (path,mtime,size,title,artist,album,genre,album_artist,duration_ms,track_number)"
-                        + " VALUES (?,?,?,?,?,?,?,?,?,?)");
-        try {
-            bindUpsert(st, file, title, artist, album, genre, albumArtist, durationMs, trackNumber);
-            st.executeInsert();
-        } finally {
-            st.close();
-        }
+                        + " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                new Object[] {
+                        file.getAbsolutePath(),
+                        file.lastModified(),
+                        file.length(),
+                        title != null ? title : "",
+                        artist != null ? artist : "",
+                        album != null ? album : "",
+                        genre != null ? genre : "",
+                        albumArtist != null ? albumArtist : "",
+                        durationMs != null ? durationMs : "",
+                        (long) trackNumber
+                });
     }
 
     /**
@@ -243,44 +248,37 @@ public class MusicLibraryStore extends SolarDbHelper {
      */
     public void upsertBatch(List<Upsert> tracks) {
         if (tracks == null || tracks.isEmpty()) return;
-        SQLiteDatabase db = getWritableDatabase();
+        SolarDatabase db = openWritable();
         db.beginTransaction();
-        SQLiteStatement st = db.compileStatement(
-                "INSERT OR REPLACE INTO tracks"
-                        + " (path,mtime,size,title,artist,album,genre,album_artist,duration_ms,track_number)"
-                        + " VALUES (?,?,?,?,?,?,?,?,?,?)");
         try {
             for (Upsert t : tracks) {
-                bindUpsert(st, t.file, t.title, t.artist, t.album, t.genre,
-                        t.albumArtist, t.durationMs, t.trackNumber);
-                st.executeInsert();
-                st.clearBindings();
+                int trackNum = t.trackNumber == 0 ? -1 : t.trackNumber;
+                db.execSQL(
+                        "INSERT OR REPLACE INTO tracks"
+                                + " (path,mtime,size,title,artist,album,genre,album_artist,duration_ms,track_number)"
+                                + " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        new Object[] {
+                                t.file.getAbsolutePath(),
+                                t.file.lastModified(),
+                                t.file.length(),
+                                t.title != null ? t.title : "",
+                                t.artist != null ? t.artist : "",
+                                t.album != null ? t.album : "",
+                                t.genre != null ? t.genre : "",
+                                t.albumArtist != null ? t.albumArtist : "",
+                                t.durationMs != null ? t.durationMs : "",
+                                (long) trackNum
+                        });
             }
             db.setTransactionSuccessful();
         } finally {
             db.endTransaction();
-            st.close();
         }
-    }
-
-    private static void bindUpsert(SQLiteStatement st, File file, String title, String artist,
-            String album, String genre, String albumArtist, String durationMs, int trackNumber) {
-        if (trackNumber == 0) trackNumber = -1;
-        st.bindString(1, file.getAbsolutePath());
-        st.bindLong(2, file.lastModified());
-        st.bindLong(3, file.length());
-        st.bindString(4, title != null ? title : "");
-        st.bindString(5, artist != null ? artist : "");
-        st.bindString(6, album != null ? album : "");
-        st.bindString(7, genre != null ? genre : "");
-        st.bindString(8, albumArtist != null ? albumArtist : "");
-        st.bindString(9, durationMs != null ? durationMs : "");
-        st.bindLong(10, trackNumber);
     }
 
     /** Wipe all cached track rows — Settings reset / cache clear. */
     public void clearAll() {
-        SQLiteDatabase db = getWritableDatabase();
+        SolarDatabase db = openWritable();
         db.delete("tracks", null, null);
     }
 
@@ -291,11 +289,11 @@ public class MusicLibraryStore extends SolarDbHelper {
             clearAll();
             return;
         }
-        SQLiteDatabase db = getWritableDatabase();
+        SolarDatabase db = openWritable();
         db.beginTransaction();
-        Cursor c = null;
+        SolarCursor c = null;
         try {
-            c = db.query("tracks", new String[] { "path" }, null, null, null, null, null);
+            c = db.query("tracks", new String[] { "path" }, null, null, null);
             List<String> stale = new ArrayList<String>();
             while (c.moveToNext()) {
                 String p = c.getString(0);
@@ -329,10 +327,10 @@ public class MusicLibraryStore extends SolarDbHelper {
     /** path → durationSec for Soulseek share scan (avoids second MMR pass). */
     public Map<String, Integer> durationSecByPath() {
         Map<String, Integer> out = new HashMap<String, Integer>();
-        SQLiteDatabase db = getReadableDatabase();
-        Cursor c = null;
+        SolarDatabase db = openReadable();
+        SolarCursor c = null;
         try {
-            c = db.query("tracks", new String[] { "path", "duration_ms" }, null, null, null, null, null);
+            c = db.query("tracks", new String[] { "path", "duration_ms" }, null, null, null);
             final int pathCol = c.getColumnIndex("path");
             final int durCol = c.getColumnIndex("duration_ms");
             while (c.moveToNext()) {
@@ -368,7 +366,7 @@ public class MusicLibraryStore extends SolarDbHelper {
         return new HashSet<String>();
     }
 
-    private static Track rowToTrack(Cursor c) {
+    private static Track rowToTrack(SolarCursor c) {
         int trackNumber = 0;
         int trackNumberIndex = c.getColumnIndex("track_number");
         if (trackNumberIndex != -1) {

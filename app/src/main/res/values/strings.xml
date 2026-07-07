@@ -1101,6 +1101,7 @@
     <string name="settings_debug_show_error_toasts_hint">Soulseek and Deezer download warnings</string>
     <string name="settings_debug_dev_support_experiment">Developer support (experiment)</string>
     <string name="settings_debug_radio_experiment">Radio (experiment)</string>
+    <string name="settings_debug_bluetooth_experiment">Bluetooth (experiment)</string>
     <string name="settings_debug_flow_enabled">Flow Mode</string>
     <string name="settings_flow">Flow</string>
     <string name="settings_flow_hold_play_pause_hint">Hold Play/Pause to open Flow view.</string>
@@ -1227,6 +1228,11 @@
     <string name="radio_ctx_remove_favorite">Remove favorite</string>
     <string name="radio_ctx_open_net_browse">Internet browse</string>
     <string name="radio_ctx_preset_saved">Preset saved.</string>
+    <string name="radio_ctx_record">Record</string>
+    <string name="radio_ctx_stop_record">Stop recording</string>
+    <string name="radio_ctx_record_started">Recording FM…</string>
+    <string name="radio_ctx_record_stopped">Recording saved.</string>
+    <string name="radio_ctx_record_failed">Recording failed.</string>
     <string name="radio_ctx_favorite_added">Added to favorites.</string>
     <string name="radio_ctx_favorite_removed">Removed from favorites.</string>
 

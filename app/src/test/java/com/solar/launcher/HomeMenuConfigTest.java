@@ -18,6 +18,7 @@ public class HomeMenuConfigTest {
     @Before
     public void setUp() {
         prefs = new MemPrefs();
+        com.solar.launcher.DeviceFeatures.setCachedFamilyForTest("y2");
     }
 
     @Test

@@ -365,7 +365,7 @@
                 android:layout_marginTop="12dp"
                 android:visibility="gone" />
 
-            <ScrollView
+            <com.solar.launcher.Y1SafeScrollView
                 android:id="@+id/settings_preview_state_scroll"
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
@@ -382,7 +382,7 @@
                     android:gravity="center_horizontal|top"
                     android:textColor="#FFFFFF"
                     android:textSize="16sp" />
-            </ScrollView>
+            </com.solar.launcher.Y1SafeScrollView>
         </LinearLayout>
 
         <FrameLayout
@@ -471,9 +471,9 @@
         android:visibility="gone">
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/bluetooth_scan_header" android:textColor="#BBFFFFFF" android:textSize="16sp" android:textStyle="bold" android:layout_marginBottom="6dp" android:visibility="gone"/>
         <Button android:id="@+id/btn_scan_bt" android:layout_width="match_parent" android:layout_height="@dimen/y1_menu_item_height" android:text="@string/bluetooth_scan_devices" android:background="@android:color/transparent" android:focusable="true"/>
-        <ScrollView android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true" android:layout_marginTop="5dp">
+        <com.solar.launcher.Y1SafeScrollView android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true" android:layout_marginTop="5dp">
             <LinearLayout android:id="@+id/container_bt_items" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
-        </ScrollView>
+        </com.solar.launcher.Y1SafeScrollView>
     </LinearLayout>
 
     <LinearLayout
@@ -489,9 +489,9 @@
         android:visibility="gone">
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/wifi_networks_header" android:textColor="#BBFFFFFF" android:textSize="16sp" android:textStyle="bold" android:layout_marginBottom="6dp" android:visibility="gone"/>
         <Button android:id="@+id/btn_scan_wifi" android:layout_width="match_parent" android:layout_height="@dimen/y1_menu_item_height" android:text="@string/wifi_scan_networks" android:background="@android:color/transparent" android:focusable="true"/>
-        <ScrollView android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true" android:layout_marginTop="5dp">
+        <com.solar.launcher.Y1SafeScrollView android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true" android:layout_marginTop="5dp">
             <LinearLayout android:id="@+id/container_wifi_items" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
-        </ScrollView>
+        </com.solar.launcher.Y1SafeScrollView>
     </LinearLayout>
 
     <LinearLayout

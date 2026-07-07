@@ -185,7 +185,50 @@ public final class FmEngine {
     return null;
   }
 
+  // ponytail: FM recording — MTK FM_TUNER source (1998), fallback to mic.
+  // Ceiling: mic fallback records ambient audio, not FM line-in.
+  private static final int AUDIO_SOURCE_FM_TUNER = 1998;
+  private android.media.MediaRecorder recorder;
+
+  /** Start recording FM audio to file. Tries MTK FM_TUNER, falls back to mic. */
+  public synchronized boolean startRecording(java.io.File output) {
+    stopRecording();
+    if (tryStartRecorder(output, AUDIO_SOURCE_FM_TUNER)) return true;
+    return tryStartRecorder(output, android.media.MediaRecorder.AudioSource.DEFAULT);
+  }
+
+  private boolean tryStartRecorder(java.io.File output, int source) {
+    try {
+      android.media.MediaRecorder r = new android.media.MediaRecorder();
+      r.setAudioSource(source);
+      r.setOutputFormat(android.media.MediaRecorder.OutputFormat.THREE_GPP);
+      r.setAudioEncoder(android.media.MediaRecorder.AudioEncoder.AAC);
+      r.setAudioSamplingRate(44100);
+      r.setAudioEncodingBitRate(128000);
+      r.setOutputFile(output.getAbsolutePath());
+      r.prepare();
+      r.start();
+      recorder = r;
+      return true;
+    } catch (Exception e) {
+      DebugAgentLog.log(appCtx, "FmEngine.tryStartRecorder", "failed",
+          "A", null);
+      return false;
+    }
+  }
+
+  public synchronized void stopRecording() {
+    if (recorder != null) {
+      try { recorder.stop(); } catch (Exception ignored) {}
+      try { recorder.release(); } catch (Exception ignored) {}
+      recorder = null;
+    }
+  }
+
+  public boolean isRecording() { return recorder != null; }
+
   public synchronized void release() {
+    stopRecording();
     stopScan();
     powerDown();
     if (bound && connection != null) {

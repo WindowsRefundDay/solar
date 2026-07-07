@@ -69,12 +69,11 @@ public final class HomeMenuConfig {
         return loadEditorCatalogEntries(null);
     }
 
-    /** Editor catalog; hides Radio until {@link com.solar.launcher.radio.RadioExperiment} is on. */
+    /** Editor catalog — Radio always visible (launches MTK FM Radio when experiment is off). */
     public static List<Entry> loadEditorCatalogEntries(SharedPreferences prefs) {
         List<Entry> out = new ArrayList<Entry>();
         for (String id : FIXED_HOME_ORDER) {
-            if ((ID_RADIO.equals(id) || ID_FM.equals(id))
-                    && !com.solar.launcher.radio.RadioExperiment.isEnabled(prefs)) {
+            if (ID_RADIO.equals(id) && !com.solar.launcher.radio.RadioExperiment.isEnabled(prefs)) {
                 continue;
             }
             Entry e = find(id);
@@ -253,8 +252,7 @@ public final class HomeMenuConfig {
         List<Entry> out = new ArrayList<Entry>();
         for (String id : ids) {
             if (ID_MORE.equals(id)) continue;
-            if ((ID_RADIO.equals(id) || ID_FM.equals(id))
-                    && !com.solar.launcher.radio.RadioExperiment.isEnabled(prefs)) {
+            if (ID_RADIO.equals(id) && !com.solar.launcher.radio.RadioExperiment.isEnabled(prefs)) {
                 continue;
             }
             if (ID_SOULSEEK.equals(id)) {
@@ -291,10 +289,6 @@ public final class HomeMenuConfig {
         List<String> ids = loadMoreOrderIds(prefs);
         List<Entry> out = new ArrayList<Entry>();
         for (String id : ids) {
-            if ((ID_RADIO.equals(id) || ID_FM.equals(id))
-                    && !com.solar.launcher.radio.RadioExperiment.isEnabled(prefs)) {
-                continue;
-            }
             if (!ConnectivityHelper.shouldShowHomeShortcut(id, internetAvailable,
                     localNetworkAvailable, podcastsSaved)) continue;
             if (ID_SOULSEEK.equals(id)

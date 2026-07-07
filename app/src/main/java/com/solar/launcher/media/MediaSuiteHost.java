@@ -637,6 +637,8 @@ public final class MediaSuiteHost {
         }
         stopOtherRadioPlayback(true);
         host.stopMusicPlayback();
+        // ponytail: FM needs airplane mode off for the radio hardware to work.
+        disableAirplaneModeForFm();
         if (!fmEngine.playStation(freqKhz)) {
             Toast.makeText(host.context(), R.string.radio_fm_play_error, Toast.LENGTH_SHORT).show();
             // #region agent log
@@ -1077,7 +1079,9 @@ public final class MediaSuiteHost {
         if (playback.isFmActive()) {
             String rds = fmEngine.getRdsPs();
             if (rds != null && !rds.isEmpty()) titleText = rds;
-            artistText = host.getString(R.string.status_radio_fm);
+            artistText = fmEngine.isRecording()
+                    ? "● REC  " + host.getString(R.string.status_radio_fm)
+                    : host.getString(R.string.status_radio_fm);
             albumText = FmBandPlan.formatMhz(cur.fmFreqKhz / 1000f);
             showPause = fmMuted;
         } else if (playback.isInternetRadioActive()) {
@@ -1206,12 +1210,50 @@ public final class MediaSuiteHost {
 
     private boolean fmMuted;
 
+    private void toggleFmRecording() {
+        if (fmEngine.isRecording()) {
+            fmEngine.stopRecording();
+            Toast.makeText(host.context(), R.string.radio_ctx_record_stopped, Toast.LENGTH_SHORT).show();
+        } else {
+            if (!FM_RECORDINGS_DIR.isDirectory()) FM_RECORDINGS_DIR.mkdirs();
+            String ts = new java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US)
+                    .format(new java.util.Date());
+            int khz = currentFmFreqKhz();
+            String name = "FM_" + FmBandPlan.khzToFraction(khz, currentFmPlan()) + "_" + ts + ".3gp";
+            java.io.File out = new java.io.File(FM_RECORDINGS_DIR, name);
+            if (fmEngine.startRecording(out)) {
+                Toast.makeText(host.context(), R.string.radio_ctx_record_started, Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(host.context(), R.string.radio_ctx_record_failed, Toast.LENGTH_SHORT).show();
+            }
+        }
+        host.refreshPlayerUi();
+    }
+
+    /** ponytail: disable airplane mode so FM radio hardware can power up. */
+    private void disableAirplaneModeForFm() {
+        try {
+            android.content.ContentResolver cr = host.context().getContentResolver();
+            boolean airplaneOn = android.provider.Settings.Global.getInt(
+                    cr, android.provider.Settings.Global.AIRPLANE_MODE_ON, 0) != 0;
+            if (!airplaneOn) return;
+            android.provider.Settings.Global.putInt(cr,
+                    android.provider.Settings.Global.AIRPLANE_MODE_ON, 0);
+            host.context().sendBroadcast(new android.content.Intent(
+                    android.content.Intent.ACTION_AIRPLANE_MODE_CHANGED)
+                    .putExtra("state", false));
+        } catch (Exception ignored) {}
+    }
+
     public String[] getRadioContextMenuLabels() {
         PlaybackCoordinator playback = host.playback();
         if (playback.isFmActive()) {
             return new String[] {
                 host.getString(R.string.radio_ctx_save_preset),
                 host.getString(R.string.radio_ctx_scan),
+                fmEngine.isRecording()
+                        ? host.getString(R.string.radio_ctx_stop_record)
+                        : host.getString(R.string.radio_ctx_record),
                 host.getString(R.string.radio_ctx_open_fm_browse)
             };
         }
@@ -1241,6 +1283,9 @@ public final class MediaSuiteHost {
                     startFmScan();
                     return true;
                 case 2:
+                    toggleFmRecording();
+                    return true;
+                case 3:
                     host.changeScreen(STATE_RADIO_FM_BROWSE);
                     return true;
                 default:

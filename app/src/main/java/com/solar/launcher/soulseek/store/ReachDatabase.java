@@ -2,9 +2,8 @@ package com.solar.launcher.soulseek.store;
 
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.database.Cursor;
-import android.database.sqlite.SQLiteDatabase;
 
+import com.solar.launcher.db.SolarCursor;
 import com.solar.launcher.db.SolarDatabase;
 import com.solar.launcher.db.SolarDbHelper;
 
@@ -58,19 +57,19 @@ public class ReachDatabase extends SolarDbHelper {
     /** In-memory database for unit tests. */
     public static ReachDatabase openForTest(Context ctx) {
         resetInstanceForTest();
-        final SQLiteDatabase[] mem = new SQLiteDatabase[1];
+        final android.database.sqlite.SQLiteDatabase[] mem = new android.database.sqlite.SQLiteDatabase[1];
         instance = new ReachDatabase(ctx.getApplicationContext(), false) {
             @Override
-            public synchronized SQLiteDatabase getWritableDatabase() {
+            public synchronized android.database.sqlite.SQLiteDatabase getWritableDatabase() {
                 if (mem[0] == null) {
-                    mem[0] = SQLiteDatabase.create(null);
+                    mem[0] = android.database.sqlite.SQLiteDatabase.create(null);
                     onCreate(mem[0]);
                 }
                 return mem[0];
             }
 
             @Override
-            public synchronized SQLiteDatabase getReadableDatabase() {
+            public synchronized android.database.sqlite.SQLiteDatabase getReadableDatabase() {
                 return getWritableDatabase();
             }
         };
@@ -133,7 +132,7 @@ public class ReachDatabase extends SolarDbHelper {
     }
 
     private void migrateFromPrefs(SharedPreferences prefs) {
-        SQLiteDatabase db = getWritableDatabase();
+        SolarDatabase db = openWritable();
         db.beginTransaction();
         try {
             for (SoulseekWire.RoomEntry e : SoulseekChatRooms.loadRoomListLegacy(prefs)) {
@@ -148,7 +147,7 @@ public class ReachDatabase extends SolarDbHelper {
         }
     }
 
-    private void migrateRoomMessages(SharedPreferences prefs, SQLiteDatabase db) {
+    private void migrateRoomMessages(SharedPreferences prefs, SolarDatabase db) {
         try {
             JSONObject root = new JSONObject(prefs.getString("soulseek_room_messages", "{}"));
             JSONArray names = root.names();
@@ -173,7 +172,7 @@ public class ReachDatabase extends SolarDbHelper {
         } catch (Exception ignored) {}
     }
 
-    private void migratePmMessages(SharedPreferences prefs, SQLiteDatabase db) {
+    private void migratePmMessages(SharedPreferences prefs, SolarDatabase db) {
         for (SoulseekMessaging.Message m : SoulseekMessaging.loadLegacy(prefs)) {
             db.execSQL("INSERT INTO pm_messages(peer,text,ts,incoming,msg_id) VALUES(?,?,?,?,?)",
                     new Object[] { m.peer, m.text, m.timestamp, m.incoming ? 1 : 0, m.id });
@@ -186,7 +185,7 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.run(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getWritableDatabase();
+                SolarDatabase db = openWritable();
                 long now = System.currentTimeMillis();
                 db.beginTransaction();
                 try {
@@ -212,8 +211,8 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.runSync(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getReadableDatabase();
-                Cursor c = db.rawQuery("SELECT name,user_count FROM rooms ORDER BY name COLLATE NOCASE",
+                SolarDatabase db = openReadable();
+                SolarCursor c = db.rawQuery("SELECT name,user_count FROM rooms ORDER BY name COLLATE NOCASE",
                         null);
                 try {
                     while (c.moveToNext()) {
@@ -245,7 +244,7 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.run(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getWritableDatabase();
+                SolarDatabase db = openWritable();
                 db.execSQL("INSERT INTO room_messages(room,sender,text,ts,incoming)"
                                 + " VALUES(?,?,?,?,?)",
                         new Object[] {
@@ -257,8 +256,8 @@ public class ReachDatabase extends SolarDbHelper {
         });
     }
 
-    private void trimRoomMessages(SQLiteDatabase db, String room, int max) {
-        Cursor c = db.rawQuery("SELECT COUNT(*) FROM room_messages WHERE room=?",
+    private void trimRoomMessages(SolarDatabase db, String room, int max) {
+        SolarCursor c = db.rawQuery("SELECT COUNT(*) FROM room_messages WHERE room=?",
                 new String[] { room });
         try {
             if (c.moveToFirst() && c.getInt(0) > max) {
@@ -278,8 +277,8 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.runSync(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getReadableDatabase();
-                Cursor c = db.rawQuery(
+                SolarDatabase db = openReadable();
+                SolarCursor c = db.rawQuery(
                         "SELECT sender,text,ts,incoming FROM room_messages WHERE room=?"
                                 + " ORDER BY ts ASC", new String[] { room });
                 try {
@@ -309,7 +308,7 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.run(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getWritableDatabase();
+                SolarDatabase db = openWritable();
                 db.execSQL("DELETE FROM room_tickers WHERE room=?", new Object[] { room });
                 int ts = (int) (System.currentTimeMillis() / 1000L);
                 if (tickers == null) return;
@@ -328,7 +327,7 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.run(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getWritableDatabase();
+                SolarDatabase db = openWritable();
                 int ts = (int) (System.currentTimeMillis() / 1000L);
                 if (text == null || text.isEmpty()) {
                     db.execSQL("DELETE FROM room_tickers WHERE room=? AND username=?",
@@ -347,7 +346,7 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.run(new Runnable() {
             @Override
             public void run() {
-                getWritableDatabase().execSQL(
+                openWritable().execSQL(
                         "DELETE FROM room_tickers WHERE room=? AND username=?",
                         new Object[] { room, username });
             }
@@ -360,8 +359,8 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.runSync(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getReadableDatabase();
-                Cursor c = db.rawQuery(
+                SolarDatabase db = openReadable();
+                SolarCursor c = db.rawQuery(
                         "SELECT username,text FROM room_tickers WHERE room=? ORDER BY username COLLATE NOCASE",
                         new String[] { room });
                 try {
@@ -383,14 +382,14 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.run(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getWritableDatabase();
+                SolarDatabase db = openWritable();
                 db.execSQL("INSERT INTO pm_messages(peer,text,ts,incoming,msg_id)"
                                 + " VALUES(?,?,?,?,?)",
                         new Object[] {
                                 msg.peer, msg.text, msg.timestamp,
                                 msg.incoming ? 1 : 0, msg.id
                         });
-                Cursor c = db.rawQuery("SELECT COUNT(*) FROM pm_messages", null);
+                SolarCursor c = db.rawQuery("SELECT COUNT(*) FROM pm_messages", null);
                 try {
                     if (c.moveToFirst() && c.getInt(0) > MAX_PM_MESSAGES) {
                         int excess = c.getInt(0) - MAX_PM_MESSAGES;
@@ -410,8 +409,8 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.runSync(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getReadableDatabase();
-                Cursor c = db.rawQuery(
+                SolarDatabase db = openReadable();
+                SolarCursor c = db.rawQuery(
                         "SELECT msg_id,ts,peer,text,incoming FROM pm_messages ORDER BY ts ASC",
                         null);
                 try {
@@ -446,8 +445,8 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.runSync(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getReadableDatabase();
-                Cursor c = db.rawQuery(
+                SolarDatabase db = openReadable();
+                SolarCursor c = db.rawQuery(
                         "SELECT peer, text, ts FROM pm_messages"
                                 + " WHERE rowid IN (SELECT MAX(rowid) FROM pm_messages"
                                 + " GROUP BY peer COLLATE NOCASE)"
@@ -491,8 +490,8 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.runSync(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getReadableDatabase();
-                Cursor c = db.rawQuery(
+                SolarDatabase db = openReadable();
+                SolarCursor c = db.rawQuery(
                         "SELECT msg_id,ts,peer,text,incoming FROM pm_messages"
                                 + " WHERE peer=? COLLATE NOCASE ORDER BY ts DESC, id DESC LIMIT 1",
                         new String[] { peer });
@@ -517,8 +516,8 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.runSync(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getReadableDatabase();
-                Cursor c = db.rawQuery(
+                SolarDatabase db = openReadable();
+                SolarCursor c = db.rawQuery(
                         "SELECT msg_id,ts,peer,text,incoming FROM pm_messages"
                                 + " WHERE peer=? COLLATE NOCASE ORDER BY ts DESC, id DESC LIMIT 32",
                         new String[] { peer });
@@ -547,7 +546,7 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.runSync(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getWritableDatabase();
+                SolarDatabase db = openWritable();
                 db.delete("pm_messages", "peer=? COLLATE NOCASE", new String[] { key });
             }
         });
@@ -559,8 +558,8 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.runSync(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getReadableDatabase();
-                Cursor c = db.rawQuery(
+                SolarDatabase db = openReadable();
+                SolarCursor c = db.rawQuery(
                         "SELECT msg_id,ts,peer,text,incoming FROM pm_messages"
                                 + " WHERE peer=? COLLATE NOCASE ORDER BY ts ASC",
                         new String[] { peer });
@@ -587,8 +586,8 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.runSync(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getReadableDatabase();
-                Cursor c = db.rawQuery(
+                SolarDatabase db = openReadable();
+                SolarCursor c = db.rawQuery(
                         "SELECT name, user_count FROM rooms"
                                 + " WHERE name LIKE ? COLLATE NOCASE"
                                 + " ORDER BY user_count DESC, name COLLATE NOCASE"
@@ -614,8 +613,8 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.runSync(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getReadableDatabase();
-                Cursor c = db.rawQuery("SELECT username, note FROM peer_notes", null);
+                SolarDatabase db = openReadable();
+                SolarCursor c = db.rawQuery("SELECT username, note FROM peer_notes", null);
                 try {
                     while (c.moveToNext()) {
                         String user = c.getString(0);
@@ -639,8 +638,8 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.runSync(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getReadableDatabase();
-                Cursor c = db.rawQuery(
+                SolarDatabase db = openReadable();
+                SolarCursor c = db.rawQuery(
                         "SELECT note FROM peer_notes WHERE username=?",
                         new String[] { key });
                 try {
@@ -663,7 +662,7 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.runSync(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getWritableDatabase();
+                SolarDatabase db = openWritable();
                 db.execSQL("INSERT OR REPLACE INTO peer_notes(username,note,updated_at)"
                                 + " VALUES(?,?,?)",
                         new Object[] { key, text, System.currentTimeMillis() });
@@ -677,7 +676,7 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.runSync(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getWritableDatabase();
+                SolarDatabase db = openWritable();
                 db.delete("peer_notes", "username=?", new String[] { key });
             }
         });
@@ -712,8 +711,8 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.runSync(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getReadableDatabase();
-                Cursor c = db.rawQuery(
+                SolarDatabase db = openReadable();
+                SolarCursor c = db.rawQuery(
                         "SELECT country,files,online,fetched_at FROM peer_cache WHERE username=?",
                         new String[] { key });
                 try {
@@ -740,7 +739,7 @@ public class ReachDatabase extends SolarDbHelper {
         ReachDbExecutor.run(new Runnable() {
             @Override
             public void run() {
-                SQLiteDatabase db = getWritableDatabase();
+                SolarDatabase db = openWritable();
                 db.execSQL("INSERT OR REPLACE INTO peer_cache"
                                 + "(username,country,files,online,fetched_at) VALUES(?,?,?,?,?)",
                         new Object[] {

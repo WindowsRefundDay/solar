@@ -128,10 +128,8 @@ finalize_image_after_mount() {
     local shipped_path="$1"
     local mount_src="$2"
     if [ "$mount_src" != "$shipped_path" ]; then
-        require_cmd img2simg
-        echo "==> Repacking $(basename "$shipped_path") to Android sparse"
-        img2simg "$mount_src" "$shipped_path"
-        rm -f "$mount_src"
+        echo "==> Keeping raw image for SP Flash Tool compatibility ($(basename "$shipped_path"))"
+        mv -f "$mount_src" "$shipped_path"
     fi
 }
 
@@ -283,132 +281,152 @@ audit_rom_contents() {
         errors=$((errors + 1))
     fi
 
-    if [ ! -f "$sys_mount/lib/libconscrypt_jni.so" ]; then
-        echo "audit fail: libconscrypt_jni.so missing from /system/lib (OkHttp/Reach TLS)" >&2
-        errors=$((errors + 1))
-    fi
-
-    if [ ! -f "$sys_mount/etc/security/cacerts/6187b673.0" ]; then
-        echo "audit fail: ISRG Root X1 cacert missing (MediaPlayer/podcast HTTPS)" >&2
-        errors=$((errors + 1))
-    fi
-
-    if [ ! -f "$sys_mount/etc/init.d/99SolarInit.sh" ]; then
-        echo "audit fail: 99SolarInit.sh missing (SD Music/Podcasts/Themes + TLS sanity)" >&2
-        errors=$((errors + 1))
-    elif ! grep -q 'disable-rockbox-for-solar.sh' "$sys_mount/etc/init.d/99SolarInit.sh" 2>/dev/null; then
-        echo "audit fail: 99SolarInit must run disable-rockbox-for-solar.sh on first boot" >&2
-        errors=$((errors + 1))
-    fi
-
-    if [ -f "$sys_mount/etc/init.d/99Y1LauncherInit.sh" ]; then
-        echo "audit fail: legacy 99Y1LauncherInit.sh still present" >&2
-        errors=$((errors + 1))
-    fi
-
-    if [ ! -f "$sys_mount/app/org.rockbox.apk" ]; then
-        echo "audit fail: org.rockbox.apk missing (launcher switch requires Rockbox)" >&2
-        errors=$((errors + 1))
-    fi
-
-    if [ ! -f "$sys_mount/lib/librockbox.so" ]; then
-        echo "audit fail: librockbox.so missing" >&2
-        errors=$((errors + 1))
-    fi
-
-    # FM radio — warn when mtk FM stack is absent (Solar FM browse still opens; tune may fail).
-    if ! find "$sys_mount/lib" -maxdepth 1 -name 'libfm*.so' 2>/dev/null | grep -q . \
-            && ! find "$sys_mount" \( -iname '*mediatek*fm*' -o -iname '*FMRadio*' \) 2>/dev/null | grep -q .; then
-        echo "audit warn: no libfm* or MediaTek FM package found on /system (hardware FM may be unavailable)" >&2
-    fi
-
-    # ponytail: codec plugins ship inside org.rockbox.apk (lib/armeabi/*.so) — must survive ROM build.
-    if [ -f "$sys_mount/app/org.rockbox.apk" ]; then
-        rb_so_count=$(unzip -l "$sys_mount/app/org.rockbox.apk" 2>/dev/null \
-            | grep -c 'lib/armeabi/.*\.so' || true)
-        if [ "${rb_so_count:-0}" -lt 35 ]; then
-            echo "audit fail: org.rockbox.apk has ${rb_so_count:-0} native libs (expected >=35 from rockbox-y1 base)" >&2
+    if [ "$TYPE" != "y2" ]; then
+        if [ ! -f "$sys_mount/lib/libconscrypt_jni.so" ]; then
+            echo "audit fail: libconscrypt_jni.so missing from /system/lib (OkHttp/Reach TLS)" >&2
             errors=$((errors + 1))
         fi
-    fi
 
-    if [ ! -f "$sys_mount/etc/solar/disable-rockbox-for-solar.sh" ]; then
-        echo "audit fail: /system/etc/solar/disable-rockbox-for-solar.sh missing" >&2
-        errors=$((errors + 1))
-    elif ! grep -q 'pm disable' "$sys_mount/etc/solar/disable-rockbox-for-solar.sh" 2>/dev/null; then
-        echo "audit fail: disable-rockbox-for-solar.sh must pm disable org.rockbox" >&2
-        errors=$((errors + 1))
-    elif ! grep -q 'packages -d' "$sys_mount/etc/solar/disable-rockbox-for-solar.sh" 2>/dev/null; then
-        echo "audit fail: disable-rockbox-for-solar.sh must gate marker on Rockbox disabled state" >&2
-        errors=$((errors + 1))
-    fi
+        if [ ! -f "$sys_mount/etc/security/cacerts/6187b673.0" ]; then
+            echo "audit fail: ISRG Root X1 cacert missing (MediaPlayer/podcast HTTPS)" >&2
+            errors=$((errors + 1))
+        fi
 
-    if [ ! -f "$sys_mount/etc/solar/switch-to-stock.sh" ]; then
-        echo "audit fail: /system/etc/solar/switch-to-stock.sh missing" >&2
-        errors=$((errors + 1))
-    elif grep -qiE '(^|[[:space:]]|/)reboot\b|reboot -p|/system/bin/reboot' \
-            "$sys_mount/etc/solar/switch-to-stock.sh" 2>/dev/null; then
-        echo "audit fail: switch-to-stock.sh must not reboot (unified keymap)" >&2
-        errors=$((errors + 1))
-    elif ! grep -q 'verify_rockbox_disabled' "$sys_mount/etc/solar/switch-to-stock.sh" 2>/dev/null; then
-        echo "audit fail: switch-to-stock.sh must verify Rockbox disabled before enabling Solar" >&2
-        errors=$((errors + 1))
-    fi
+        if [ ! -f "$sys_mount/etc/init.d/99SolarInit.sh" ]; then
+            echo "audit fail: 99SolarInit.sh missing (SD Music/Podcasts/Themes + TLS sanity)" >&2
+            errors=$((errors + 1))
+        elif ! grep -q 'disable-rockbox-for-solar.sh' "$sys_mount/etc/init.d/99SolarInit.sh" 2>/dev/null; then
+            echo "audit fail: 99SolarInit must run disable-rockbox-for-solar.sh on first boot" >&2
+            errors=$((errors + 1))
+        fi
 
-    if [ ! -f "$sys_mount/etc/solar/sync-rockbox-libs.sh" ]; then
-        echo "audit fail: /system/etc/solar/sync-rockbox-libs.sh missing (Rockbox codec sync)" >&2
-        errors=$((errors + 1))
-    fi
+        if [ -f "$sys_mount/etc/init.d/99Y1LauncherInit.sh" ]; then
+            echo "audit fail: legacy 99Y1LauncherInit.sh still present" >&2
+            errors=$((errors + 1))
+        fi
 
-    if [ ! -f "$sys_mount/etc/solar/sync-y1-keymap.sh" ]; then
-        echo "audit fail: /system/etc/solar/sync-y1-keymap.sh missing (unified keymap sync)" >&2
-        errors=$((errors + 1))
-    elif [ ! -f "$sys_mount/etc/solar/Y1-Rockbox.kl" ]; then
-        echo "audit fail: /system/etc/solar/Y1-Rockbox.kl missing" >&2
-        errors=$((errors + 1))
-    fi
+        if [ ! -f "$sys_mount/app/org.rockbox.apk" ]; then
+            echo "audit fail: org.rockbox.apk missing (launcher switch requires Rockbox)" >&2
+            errors=$((errors + 1))
+        fi
 
-    if [ ! -f "$sys_mount/etc/init.d/99Y1ButtonScript" ]; then
-        echo "audit fail: 99Y1ButtonScript missing (Back+Play Rockbox gesture)" >&2
-        errors=$((errors + 1))
-    fi
+        if [ ! -f "$sys_mount/lib/librockbox.so" ]; then
+            echo "audit fail: librockbox.so missing" >&2
+            errors=$((errors + 1))
+        fi
 
-    if [ ! -f "$sys_mount/usr/keylayout/Generic.kl" ] || [ ! -f "$sys_mount/usr/keylayout/Rockbox.kl" ]; then
-        echo "audit fail: keylayout files missing" >&2
-        errors=$((errors + 1))
-    elif ! cmp -s "$sys_mount/usr/keylayout/Generic.kl" "$sys_mount/usr/keylayout/Y1-Rockbox.kl"; then
-        echo "audit fail: Generic.kl is not identical to Y1-Rockbox.kl (Y1 wheel 126/127)" >&2
-        errors=$((errors + 1))
-    elif ! cmp -s "$sys_mount/usr/keylayout/Stock.kl" "$sys_mount/usr/keylayout/Y1-Rockbox.kl"; then
-        echo "audit fail: Stock.kl must match Y1-Rockbox.kl (unified keymap)" >&2
-        errors=$((errors + 1))
-    elif ! cmp -s "$sys_mount/usr/keylayout/Rockbox.kl" "$sys_mount/usr/keylayout/Y1-Rockbox.kl"; then
-        echo "audit fail: Rockbox.kl must match Y1-Rockbox.kl (unified keymap)" >&2
-        errors=$((errors + 1))
-    elif [ -f "$sys_mount/usr/keylayout/mtk-tpd-kpd.kl" ] && [ -f "$sys_mount/usr/keylayout/mtk-kpd.kl" ] \
-            && ! cmp -s "$sys_mount/usr/keylayout/mtk-tpd-kpd.kl" "$sys_mount/usr/keylayout/mtk-kpd.kl"; then
-        echo "audit fail: mtk-tpd-kpd.kl must match mtk-kpd.kl (side keys 88/87, wheel 126/127)" >&2
-        errors=$((errors + 1))
-    fi
+        # FM radio — warn when mtk FM stack is absent (Solar FM browse still opens; tune may fail).
+        if ! find "$sys_mount/lib" -maxdepth 1 -name 'libfm*.so' 2>/dev/null | grep -q . \
+                && ! find "$sys_mount" \( -iname '*mediatek*fm*' -o -iname '*FMRadio*' \) 2>/dev/null | grep -q .; then
+            echo "audit warn: no libfm* or MediaTek FM package found on /system (hardware FM may be unavailable)" >&2
+        fi
 
-    if [ ! -f "$sys_mount/media/bootanimation.zip" ]; then
-        echo "audit fail: /system/media/bootanimation.zip missing" >&2
-        errors=$((errors + 1))
-    fi
+        # ponytail: codec plugins ship inside org.rockbox.apk (lib/armeabi/*.so) — must survive ROM build.
+        if [ -f "$sys_mount/app/org.rockbox.apk" ]; then
+            rb_so_count=$(unzip -l "$sys_mount/app/org.rockbox.apk" 2>/dev/null \
+                | grep -c 'lib/armeabi/.*\.so' || true)
+            if [ "${rb_so_count:-0}" -lt 35 ]; then
+                echo "audit fail: org.rockbox.apk has ${rb_so_count:-0} native libs (expected >=35 from rockbox-y1 base)" >&2
+                errors=$((errors + 1))
+            fi
+        fi
 
-    if [ ! -f "$sys_mount/bin/bootanimation" ]; then
-        echo "audit fail: /system/bin/bootanimation missing" >&2
-        errors=$((errors + 1))
-    fi
+        if [ ! -f "$sys_mount/etc/solar/disable-rockbox-for-solar.sh" ]; then
+            echo "audit fail: /system/etc/solar/disable-rockbox-for-solar.sh missing" >&2
+            errors=$((errors + 1))
+        elif ! grep -q 'pm disable' "$sys_mount/etc/solar/disable-rockbox-for-solar.sh" 2>/dev/null; then
+            echo "audit fail: disable-rockbox-for-solar.sh must pm disable org.rockbox" >&2
+            errors=$((errors + 1))
+        elif ! grep -q 'packages -d' "$sys_mount/etc/solar/disable-rockbox-for-solar.sh" 2>/dev/null; then
+            echo "audit fail: disable-rockbox-for-solar.sh must gate marker on Rockbox disabled state" >&2
+            errors=$((errors + 1))
+        fi
 
-    if [ ! -f "$base_dir/boot.img" ]; then
-        echo "audit fail: boot.img missing from ROM archive" >&2
-        errors=$((errors + 1))
-    fi
+        if [ ! -f "$sys_mount/etc/solar/switch-to-stock.sh" ]; then
+            echo "audit fail: /system/etc/solar/switch-to-stock.sh missing" >&2
+            errors=$((errors + 1))
+        elif grep -qiE '(^|[[:space:]]|/)reboot\b|reboot -p|/system/bin/reboot' \
+                "$sys_mount/etc/solar/switch-to-stock.sh" 2>/dev/null; then
+            echo "audit fail: switch-to-stock.sh must not reboot (unified keymap)" >&2
+            errors=$((errors + 1))
+        elif ! grep -q 'verify_rockbox_disabled' "$sys_mount/etc/solar/switch-to-stock.sh" 2>/dev/null; then
+            echo "audit fail: switch-to-stock.sh must verify Rockbox disabled before enabling Solar" >&2
+            errors=$((errors + 1))
+        fi
 
-    if [ ! -f "$base_dir/logo.bin" ]; then
-        echo "audit fail: logo.bin missing from ROM archive" >&2
-        errors=$((errors + 1))
+        if [ ! -f "$sys_mount/etc/solar/sync-rockbox-libs.sh" ]; then
+            echo "audit fail: /system/etc/solar/sync-rockbox-libs.sh missing (Rockbox codec sync)" >&2
+            errors=$((errors + 1))
+        fi
+
+        if [ ! -f "$sys_mount/etc/solar/sync-y1-keymap.sh" ]; then
+            echo "audit fail: /system/etc/solar/sync-y1-keymap.sh missing (unified keymap sync)" >&2
+            errors=$((errors + 1))
+        elif [ ! -f "$sys_mount/etc/solar/Y1-Rockbox.kl" ]; then
+            echo "audit fail: /system/etc/solar/Y1-Rockbox.kl missing" >&2
+            errors=$((errors + 1))
+        fi
+
+        if [ ! -f "$sys_mount/etc/init.d/99Y1ButtonScript" ]; then
+            echo "audit fail: 99Y1ButtonScript missing (Back+Play Rockbox gesture)" >&2
+            errors=$((errors + 1))
+        fi
+
+        if [ ! -f "$sys_mount/usr/keylayout/Generic.kl" ] || [ ! -f "$sys_mount/usr/keylayout/Rockbox.kl" ]; then
+            echo "audit fail: keylayout files missing" >&2
+            errors=$((errors + 1))
+        elif ! cmp -s "$sys_mount/usr/keylayout/Generic.kl" "$sys_mount/usr/keylayout/Y1-Rockbox.kl"; then
+            echo "audit fail: Generic.kl is not identical to Y1-Rockbox.kl (Y1 wheel 126/127)" >&2
+            errors=$((errors + 1))
+        elif ! cmp -s "$sys_mount/usr/keylayout/Stock.kl" "$sys_mount/usr/keylayout/Y1-Rockbox.kl"; then
+            echo "audit fail: Stock.kl must match Y1-Rockbox.kl (unified keymap)" >&2
+            errors=$((errors + 1))
+        elif ! cmp -s "$sys_mount/usr/keylayout/Rockbox.kl" "$sys_mount/usr/keylayout/Y1-Rockbox.kl"; then
+            echo "audit fail: Rockbox.kl must match Y1-Rockbox.kl (unified keymap)" >&2
+            errors=$((errors + 1))
+        elif [ -f "$sys_mount/usr/keylayout/mtk-tpd-kpd.kl" ] && [ -f "$sys_mount/usr/keylayout/mtk-kpd.kl" ] \
+                && ! cmp -s "$sys_mount/usr/keylayout/mtk-tpd-kpd.kl" "$sys_mount/usr/keylayout/mtk-kpd.kl"; then
+            echo "audit fail: mtk-tpd-kpd.kl must match mtk-kpd.kl (side keys 88/87, wheel 126/127)" >&2
+            errors=$((errors + 1))
+        fi
+
+        if [ ! -f "$sys_mount/media/bootanimation.zip" ]; then
+            echo "audit fail: /system/media/bootanimation.zip missing" >&2
+            errors=$((errors + 1))
+        fi
+
+        if [ ! -f "$sys_mount/bin/bootanimation" ]; then
+            echo "audit fail: /system/bin/bootanimation missing" >&2
+            errors=$((errors + 1))
+        fi
+
+        if [ ! -f "$base_dir/boot.img" ]; then
+            echo "audit fail: boot.img missing from ROM archive" >&2
+            errors=$((errors + 1))
+        fi
+
+        if [ ! -f "$base_dir/logo.bin" ]; then
+            echo "audit fail: logo.bin missing from ROM archive" >&2
+            errors=$((errors + 1))
+        fi
+
+        if [ ! -f "$user_mount/data/switch-to-stock.sh" ]; then
+            echo "audit fail: userdata/data/switch-to-stock.sh missing (Rockbox launcher handoff)" >&2
+            errors=$((errors + 1))
+        elif ! cmp -s "$user_mount/data/switch-to-stock.sh" "$sys_mount/etc/solar/switch-to-stock.sh"; then
+            echo "audit fail: userdata switch-to-stock.sh must match /system/etc/solar copy" >&2
+            errors=$((errors + 1))
+        elif grep -qiE '(^|[[:space:]]|/)reboot\b|reboot -p|/system/bin/reboot' \
+                "$user_mount/data/switch-to-stock.sh" 2>/dev/null; then
+            echo "audit fail: userdata switch-to-stock.sh must not reboot" >&2
+            errors=$((errors + 1))
+        fi
+    else
+        # Y2-specific audits:
+        if find "$sys_mount" -iname '*factorytest*' 2>/dev/null | grep -q .; then
+            echo "audit fail: factory test APK still present in system partition" >&2
+            errors=$((errors + 1))
+        fi
     fi
 
     if [ -n "$(find "$user_mount" -maxdepth 1 -name '*_launcher.apk' ! -name 'com.solar.launcher.apk' -print -quit 2>/dev/null)" ]; then
@@ -418,18 +436,6 @@ audit_rom_contents() {
 
     if find "$user_mount" -maxdepth 1 -name 'com.innioasis.*.apk' 2>/dev/null | grep -q .; then
         echo "audit fail: stock Innioasis launcher APK present in userdata" >&2
-        errors=$((errors + 1))
-    fi
-
-    if [ ! -f "$user_mount/data/switch-to-stock.sh" ]; then
-        echo "audit fail: userdata/data/switch-to-stock.sh missing (Rockbox launcher handoff)" >&2
-        errors=$((errors + 1))
-    elif ! cmp -s "$user_mount/data/switch-to-stock.sh" "$sys_mount/etc/solar/switch-to-stock.sh"; then
-        echo "audit fail: userdata switch-to-stock.sh must match /system/etc/solar copy" >&2
-        errors=$((errors + 1))
-    elif grep -qiE '(^|[[:space:]]|/)reboot\b|reboot -p|/system/bin/reboot' \
-            "$user_mount/data/switch-to-stock.sh" 2>/dev/null; then
-        echo "audit fail: userdata switch-to-stock.sh must not reboot" >&2
         errors=$((errors + 1))
     fi
 
@@ -492,6 +498,13 @@ if [ "$TYPE" = "y2" ]; then
         echo "  removing $apk"
         sudo rm -f "$apk" "${apk%.apk}.odex"
     done < <(find "$MOUNT_SYS/priv-app" -iname '*factorylauncher*' 2>/dev/null || true)
+
+    # ponytail: remove factory test APK to clean up Y2 ROM
+    while IFS= read -r apk; do
+        [ -n "$apk" ] || continue
+        echo "  removing factory test: $apk"
+        sudo rm -f "$apk" "${apk%.apk}.odex"
+    done < <(find "$MOUNT_SYS" -iname '*factorytest*' 2>/dev/null || true)
 else
     for apk in "$MOUNT_SYS/app"/com.*.apk; do
         [ -e "$apk" ] || continue
@@ -510,42 +523,44 @@ sudo cp "$STAGING_APK" "$MOUNT_SYS/app/$SYSTEM_APK_NAME"
 sudo chmod 644 "$MOUNT_SYS/app/$SYSTEM_APK_NAME"
 sudo chown root:root "$MOUNT_SYS/app/$SYSTEM_APK_NAME"
 
-echo "==> Install TLS prep (Conscrypt JNI + modern CA roots)"
-TLS_STAGE="$WORK_DIR/system-tls"
-chmod +x "$REPO_ROOT/scripts/stage-y1-system-prep.sh" "$REPO_ROOT/scripts/apply-y1-system-prep.sh"
-"$REPO_ROOT/scripts/stage-y1-system-prep.sh" "$TLS_STAGE" "$STAGING_APK" "$REPO_ROOT"
-sudo "$REPO_ROOT/scripts/apply-y1-system-prep.sh" "$TLS_STAGE" "$MOUNT_SYS"
-sudo chown root:root "$MOUNT_SYS/lib/libconscrypt_jni.so"
-sudo chown root:root "$MOUNT_SYS/etc/security/cacerts"/*.0 2>/dev/null || true
+if [ "$TYPE" != "y2" ]; then
+    echo "==> Install TLS prep (Conscrypt JNI + modern CA roots)"
+    TLS_STAGE="$WORK_DIR/system-tls"
+    chmod +x "$REPO_ROOT/scripts/stage-y1-system-prep.sh" "$REPO_ROOT/scripts/apply-y1-system-prep.sh"
+    "$REPO_ROOT/scripts/stage-y1-system-prep.sh" "$TLS_STAGE" "$STAGING_APK" "$REPO_ROOT"
+    sudo "$REPO_ROOT/scripts/apply-y1-system-prep.sh" "$TLS_STAGE" "$MOUNT_SYS"
+    sudo chown root:root "$MOUNT_SYS/lib/libconscrypt_jni.so"
+    sudo chown root:root "$MOUNT_SYS/etc/security/cacerts"/*.0 2>/dev/null || true
 
-echo "==> Install Solar boot init (SD library folders + TLS sanity)"
-sudo mkdir -p "$MOUNT_SYS/etc/init.d"
-sudo cp "$REPO_ROOT/solar-rom/system/99SolarInit.sh" "$MOUNT_SYS/etc/init.d/99SolarInit.sh"
-sudo chmod 755 "$MOUNT_SYS/etc/init.d/99SolarInit.sh"
-sudo chown root:root "$MOUNT_SYS/etc/init.d/99SolarInit.sh"
+    echo "==> Install Solar boot init (SD library folders + TLS sanity)"
+    sudo mkdir -p "$MOUNT_SYS/etc/init.d"
+    sudo cp "$REPO_ROOT/solar-rom/system/99SolarInit.sh" "$MOUNT_SYS/etc/init.d/99SolarInit.sh"
+    sudo chmod 755 "$MOUNT_SYS/etc/init.d/99SolarInit.sh"
+    sudo chown root:root "$MOUNT_SYS/etc/init.d/99SolarInit.sh"
 
-echo "==> Install launcher switch scripts + unified Rockbox keymap"
-sudo mkdir -p "$MOUNT_SYS/etc/solar"
-sudo cp "$SCRIPT_DIR/switch-to-stock.sh" "$MOUNT_SYS/etc/solar/switch-to-stock.sh"
-sudo cp "$SCRIPT_DIR/switch-to-rockbox.sh" "$MOUNT_SYS/etc/solar/switch-to-rockbox.sh"
-sudo cp "$SCRIPT_DIR/sync-rockbox-libs.sh" "$MOUNT_SYS/etc/solar/sync-rockbox-libs.sh"
-sudo cp "$SCRIPT_DIR/sync-y1-keymap.sh" "$MOUNT_SYS/etc/solar/sync-y1-keymap.sh"
-sudo cp "$SCRIPT_DIR/disable-rockbox-for-solar.sh" "$MOUNT_SYS/etc/solar/disable-rockbox-for-solar.sh"
-sudo cp "$SCRIPT_DIR/solar-usb-recovery-agent.sh" "$MOUNT_SYS/etc/solar/solar-usb-recovery-agent.sh"
-sudo cp "$SCRIPT_DIR/Y1-Rockbox.kl" "$MOUNT_SYS/etc/solar/Y1-Rockbox.kl"
-sudo chmod 755 "$MOUNT_SYS/etc/solar/switch-to-stock.sh" "$MOUNT_SYS/etc/solar/switch-to-rockbox.sh" \
-    "$MOUNT_SYS/etc/solar/sync-rockbox-libs.sh" "$MOUNT_SYS/etc/solar/sync-y1-keymap.sh" \
-    "$MOUNT_SYS/etc/solar/disable-rockbox-for-solar.sh" \
-    "$MOUNT_SYS/etc/solar/solar-usb-recovery-agent.sh"
-sudo chmod 644 "$MOUNT_SYS/etc/solar/Y1-Rockbox.kl"
-sudo chown root:root "$MOUNT_SYS/etc/solar/switch-to-stock.sh" "$MOUNT_SYS/etc/solar/switch-to-rockbox.sh" \
-    "$MOUNT_SYS/etc/solar/sync-rockbox-libs.sh" "$MOUNT_SYS/etc/solar/sync-y1-keymap.sh" \
-    "$MOUNT_SYS/etc/solar/disable-rockbox-for-solar.sh" \
-    "$MOUNT_SYS/etc/solar/solar-usb-recovery-agent.sh" "$MOUNT_SYS/etc/solar/Y1-Rockbox.kl"
+    echo "==> Install launcher switch scripts + unified Rockbox keymap"
+    sudo mkdir -p "$MOUNT_SYS/etc/solar"
+    sudo cp "$SCRIPT_DIR/switch-to-stock.sh" "$MOUNT_SYS/etc/solar/switch-to-stock.sh"
+    sudo cp "$SCRIPT_DIR/switch-to-rockbox.sh" "$MOUNT_SYS/etc/solar/switch-to-rockbox.sh"
+    sudo cp "$SCRIPT_DIR/sync-rockbox-libs.sh" "$MOUNT_SYS/etc/solar/sync-rockbox-libs.sh"
+    sudo cp "$SCRIPT_DIR/sync-y1-keymap.sh" "$MOUNT_SYS/etc/solar/sync-y1-keymap.sh"
+    sudo cp "$SCRIPT_DIR/disable-rockbox-for-solar.sh" "$MOUNT_SYS/etc/solar/disable-rockbox-for-solar.sh"
+    sudo cp "$SCRIPT_DIR/solar-usb-recovery-agent.sh" "$MOUNT_SYS/etc/solar/solar-usb-recovery-agent.sh"
+    sudo cp "$SCRIPT_DIR/Y1-Rockbox.kl" "$MOUNT_SYS/etc/solar/Y1-Rockbox.kl"
+    sudo chmod 755 "$MOUNT_SYS/etc/solar/switch-to-stock.sh" "$MOUNT_SYS/etc/solar/switch-to-rockbox.sh" \
+        "$MOUNT_SYS/etc/solar/sync-rockbox-libs.sh" "$MOUNT_SYS/etc/solar/sync-y1-keymap.sh" \
+        "$MOUNT_SYS/etc/solar/disable-rockbox-for-solar.sh" \
+        "$MOUNT_SYS/etc/solar/solar-usb-recovery-agent.sh"
+    sudo chmod 644 "$MOUNT_SYS/etc/solar/Y1-Rockbox.kl"
+    sudo chown root:root "$MOUNT_SYS/etc/solar/switch-to-stock.sh" "$MOUNT_SYS/etc/solar/switch-to-rockbox.sh" \
+        "$MOUNT_SYS/etc/solar/sync-rockbox-libs.sh" "$MOUNT_SYS/etc/solar/sync-y1-keymap.sh" \
+        "$MOUNT_SYS/etc/solar/disable-rockbox-for-solar.sh" \
+        "$MOUNT_SYS/etc/solar/solar-usb-recovery-agent.sh" "$MOUNT_SYS/etc/solar/Y1-Rockbox.kl"
 
-sudo cp "$REPO_ROOT/solar-rom/system/99Y1ButtonScript" "$MOUNT_SYS/etc/init.d/99Y1ButtonScript"
-sudo chmod 755 "$MOUNT_SYS/etc/init.d/99Y1ButtonScript"
-sudo chown root:root "$MOUNT_SYS/etc/init.d/99Y1ButtonScript"
+    sudo cp "$REPO_ROOT/solar-rom/system/99Y1ButtonScript" "$MOUNT_SYS/etc/init.d/99Y1ButtonScript"
+    sudo chmod 755 "$MOUNT_SYS/etc/init.d/99Y1ButtonScript"
+    sudo chown root:root "$MOUNT_SYS/etc/init.d/99Y1ButtonScript"
+fi
 
 [ -f "$SCRIPT_DIR/Y1-Rockbox.kl" ] || die "missing $SCRIPT_DIR/Y1-Rockbox.kl"
 # ponytail: Generic/Stock/Rockbox = Y1-Rockbox.kl (wheel 126/127); mtk-tpd-kpd mirrors patched mtk-kpd (side 88/87).
@@ -566,11 +581,13 @@ if [ -f "$MOUNT_SYS/usr/keylayout/mtk-kpd.kl" ]; then
     sudo chown root:root "$MOUNT_SYS/usr/keylayout/mtk-kpd.kl" "$MOUNT_SYS/usr/keylayout/mtk-tpd-kpd.kl"
 fi
 
-echo "==> AVRCP Bluetooth stack (Y1Bridge + mtkbt patches; hardware keylayout unchanged)"
-chmod +x "$SCRIPT_DIR/apply-avrcp-patches.sh"
-sudo "$SCRIPT_DIR/apply-avrcp-patches.sh" "$MOUNT_SYS"
+if [ "$TYPE" != "y2" ]; then
+    echo "==> AVRCP Bluetooth stack (Y1Bridge + mtkbt patches; hardware keylayout unchanged)"
+    chmod +x "$SCRIPT_DIR/apply-avrcp-patches.sh"
+    sudo "$SCRIPT_DIR/apply-avrcp-patches.sh" "$MOUNT_SYS"
 
-install_solar_boot_assets "$BASE_DIR" "$MOUNT_SYS"
+    install_solar_boot_assets "$BASE_DIR" "$MOUNT_SYS"
+fi
 
 echo "==> Patching userdata partition"
 while IFS= read -r apk; do
@@ -585,12 +602,14 @@ sudo rm -f "$MOUNT_USER/data/*_launcher_initialized"
 sudo rm -f "$MOUNT_USER/data/.solar_rom_home_ready"
 sudo rm -f "$MOUNT_USER/data/initialized"
 
-echo "==> Seed Rockbox switch scripts in userdata (overwrite rockbox-y1 reboot/keylayout script)"
-sudo mkdir -p "$MOUNT_USER/data"
-sudo cp "$SCRIPT_DIR/switch-to-stock.sh" "$MOUNT_USER/data/switch-to-stock.sh"
-sudo cp "$SCRIPT_DIR/switch-to-rockbox.sh" "$MOUNT_USER/data/switch-to-rockbox.sh"
-sudo chmod 755 "$MOUNT_USER/data/switch-to-stock.sh" "$MOUNT_USER/data/switch-to-rockbox.sh"
-sudo chown root:root "$MOUNT_USER/data/switch-to-stock.sh" "$MOUNT_USER/data/switch-to-rockbox.sh"
+if [ "$TYPE" != "y2" ]; then
+    echo "==> Seed Rockbox switch scripts in userdata (overwrite rockbox-y1 reboot/keylayout script)"
+    sudo mkdir -p "$MOUNT_USER/data"
+    sudo cp "$SCRIPT_DIR/switch-to-stock.sh" "$MOUNT_USER/data/switch-to-stock.sh"
+    sudo cp "$SCRIPT_DIR/switch-to-rockbox.sh" "$MOUNT_USER/data/switch-to-rockbox.sh"
+    sudo chmod 755 "$MOUNT_USER/data/switch-to-stock.sh" "$MOUNT_USER/data/switch-to-rockbox.sh"
+    sudo chown root:root "$MOUNT_USER/data/switch-to-stock.sh" "$MOUNT_USER/data/switch-to-rockbox.sh"
+fi
 
 audit_rom_contents "$BASE_DIR" "$MOUNT_SYS" "$MOUNT_USER"
 
