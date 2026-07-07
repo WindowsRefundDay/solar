@@ -136,6 +136,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
     private FlowLaunchRequest launchRequest;
     private FlowMode activeMode = FlowMode.UNSPECIFIED;
     private int uiMode = UI_PICKER;
+    private boolean thumbBakeRunning = false;
     private int pickerIndex;
     private int coverGen;
     private volatile int lastWarmCenter;
@@ -467,16 +468,38 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         startIncrementalThumbBakeLoop();
     }
 
+    private void setUiMode(int mode) {
+        uiMode = mode;
+        if (mode == UI_CAROUSEL) {
+            startIncrementalThumbBakeLoop();
+        }
+    }
+
     /** Rockbox incremental_albumart_cache — off anim tick, low-priority background thread. */
     private void startIncrementalThumbBakeLoop() {
+        synchronized (this) {
+            if (thumbBakeRunning) return;
+            if (uiMode != UI_CAROUSEL || catalog == null || catalog.isEmpty()) return;
+            thumbBakeRunning = true;
+        }
         FLOW_WORKER.execute(new Runnable() {
             @Override
             public void run() {
-                boolean backlog = incrementalFlowThumbBakeOne();
+                boolean backlog = false;
+                synchronized (FlowScreenHost.this) {
+                    if (uiMode != UI_CAROUSEL || catalog == null || catalog.isEmpty()) {
+                        thumbBakeRunning = false;
+                        return;
+                    }
+                    backlog = incrementalFlowThumbBakeOne();
+                }
                 try {
                     Thread.sleep(backlog ? 50L : 200L);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
+                    synchronized (FlowScreenHost.this) {
+                        thumbBakeRunning = false;
+                    }
                     return;
                 }
                 FLOW_WORKER.execute(this);
@@ -628,7 +651,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
      */
     public void prepareImmediateReverseHandoffShell(Bitmap handoffCover, String coverKey) {
         if (flowView == null) return;
-        uiMode = UI_CAROUSEL;
+        setUiMode(UI_CAROUSEL);
         activeMode = FlowMode.ALBUM;
         if (pickerScroll != null) pickerScroll.setVisibility(View.GONE);
         flowView.setVisibility(View.VISIBLE);
@@ -738,7 +761,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
             mode = FlowMode.ALBUM;
         }
         String focusKey = focusedItem != null ? focusedItem.matchKey : req.focusKey;
-        uiMode = UI_CAROUSEL;
+        setUiMode(UI_CAROUSEL);
         pickerScroll.setVisibility(View.GONE);
         flowView.setVisibility(View.VISIBLE);
         if (!catalog.isEmpty() && activeMode == mode) {
@@ -826,7 +849,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
             index = found;
         }
         if (index < 0 || index >= catalog.size()) return false;
-        uiMode = UI_CAROUSEL;
+        setUiMode(UI_CAROUSEL);
         pickerScroll.setVisibility(View.GONE);
         flowView.setVisibility(View.VISIBLE);
         flowView.engine().setFocusIndex(index);
@@ -846,7 +869,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         // #region agent log
         long applyStartMs = System.currentTimeMillis();
         // #endregion
-        uiMode = UI_CAROUSEL;
+        setUiMode(UI_CAROUSEL);
         activeMode = saved.mode;
         pickerScroll.setVisibility(View.GONE);
         flowView.setVisibility(View.VISIBLE);
@@ -945,7 +968,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
     public boolean prepareNpToFlowCrossfade(String focusKey, Bitmap npCover) {
         if (flowView == null) return false;
         flowView.resetHandoffRevealForDisplay();
-        uiMode = UI_CAROUSEL;
+        setUiMode(UI_CAROUSEL);
         activeMode = FlowMode.ALBUM;
         pickerScroll.setVisibility(View.GONE);
         flowView.setVisibility(View.VISIBLE);
@@ -1076,7 +1099,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         FlowMode mode = req.mode != null && req.mode != FlowMode.UNSPECIFIED
                 ? req.mode : FlowMode.ALBUM;
         if (!catalog.isEmpty() && activeMode == mode) {
-            uiMode = UI_CAROUSEL;
+            setUiMode(UI_CAROUSEL);
             pickerScroll.setVisibility(View.GONE);
             flowView.setVisibility(View.VISIBLE);
             flowView.resetHandoffRevealForDisplay();
@@ -1536,7 +1559,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
     }
 
     private void showPicker() {
-        uiMode = UI_PICKER;
+        setUiMode(UI_PICKER);
         activeMode = FlowMode.UNSPECIFIED;
         pickerIndex = 0;
         pickerScroll.setVisibility(View.VISIBLE);
@@ -1579,7 +1602,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
     }
 
     private void showCarousel(final FlowMode mode, final String focusKey) {
-        uiMode = UI_CAROUSEL;
+        setUiMode(UI_CAROUSEL);
         activeMode = mode;
         syncReflectionPref();
         flowView.resetFlip();
@@ -1921,6 +1944,7 @@ public final class FlowScreenHost implements FlowView.Callback, FlowCoverResolve
         flowView.resetHandoffRevealForDisplay();
         catalog = built;
         incrementalThumbCursor = 0;
+        startIncrementalThumbBakeLoop();
         int index = resolveCarouselFocusIndex(catalog, mode, focusKey);
         flowView.setItemsAndFocus(catalog, index);
         focusedItem = flowView.itemAt(index);

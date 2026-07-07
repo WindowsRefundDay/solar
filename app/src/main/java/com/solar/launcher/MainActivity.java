@@ -1536,19 +1536,22 @@ public class MainActivity extends Activity {
     private Runnable updateProgressTask = new Runnable() {
         @Override
         public void run() {
+            boolean screenOn = isScreenInteractive();
             try {
                 if (podcastEpisodeLoading) {
-                    progressHandler.postDelayed(this, 500);
+                    progressHandler.postDelayed(this, screenOn ? 500 : 5000);
                     return;
                 }
                 if (playback.isPodcastActive() && podcastIjkPlayer != null && podcastIjkPlayer.isPlaying()) {
                     if (playerScrubCursorActive) {
-                        progressHandler.postDelayed(this, 500);
+                        progressHandler.postDelayed(this, screenOn ? 500 : 5000);
                         return;
                     }
                     int current = podcastIjkPlayer.getCurrentPosition();
                     lastPodcastPlayPositionMs = current;
-                    refreshPodcastTimeUi();
+                    if (screenOn) {
+                        refreshPodcastTimeUi();
+                    }
                     if (avrcpTrackInfoWriter != null) {
                         avrcpTrackInfoWriter.tickPlayingPosition(current);
                     }
@@ -1568,25 +1571,25 @@ public class MainActivity extends Activity {
                         if (podcastDownloadInProgress && podcastPartialPlaybackStarted) {
                             long now = System.currentTimeMillis();
                             if (now - podcastDownloadLastProgressMs > 15000
-                                    && currentScreenState == STATE_PLAYER && !podcastDownloadPaused) {
+                                    && (!screenOn || currentScreenState == STATE_PLAYER) && !podcastDownloadPaused) {
                                 podcastDownloadLastProgressMs = now;
                                 maybeRecoverPodcastStream(playback.podcastIndex(), podcastLoadGeneration);
                             }
                         }
                         if (podcastPartialPlaybackStarted && !podcastDownloadInProgress
-                                && currentScreenState == STATE_PLAYER && !podcastDownloadPaused) {
+                                && (!screenOn || currentScreenState == STATE_PLAYER) && !podcastDownloadPaused) {
                             int bufferedMs = podcastBufferedSeekLimitMs();
                             if (bufferedMs > 0 && current >= bufferedMs - 2500) {
                                 maybeRecoverPodcastStream(playback.podcastIndex(), podcastLoadGeneration);
                             }
                         }
                     }
-                    progressHandler.postDelayed(this, 500);
+                    progressHandler.postDelayed(this, screenOn ? 500 : 5000);
                     return;
                 }
                 if (mediaPlayer != null && mediaPlayer.isPlaying()) {
                     if (playerScrubCursorActive) {
-                        progressHandler.postDelayed(this, 500);
+                        progressHandler.postDelayed(this, screenOn ? 500 : 5000);
                         return;
                     }
                     int current = mediaPlayer.getCurrentPosition();
@@ -1599,30 +1602,32 @@ public class MainActivity extends Activity {
                         duration = mediaPlayer.getDuration();
                     }
                     if (duration > 0) {
-                        int progress = (int) (((float) current / duration) * 100);
-                        if (progress > 100) progress = 100;
-                        playerProgress.setProgress(progress);
+                        if (screenOn) {
+                            int progress = (int) (((float) current / duration) * 100);
+                            if (progress > 100) progress = 100;
+                            playerProgress.setProgress(progress);
 
-                        int curSec = current / 1000;
-                        if (curSec != lastProgressSecond) {
-                            lastProgressSecond = curSec;
-                            if (playback.isPodcastActive() && playbackSpeed != 1.0f) {
-                                setTextIfChanged(tvPlayerTimeCurrent, formatTime((int) (current / playbackSpeed)));
-                            } else {
-                                setTextIfChanged(tvPlayerTimeCurrent, formatTime(current));
+                            int curSec = current / 1000;
+                            if (curSec != lastProgressSecond) {
+                                lastProgressSecond = curSec;
+                                if (playback.isPodcastActive() && playbackSpeed != 1.0f) {
+                                    setTextIfChanged(tvPlayerTimeCurrent, formatTime((int) (current / playbackSpeed)));
+                                } else {
+                                    setTextIfChanged(tvPlayerTimeCurrent, formatTime(current));
+                                }
                             }
-                        }
 
-                        String totalStr = formatTime(duration);
-                        if (playback.isPodcastActive() && playbackSpeed != 1.0f) {
-                            totalStr = formatTime((int) (duration / playbackSpeed))
-                                    + " (" + String.format(java.util.Locale.US, "%.2f", playbackSpeed) + "x)";
-                        }
+                            String totalStr = formatTime(duration);
+                            if (playback.isPodcastActive() && playbackSpeed != 1.0f) {
+                                totalStr = formatTime((int) (duration / playbackSpeed))
+                                        + " (" + String.format(java.util.Locale.US, "%.2f", playbackSpeed) + "x)";
+                            }
 
-                        if (duration != lastDurationMs || !totalStr.equals(lastDurationText)) {
-                            lastDurationMs = duration;
-                            lastDurationText = totalStr;
-                            setTextIfChanged(tvPlayerTimeTotal, totalStr);
+                            if (duration != lastDurationMs || !totalStr.equals(lastDurationText)) {
+                                lastDurationMs = duration;
+                                lastDurationText = totalStr;
+                                setTextIfChanged(tvPlayerTimeTotal, totalStr);
+                            }
                         }
                     }
                     if (avrcpTrackInfoWriter != null) {
@@ -1644,13 +1649,13 @@ public class MainActivity extends Activity {
                         if (podcastDownloadInProgress && podcastPartialPlaybackStarted) {
                             long now = System.currentTimeMillis();
                             if (now - podcastDownloadLastProgressMs > 15000
-                                    && currentScreenState == STATE_PLAYER && !podcastDownloadPaused) {
+                                    && (!screenOn || currentScreenState == STATE_PLAYER) && !podcastDownloadPaused) {
                                 podcastDownloadLastProgressMs = now;
                                 maybeRecoverPodcastStream(playback.podcastIndex(), podcastLoadGeneration);
                             }
                         }
                         if (podcastPartialPlaybackStarted && !podcastDownloadInProgress
-                                && currentScreenState == STATE_PLAYER && !podcastDownloadPaused) {
+                                && (!screenOn || currentScreenState == STATE_PLAYER) && !podcastDownloadPaused) {
                             int bufferedMs = podcastBufferedSeekLimitMs();
                             if (bufferedMs > 0 && current >= bufferedMs - 2500) {
                                 maybeRecoverPodcastStream(playback.podcastIndex(), podcastLoadGeneration);
@@ -1660,16 +1665,18 @@ public class MainActivity extends Activity {
                     if (reachPartialPlaybackStarted && reachGrowingCacheFile != null) {
                         int displayDur = reachGrowingDisplayDurationMs();
                         if (displayDur > 0) {
-                            int progress = Math.min(100, current * 100 / displayDur);
-                            playerProgress.setProgress(progress);
-                            int curSec = current / 1000;
-                            if (curSec != lastProgressSecond) {
-                                lastProgressSecond = curSec;
-                                setTextIfChanged(tvPlayerTimeCurrent, formatTime(current));
-                            }
-                            if (displayDur != lastDurationMs) {
-                                lastDurationMs = displayDur;
-                                setTextIfChanged(tvPlayerTimeTotal, formatTime(displayDur));
+                            if (screenOn) {
+                                int progress = Math.min(100, current * 100 / displayDur);
+                                playerProgress.setProgress(progress);
+                                int curSec = current / 1000;
+                                if (curSec != lastProgressSecond) {
+                                    lastProgressSecond = curSec;
+                                    setTextIfChanged(tvPlayerTimeCurrent, formatTime(current));
+                                }
+                                if (displayDur != lastDurationMs) {
+                                    lastDurationMs = displayDur;
+                                    setTextIfChanged(tvPlayerTimeTotal, formatTime(displayDur));
+                                }
                             }
                         }
                         int edgeMs = reachGrowingDecodeEdgeMs();
@@ -1688,7 +1695,6 @@ public class MainActivity extends Activity {
                             // #endregion
                             maybeExtendReachGrowingPlayback(false);
                         } else if (reachDownloadInProgress() && !isPausedByHand) {
-                            // ponytail: MP3 headers report full length — stall at byte edge without onCompletion.
                             boolean playing = false;
                             try {
                                 playing = mediaPlayer.isPlaying();
@@ -1697,18 +1703,24 @@ public class MainActivity extends Activity {
                                 maybeExtendReachGrowingPlayback(false);
                             }
                         }
-                        refreshReachGrowingBufferUi();
+                        if (screenOn) {
+                            refreshReachGrowingBufferUi();
+                        }
                     }
                 } else if (mediaPlayer != null && podcastGrowingCacheFile != null
                         && (podcastDownloadInProgress || podcastPartialPlaybackStarted)) {
-                    updatePodcastGrowingTimeUi();
+                    if (screenOn) {
+                        updatePodcastGrowingTimeUi();
+                    }
                 } else if (mediaPlayer != null && reachPartialPlaybackStarted && reachGrowingCacheFile != null) {
-                    updateReachGrowingTimeUi();
-                    refreshReachGrowingBufferUi();
+                    if (screenOn) {
+                        updateReachGrowingTimeUi();
+                        refreshReachGrowingBufferUi();
+                    }
                 }
             } catch (Exception e) {
             }
-            progressHandler.postDelayed(this, 500);
+            progressHandler.postDelayed(this, screenOn ? 500 : 5000);
         }
     };
 
@@ -20498,6 +20510,18 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             return true;
         }
+    }
+
+    private boolean isMusicOrPodcastPlaying() {
+        try {
+            if (playback.isPodcastActive() && podcastIjkPlayer != null && podcastIjkPlayer.isPlaying()) {
+                return true;
+            }
+            if (mediaPlayer != null && mediaPlayer.isPlaying()) {
+                return true;
+            }
+        } catch (Exception ignored) {}
+        return false;
     }
 
     /** ponytail: Y1 system APK is not android.uid.system — root power key is the fast path */
@@ -40377,10 +40401,16 @@ public class MainActivity extends Activity {
             batteryReceiverRegistered = true;
             if (sticky != null) batteryReceiver.onReceive(this, sticky);
         }
+
+        clockHandler.removeCallbacks(clockTask);
+        if (!otaSystemReplaceInProgress) {
+            clockHandler.post(clockTask);
+        }
     }
 
     @Override
     protected void onPause() {
+        clockHandler.removeCallbacks(clockTask);
         if (batteryReceiverRegistered) {
             try {
                 unregisterReceiver(batteryReceiver);
@@ -41407,7 +41437,7 @@ public class MainActivity extends Activity {
         public void updateVisualizer(byte[] fft, int color) {
             this.fftData = fft;
             paint.setColor(color);
-            // invalidate() 대신 onDraw 내부에서 무한 루프를 돌려 60fps를 방어합니다!
+            postInvalidate(); // Kickstart onDraw when new data is received
         }
 
         @Override
@@ -41441,7 +41471,14 @@ public class MainActivity extends Activity {
 
             // 🚀 3. 화면에 보일 때는 초당 60번(16ms) 강제 새로고침하여 버벅임을 없앱니다.
             if (getVisibility() == View.VISIBLE) {
-                postInvalidateDelayed(16);
+                if (getContext() instanceof MainActivity) {
+                    MainActivity main = (MainActivity) getContext();
+                    if (main.isScreenInteractive() && main.isMusicOrPodcastPlaying()) {
+                        postInvalidateDelayed(16);
+                    }
+                } else {
+                    postInvalidateDelayed(16);
+                }
             }
         }
     }

@@ -12,7 +12,7 @@ import android.view.animation.DecelerateInterpolator;
  */
 public final class ListDrillTransition {
 
-    private static final DecelerateInterpolator EASE = new DecelerateInterpolator(1.6f);
+    private static final android.view.animation.Interpolator PUSH_EASE = ScreenTransition.PUSH_EASE;
     private static volatile boolean animating;
 
     private ListDrillTransition() {}
@@ -66,7 +66,7 @@ public final class ListDrillTransition {
 
         // Phase 1 — slide outgoing list off before rebuild.
         host.animate().translationX(outEnd).alpha(0.55f)
-                .setDuration(halfMs).setInterpolator(EASE)
+                .setDuration(halfMs).setInterpolator(PUSH_EASE)
                 .withEndAction(new Runnable() {
                     @Override
                     public void run() {
@@ -78,7 +78,7 @@ public final class ListDrillTransition {
                             public void run() {
                                 // Phase 2 — slide incoming list on.
                                 host.animate().translationX(0f).alpha(1f)
-                                        .setDuration(ScreenTransition.PUSH_MS).setInterpolator(EASE)
+                                        .setDuration(ScreenTransition.PUSH_MS).setInterpolator(PUSH_EASE)
                                         .withEndAction(new Runnable() {
                                             @Override
                                             public void run() {
