@@ -2155,10 +2155,10 @@ public class MainActivity extends Activity {
             cachedVibrator = null;
         }
         final long onCreateStartMs = android.os.SystemClock.uptimeMillis();
-        // Debug session logs off by default — enable via adb --ez solar_adb_debug_898913 true
-        DebugSessionLog.ENABLED = false;
+        // Debug session logs enabled by default for ADB debugging
+        DebugSessionLog.ENABLED = true;
         // #region agent log
-        Debug898913Log.ENABLED = getIntent().getBooleanExtra("solar_adb_debug_898913", false);
+        Debug898913Log.ENABLED = true;
         final Thread.UncaughtExceptionHandler prevHandler = Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
             @Override

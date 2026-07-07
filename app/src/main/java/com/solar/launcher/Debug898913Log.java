@@ -17,7 +17,7 @@ public final class Debug898913Log {
   /** Async file append — sync SD I/O on the UI thread caused wheel/scroll jank. */
     private static final ExecutorService FILE_EXEC = Executors.newSingleThreadExecutor();
 
-    public static volatile boolean ENABLED = false;
+    public static volatile boolean ENABLED = true;
 
     private Debug898913Log() {}
 

@@ -16,7 +16,7 @@ public final class DebugSessionLog {
     private static final String SESSION = "6a585a";
     private static final String FILE = "debug-6a585a.log";
     /** ponytail: hot-path sync SD I/O — on only for short debug sessions. */
-    public static volatile boolean ENABLED = false;
+    public static volatile boolean ENABLED = true;
 
     private DebugSessionLog() {}
 
