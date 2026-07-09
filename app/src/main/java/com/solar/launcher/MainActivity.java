@@ -567,8 +567,8 @@ public class MainActivity extends Activity {
     private final Handler themePreviewHandler = new Handler();
     private Runnable themePreviewPending;
     private static final long THEME_PREVIEW_DEBOUNCE_MS = 200L;
-    private int libraryScanGen = 0;
-    private int activeLibraryScanGen = 0;
+    private volatile int libraryScanGen = 0;
+    private volatile int activeLibraryScanGen = 0;
     private final PlaybackCoordinator playback = new PlaybackCoordinator();
     private MediaSuiteHost mediaSuite;
     private int podcastLoadGeneration = 0;
@@ -28153,23 +28153,18 @@ public class MainActivity extends Activity {
         libraryScanRunning = true;
         isCustomScanning = customLibrary.isEmpty();
         libraryScanTrackCount = 0;
-        final int gen = libraryScanGen;
+        final int gen = ++libraryScanGen;
         activeLibraryScanGen = gen;
-        // #region agent log
-        try {
-            org.json.JSONObject d = new org.json.JSONObject();
-            d.put("gen", gen);
-            d.put("userInitiated", userInitiated);
-            d.put("libEmpty", customLibrary.isEmpty());
-            Debug898913Log.logAlways("MainActivity.startLibraryScan", "scan started", "H1", d);
-        } catch (Exception ignored) {}
-        // #endregion
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                acquireBlockingOverlay(OVERLAY_LIB_SCAN, getString(R.string.library_scanning));
-            }
-        });
+        // Startup scans run silently behind the hydrated library; overlay only when the user
+        // asked for a scan. True first run (empty DB) raises it from the worker instead.
+        if (userInitiated) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    acquireBlockingOverlay(OVERLAY_LIB_SCAN, getString(R.string.library_scanning));
+                }
+            });
+        }
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -28180,19 +28175,29 @@ public class MainActivity extends Activity {
 
     private void runLibraryScanWorker(final int gen, final boolean userInitiated) {
         final MusicLibraryStore store = MusicLibraryStore.getInstance(getApplicationContext());
-        if (customLibrary.isEmpty()) {
-            java.util.List<MusicLibraryStore.Track> cached = store.loadAll();
-            if (libraryScanGen != gen) {
-                abortLibraryScanWorker(gen);
-                return;
-            }
-            if (!cached.isEmpty()) {
-                applyCachedTracks(cached);
-                postLibraryCacheHydrated(gen);
-            }
-        }
-        if (!userInitiated && tryFinishScanFromFreshCache(gen, userInitiated)) {
+        java.util.List<MusicLibraryStore.Track> cached = store.loadAll();
+        if (libraryScanGen != gen) {
+            abortLibraryScanWorker(gen);
             return;
+        }
+        if (customLibrary.isEmpty() && !cached.isEmpty()) {
+            applyCachedTracks(cached);
+            postLibraryCacheHydrated(gen);
+        }
+        if (!userInitiated && cached.isEmpty()) {
+            // True first run — nothing to show yet, so the blocking overlay is warranted.
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (libraryScanGen != gen || !libraryScanRunning) return;
+                    acquireBlockingOverlay(OVERLAY_LIB_SCAN, getString(R.string.library_scanning));
+                }
+            });
+        }
+        final java.util.HashMap<String, MusicLibraryStore.Track> trackMap =
+                new java.util.HashMap<String, MusicLibraryStore.Track>(cached.size() * 2);
+        for (MusicLibraryStore.Track t : cached) {
+            trackMap.put(t.path, t);
         }
         final java.util.HashSet<String> seenPaths = MusicLibraryStore.newKeepSet();
         final java.util.ArrayList<SongItem> scanned = new java.util.ArrayList<SongItem>();
@@ -28207,9 +28212,10 @@ public class MainActivity extends Activity {
         };
         long tScan0 = System.currentTimeMillis();
         LibraryScanner.ScanResult result = null;
+        int staleTotal = 0;
         for (File musicFolder : com.solar.launcher.DeviceFeatures.getMusicRoots()) {
             if (!musicFolder.exists()) musicFolder.mkdirs();
-            result = LibraryScanner.scan(musicFolder, store,
+            result = LibraryScanner.scan(musicFolder, store, trackMap,
                     blacklist, prefs, seenPaths, scanCb);
             if (libraryScanGen != gen) {
                 abortLibraryScanWorker(gen);
@@ -28217,21 +28223,25 @@ public class MainActivity extends Activity {
             }
             if (result != null && result.items != null) {
                 scanned.addAll(result.items);
+                staleTotal += result.staleCount;
             }
         }
         long scanMs = System.currentTimeMillis() - tScan0;
-        // #region agent log
-        try {
-            org.json.JSONObject d = new org.json.JSONObject();
-            d.put("gen", gen);
-            d.put("scanned", scanned.size());
-            d.put("ms", scanMs);
-            Debug898913Log.logAlways("MainActivity.runLibraryScanWorker",
-                    "parallel scan done", "H3,H4", d);
-        } catch (Exception ignored) {}
-        // #endregion
+        // A transient storage/listFiles failure must never turn a valid hydrated library into
+        // an empty one. Keep the last known-good rows and let the next boot retry the walk.
+        if (scanned.isEmpty() && !cached.isEmpty()) {
+            for (MusicLibraryStore.Track t : cached) {
+                File f = new File(t.path);
+                if (!f.isFile() || blacklist.contains(t.path)) continue;
+                scanned.add(songItemFromStoreTrack(t, f));
+            }
+        }
         // Perf log: full scan timing is recorded after album-art ingest below.
-        store.deleteExcept(seenPaths);
+        // An empty walk is not proof that the library is empty (storage can be briefly
+        // unavailable during boot). Preserve the DB in that case.
+        if (!seenPaths.isEmpty()) {
+            store.deleteExcept(seenPaths);
+        }
         reconcileCustomLibrary(scanned);
         normalizeLibraryAlbumTitles();
         // Dismiss scan overlay before slow cover ingest — art cache continues on worker thread.
@@ -28242,15 +28252,8 @@ public class MainActivity extends Activity {
             }
         });
         // Art ingest off the scan critical path — do not block overlay dismissal.
-        scheduleAlbumArtIngestAsync(gen);
-        // #region agent log
-        try {
-            org.json.JSONObject d = new org.json.JSONObject();
-            d.put("gen", gen);
-            Debug898913Log.logAlways("MainActivity.runLibraryScanWorker",
-                    "scan ui finish scheduled, art async", "H5", d);
-        } catch (Exception ignored) {}
-        // #endregion
+        // Stamp skip only valid when nothing was re-tagged; count changes clear it anyway.
+        scheduleAlbumArtIngestAsync(gen, staleTotal == 0);
         ScanPerfLog.record(scanned.size(), scanMs, result != null ? result.phases() : null);
         if (libraryScanGen != gen) {
             abortLibraryScanWorker(gen);
@@ -28346,89 +28349,14 @@ public class MainActivity extends Activity {
         prefs.edit().putInt(PREF_ART_CACHE_READY_TRACKS, customLibrary.size()).apply();
     }
 
-    /**
-     * Skip filesystem walk when SQLite-hydrated library matches on-disk mtimes.
-     * ponytail: won't detect new files until manual scan or MEDIA_MOUNTED — acceptable tradeoff.
-     */
-    private boolean tryFinishScanFromFreshCache(final int gen, final boolean userInitiated) {
-        final MusicLibraryStore store = MusicLibraryStore.getInstance(getApplicationContext());
-        purgeStaleLibraryPaths(store);
-        if (customLibrary.isEmpty()) return false;
-        int staleTrackCount = 0;
-        int zeroTrackNumCount = 0;
-        synchronized (customLibrary) {
-            for (SongItem item : customLibrary) {
-                if (item == null || item.file == null || !item.file.isFile()) return false;
-                MusicLibraryStore.Track row = store.get(item.file.getAbsolutePath());
-                if (row != null && row.trackNumber == 0) zeroTrackNumCount++;
-                if (!store.isFresh(item.file)) staleTrackCount++;
-            }
-        }
-        boolean hasGaps = albumArtCacheHasGaps();
-        // #region agent log
-        try {
-            org.json.JSONObject d = new org.json.JSONObject();
-            d.put("gen", gen);
-            d.put("userInitiated", userInitiated);
-            d.put("libSize", customLibrary.size());
-            d.put("staleTracks", staleTrackCount);
-            d.put("zeroTrackNum", zeroTrackNumCount);
-            d.put("hasGaps", hasGaps);
-            d.put("artReadyStamp", prefs != null
-                    ? prefs.getInt(PREF_ART_CACHE_READY_TRACKS, -1) : -1);
-            Debug898913Log.logAlways("MainActivity.tryFinishScanFromFreshCache",
-                    staleTrackCount == 0 ? "fast-path eligible" : "full walk required", "H1,H2", d);
-        } catch (Exception ignored) {}
-        // #endregion
-        if (staleTrackCount > 0) return false;
-        if (!hasGaps) {
-            if (libraryScanGen != gen) return true;
-            runOnUiThread(new Runnable() {
-                @Override
-                public void run() {
-                    finishLibraryScan(gen, userInitiated);
-                }
-            });
-            return true;
-        }
-        if (libraryScanGen != gen) return true;
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                finishLibraryScan(gen, userInitiated);
-            }
-        });
-        scheduleAlbumArtIngestAsync(gen);
-        return true;
-    }
-
     /** Background 240px JPEG ingest — must not extend library scan worker lifetime. */
-    private void scheduleAlbumArtIngestAsync(final int gen) {
+    private void scheduleAlbumArtIngestAsync(final int gen, final boolean allowStampSkip) {
         new Thread(new Runnable() {
             @Override
             public void run() {
-                buildAlbumArtCacheAfterScan(gen);
+                buildAlbumArtCacheAfterScan(gen, allowStampSkip);
             }
         }, "AlbumArtIngest").start();
-    }
-
-    /** True when any album rack cover is missing from internal AlbumArtCache. */
-    private boolean albumArtCacheHasGaps() {
-        if (pendingAlbumArtCacheRebuild) return true;
-        if (prefs != null) {
-            int readyTracks = prefs.getInt(PREF_ART_CACHE_READY_TRACKS, -1);
-            if (readyTracks >= 0 && readyTracks == customLibrary.size()) return false;
-        }
-        if (customLibrary.isEmpty()) return false;
-        File artDir = com.solar.launcher.flow.AlbumArtCache.cacheDir(getApplicationContext());
-        boolean multiTrack = prefs != null && prefs.getBoolean(PREF_FLOW_MULTI_TRACK_ALBUMS, false);
-        List<com.solar.launcher.flow.FlowItem> albums = com.solar.launcher.flow.FlowCatalog.buildAlbums(
-                flowLibraryRows(), libraryBrowsePrefs, policyTracksFromLibrary(), multiTrack);
-        for (com.solar.launcher.flow.FlowItem item : albums) {
-            if (item == null || item.coverKey == null || item.coverKey.isEmpty()) continue;
-            if (!com.solar.launcher.flow.AlbumArtCache.has(artDir, item.coverKey)) return true;
-        }
-        return false;
     }
 
     private void reconcileCustomLibrary(java.util.ArrayList<SongItem> scanned) {
@@ -28443,7 +28371,16 @@ public class MainActivity extends Activity {
 
     /** Pre-scale album art to 240px JPEG on internal storage for fast Flow navigation. */
     private void buildAlbumArtCacheAfterScan(int gen) {
+        buildAlbumArtCacheAfterScan(gen, false);
+    }
+
+    private void buildAlbumArtCacheAfterScan(int gen, boolean allowStampSkip) {
         if (libraryScanGen != gen) return;
+        // Ready stamp matches library size and no re-tags happened — skip the album stat sweep.
+        if (allowStampSkip && !pendingAlbumArtCacheRebuild && prefs != null) {
+            int readyTracks = prefs.getInt(PREF_ART_CACHE_READY_TRACKS, -1);
+            if (readyTracks >= 0 && readyTracks == customLibrary.size()) return;
+        }
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
@@ -28512,6 +28449,7 @@ public class MainActivity extends Activity {
                     "ingest complete", "H-PERF", d);
         } catch (Exception ignored) {}
         // #endregion
+        if (libraryScanGen != gen) return;
         markArtCacheReadyStamp();
     }
 
@@ -36824,7 +36762,7 @@ public class MainActivity extends Activity {
         if (libraryScanRunning) return;
         if (isUsbMassStorageUiLocked()) return;
         libraryScanRunning = true;
-        final int gen = libraryScanGen;
+        final int gen = ++libraryScanGen;
         activeLibraryScanGen = gen;
         if (showOverlay) {
             runOnUiThread(new Runnable() {
@@ -36874,7 +36812,7 @@ public class MainActivity extends Activity {
                         refreshLibraryBrowseIfVisible();
                     }
                 });
-                scheduleAlbumArtIngestAsync(gen);
+                scheduleAlbumArtIngestAsync(gen, false);
             }
         }, "LibraryNewFiles").start();
     }
