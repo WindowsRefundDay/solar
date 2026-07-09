@@ -1960,10 +1960,15 @@ public class MainActivity extends Activity {
     }
 
     /** ponytail: register receivers, library scan, and full theme bootstrap after home is visible. */
+    private boolean systemStatusReceiverRegistered;
+    private boolean systemStatusMediaReceiverRegistered;
+    private Runnable deferredColdStartWork;
+
     private void scheduleDeferredColdStartWork() {
-        Runnable work = new Runnable() {
+        deferredColdStartWork = new Runnable() {
             @Override
             public void run() {
+                if (!isActivityAlive()) return;
                 registerDeferredSystemReceivers();
                 triggerAutoReconnect();
                 if (consumePendingAlbumArtCacheRebuild()) {
@@ -1979,9 +1984,9 @@ public class MainActivity extends Activity {
         };
         long delayMs = 250L;
         if (layoutMainMenu != null) {
-            layoutMainMenu.postDelayed(work, delayMs);
+            layoutMainMenu.postDelayed(deferredColdStartWork, delayMs);
         } else {
-            clockHandler.postDelayed(work, delayMs);
+            clockHandler.postDelayed(deferredColdStartWork, delayMs);
         }
         new Thread(new Runnable() {
             @Override
@@ -2013,6 +2018,7 @@ public class MainActivity extends Activity {
     }
 
     private void registerDeferredSystemReceivers() {
+        if (!isActivityAlive()) return;
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_MEDIA_SCANNER_STARTED);
         filter.addAction(Intent.ACTION_MEDIA_SCANNER_FINISHED);
@@ -2032,11 +2038,17 @@ public class MainActivity extends Activity {
         filter.addAction(Intent.ACTION_SCREEN_OFF);
         filter.addAction(Intent.ACTION_SCREEN_ON);
         filter.setPriority(IntentFilter.SYSTEM_HIGH_PRIORITY);
-        registerReceiver(systemStatusReceiver, filter);
+        if (!systemStatusReceiverRegistered) {
+            registerReceiver(systemStatusReceiver, filter);
+            systemStatusReceiverRegistered = true;
+        }
 
         IntentFilter mediaFilter = new IntentFilter(Intent.ACTION_MEDIA_MOUNTED);
         mediaFilter.addDataScheme("file");
-        registerReceiver(systemStatusReceiver, mediaFilter);
+        if (!systemStatusMediaReceiverRegistered) {
+            registerReceiver(systemStatusReceiver, mediaFilter);
+            systemStatusMediaReceiverRegistered = true;
+        }
         // #region agent log
         try {
             DebugSessionLog.log("registerDeferredSystemReceivers", "receivers registered", "H3", null);
@@ -3306,9 +3318,18 @@ public class MainActivity extends Activity {
         }, 1100);
     }
 
-    private void runOnUiThreadSafe(Runnable r) {
-        if (isFinishing()) return;
-        runOnUiThread(r);
+    private boolean isActivityAlive() {
+        return !isFinishing() && (android.os.Build.VERSION.SDK_INT < 17 || !isDestroyed());
+    }
+
+    private void runOnUiThreadSafe(final Runnable r) {
+        if (r == null || !isActivityAlive()) return;
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (isActivityAlive()) r.run();
+            }
+        });
     }
     private void refreshWidgets() {
         if (layoutWidgets != null) layoutWidgets.setVisibility(View.GONE);
@@ -19056,12 +19077,7 @@ public class MainActivity extends Activity {
 
     private void clearPlaybackQueue() {
         finalizeReachStreamHandoff();
-        try {
-            if (mediaPlayer != null) {
-                mediaPlayer.stop();
-                mediaPlayer.reset();
-            }
-        } catch (Exception ignored) {}
+        discardActiveMediaPlayer("clear-queue");
         isPausedByHand = false;
         PlayQueueStore.clear(getApplicationContext());
         playback.clearQueue();
@@ -21616,11 +21632,8 @@ public class MainActivity extends Activity {
             if (soulseekClient != null) soulseekClient.shutdown();
         } catch (Exception ignored) {}
         try {
-            if (mediaPlayer != null) {
-                mediaPlayer.stop();
-                mediaPlayer.release();
-                mediaPlayer = null;
-            }
+            // Async — a wedged mediaserver must not block force-quit itself.
+            discardActiveMediaPlayer("force-quit");
             releasePodcastIjkPlayer();
         } catch (Exception ignored) {}
         finishAffinity();
@@ -29846,9 +29859,7 @@ public class MainActivity extends Activity {
         stopPodcastDownloadFully();
         finalizeReachStreamHandoff();
         playback.clearQueue();
-        try {
-            if (mediaPlayer != null) mediaPlayer.reset();
-        } catch (Exception ignored) {}
+        discardActiveMediaPlayer("deezer-playlist-start");
         playerReturnScreen = currentScreenState;
         startDeezerPlaylistTransferAt(idx, DeezerScreen.ACTION_PLAY);
     }
@@ -35714,16 +35725,15 @@ public class MainActivity extends Activity {
 
     private void applyReachId3Metadata(File partial) {
         if (partial == null || !partial.isFile() || partial.length() < REACH_ID3_MIN_BYTES) return;
+        MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+        java.io.FileInputStream fis = null;
         try {
-            MediaMetadataRetriever mmr = new MediaMetadataRetriever();
-            java.io.FileInputStream fis = new java.io.FileInputStream(partial);
+            fis = new java.io.FileInputStream(partial);
             mmr.setDataSource(fis.getFD());
             String t = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE);
             String a = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST);
             String al = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM);
             byte[] art = mmr.getEmbeddedPicture();
-            fis.close();
-            mmr.release();
             if (t != null && !t.trim().isEmpty()) {
                 tvPlayerTitle.setText(reachProgressPrefix(reachDownloadPercentForFile(partial))
                         + stripReachProgressPrefix(t));
@@ -35738,7 +35748,13 @@ public class MainActivity extends Activity {
                 applyReachStreamCoverArt();
             }
             refreshNowPlayingPreview();
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        } finally {
+            if (fis != null) {
+                try { fis.close(); } catch (Exception ignored) {}
+            }
+            try { mmr.release(); } catch (Exception ignored) {}
+        }
     }
 
     private void applyReachStreamCoverArt() {
@@ -35820,18 +35836,23 @@ public class MainActivity extends Activity {
     private void tryDeezerStreamEmbeddedArt(File partial) {
         if (partial == null || partial.length() < REACH_ID3_MIN_BYTES) return;
         if (lastAlbumArtBytes != null && lastAlbumArtBytes.length > 0) return;
+        MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+        java.io.FileInputStream fis = null;
         try {
-            MediaMetadataRetriever mmr = new MediaMetadataRetriever();
-            java.io.FileInputStream fis = new java.io.FileInputStream(partial);
+            fis = new java.io.FileInputStream(partial);
             mmr.setDataSource(fis.getFD());
             byte[] art = mmr.getEmbeddedPicture();
-            fis.close();
-            mmr.release();
             if (art != null && art.length > 0) {
                 lastAlbumArtBytes = art;
                 applyReachStreamCoverArt();
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        } finally {
+            if (fis != null) {
+                try { fis.close(); } catch (Exception ignored) {}
+            }
+            try { mmr.release(); } catch (Exception ignored) {}
+        }
     }
 
     private void startReachPlayFromPartial(File partial) {
@@ -36042,17 +36063,16 @@ public class MainActivity extends Activity {
             reachGrowingSeekMs = seekMs;
             reachGrowingPreparedBytes = growingFile.length();
             if (seekMs <= 0) reachGrowingFinalReprepareDone = false;
-            int previousSessionId = mediaPlayer != null ? mediaPlayer.getAudioSessionId() : 0;
-            if (mediaPlayer == null) mediaPlayer = new MediaPlayer();
-            else mediaPlayer.reset();
-            if (previousSessionId != 0) {
-                try { mediaPlayer.setAudioSessionId(previousSessionId); } catch (Exception ignored) {}
-            }
-            mediaPlayer.setWakeMode(getApplicationContext(), PowerManager.PARTIAL_WAKE_LOCK);
-            mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
-            mediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+            if (mediaPlayer != null) discardMediaPlayerAsync(mediaPlayer, "reach-reprepare");
+            mediaPlayer = new MediaPlayer();
+            final MediaPlayer player = mediaPlayer;
+            final long generation = ++mediaPlayerGeneration;
+            player.setWakeMode(getApplicationContext(), PowerManager.PARTIAL_WAKE_LOCK);
+            player.setAudioStreamType(AudioManager.STREAM_MUSIC);
+            player.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
                 @Override
                 public void onCompletion(MediaPlayer mp) {
+                    if (!isCurrentMediaPlayer(mp, generation)) return;
                     if (reachGrowingCacheFile != null && reachGrowingCacheFile.isFile()) {
                         if (reachDownloadInProgress()) {
                             // #region agent log
@@ -36094,9 +36114,10 @@ public class MainActivity extends Activity {
                     nextTrack();
                 }
             });
-            mediaPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
+            player.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
                 @Override
                 public void onPrepared(MediaPlayer mp) {
+                    if (!isCurrentMediaPlayer(mp, generation)) return;
                     reachGrowingReprepareInFlight = false;
                     int dur = mp.getDuration();
                     if (reachPartialPlaybackStarted) {
@@ -36141,9 +36162,10 @@ public class MainActivity extends Activity {
                     }
                 }
             });
-            mediaPlayer.setOnErrorListener(new MediaPlayer.OnErrorListener() {
+            player.setOnErrorListener(new MediaPlayer.OnErrorListener() {
                 @Override
                 public boolean onError(MediaPlayer mp, int what, int extra) {
+                    if (!isCurrentMediaPlayer(mp, generation)) return true;
                     reachGrowingReprepareInFlight = false;
                     if (reachPartialPlaybackStarted && reachDownloadInProgress()) {
                         progressHandler.postDelayed(reachGrowingEdgePoll, 400);
@@ -36152,8 +36174,8 @@ public class MainActivity extends Activity {
                     return false;
                 }
             });
-            mediaPlayer.setDataSource(growingFile.getAbsolutePath());
-            mediaPlayer.prepareAsync();
+            player.setDataSource(growingFile.getAbsolutePath());
+            player.prepareAsync();
         } catch (Exception e) {
             reachGrowingReprepareInFlight = false;
             if (!reachPartialPlaybackStarted) {
@@ -38073,13 +38095,6 @@ public class MainActivity extends Activity {
         }
 
         try {
-            // 🚀 [가장 우아하고 근본적인 해결책]
-            // 1. 플레이어를 리셋하기 전에 현재 사용 중인 '오디오 회선 번호(Session ID)'를 기억해 둡니다.
-            int previousSessionId = 0;
-            if (mediaPlayer != null) {
-                try { previousSessionId = mediaPlayer.getAudioSessionId(); } catch (Exception e) {}
-            }
-
             // 🚀 [추가] 시각화 엔진(Visualizer)은 안드로이드 내부 버그로 인해 살려둔 채로 3곡 이상 넘기면
             // 메모리가 터져서 시스템을 다운시켜버립니다(3곡 프리징의 원인!).
             // 따라서 곡이 바뀔 때는 반드시 '완전히 파괴(release)' 해 주어야 합니다.
@@ -38091,27 +38106,25 @@ public class MainActivity extends Activity {
                 } catch (Exception e) {}
             }
 
-            if (mediaPlayer == null) {
-                mediaPlayer = new MediaPlayer();
-            } else {
-                mediaPlayer.reset();
+            // Never reset() in place on the UI thread — a wedged mediaserver blocks the binder
+            // call forever (observed after SD read failure mid-MP3). Discard async, start fresh.
+            if (mediaPlayer != null) {
+                discardMediaPlayerAsync(mediaPlayer, "track-change");
             }
-
-            // 2. 리셋된 플레이어에 방금 기억해둔 회선 번호를 다시 연결해 줍니다!
-            // 이렇게 하면 이퀄라이저가 유지한 회선에 다시 탑승하게 되어, 볼륨이 리셋되는 버그가 원천 차단됩니다.
-            if (previousSessionId != 0) {
-                try { mediaPlayer.setAudioSessionId(previousSessionId); } catch (Exception e) {}
-            }
+            mediaPlayer = new MediaPlayer();
+            final MediaPlayer player = mediaPlayer;
+            final long generation = ++mediaPlayerGeneration;
 
             // 🚀 [버그 수정] 권한 누락으로 인해 음악 재생이 통째로 취소되는 것을 막는 방어막!
             try {
-                mediaPlayer.setWakeMode(getApplicationContext(), PowerManager.PARTIAL_WAKE_LOCK);
+                player.setWakeMode(getApplicationContext(), PowerManager.PARTIAL_WAKE_LOCK);
             } catch (Exception e) { }
-            mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
+            player.setAudioStreamType(AudioManager.STREAM_MUSIC);
 
-            mediaPlayer.setOnErrorListener(new MediaPlayer.OnErrorListener() {
+            player.setOnErrorListener(new MediaPlayer.OnErrorListener() {
                 @Override
                 public boolean onError(MediaPlayer mp, int what, int extra) {
+                    if (!isCurrentMediaPlayer(mp, generation)) return true;
                     String err = "Audio Error: what=" + what + " extra=" + extra;
                     try {
                         java.io.File log = new java.io.File(com.solar.launcher.DeviceFeatures.getPrimaryStorageRoot(), "solar_audio_error.txt");
@@ -38133,10 +38146,11 @@ public class MainActivity extends Activity {
             }
             currentFileInputStream = new java.io.FileInputStream(track);
 
-            mediaPlayer.setDataSource(currentFileInputStream.getFD());
-            mediaPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
+            player.setDataSource(currentFileInputStream.getFD());
+            player.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
                 @Override
                 public void onPrepared(MediaPlayer mp) {
+                    if (!isCurrentMediaPlayer(mp, generation)) return;
                     try {
                         setupVisualizer();
                         try {
@@ -38144,7 +38158,7 @@ public class MainActivity extends Activity {
                                 try { equalizer.release(); } catch (Exception ignored) {}
                                 equalizer = null;
                             }
-                            equalizer = new Equalizer(0, mediaPlayer.getAudioSessionId());
+                            equalizer = new Equalizer(0, mp.getAudioSessionId());
                             equalizer.setEnabled(true);
                             if (currentEqPresetIndex < equalizer.getNumberOfPresets()) {
                                 equalizer.usePreset((short) currentEqPresetIndex);
@@ -38189,13 +38203,14 @@ public class MainActivity extends Activity {
                     } catch (Exception ignored) {}
                 }
             });
-            mediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+            player.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
                 @Override
                 public void onCompletion(MediaPlayer mp) {
+                    if (!isCurrentMediaPlayer(mp, generation)) return;
                     try {
                         if (repeatMode == 1) {
-                            mediaPlayer.seekTo(0);
-                            mediaPlayer.start();
+                            mp.seekTo(0);
+                            mp.start();
                             applyPlaybackSpeed();
                         } else if (repeatMode == 2) {
                             nextTrack();
@@ -38213,10 +38228,59 @@ public class MainActivity extends Activity {
                     }
                 }
             });
-            mediaPlayer.prepareAsync();
+            player.prepareAsync();
         } catch (Throwable e) {
             tvPlayerTitle.setText("Load Failed: " + track.getName());
         }
+    }
+
+    /** Monotonically identifies the player currently owned by this Activity. */
+    private long mediaPlayerGeneration;
+
+    private boolean isCurrentMediaPlayer(MediaPlayer player, long generation) {
+        return player != null && player == mediaPlayer && generation == mediaPlayerGeneration;
+    }
+
+    /**
+     * Tear down a MediaPlayer off the UI thread. API 17 mediaserver can wedge inside
+     * stop()/reset()/release() after SD-card read failures or corrupt frames — those are
+     * synchronous binder calls, so running them on main froze the whole launcher. The discard
+     * thread is a daemon: if mediaserver never answers, the thread is orphaned and the UI
+     * stays alive; binder death or mediaserver restart reclaims the native player later.
+     */
+    private void discardMediaPlayerAsync(MediaPlayer mp, final String reason) {
+        if (mp == null) return;
+        final MediaPlayer doomed = mp;
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                long t0 = System.currentTimeMillis();
+                try { doomed.reset(); } catch (Throwable ignored) {}
+                try { doomed.release(); } catch (Throwable ignored) {}
+                // #region agent log
+                try {
+                    long ms = System.currentTimeMillis() - t0;
+                    if (ms > 500L) {
+                        org.json.JSONObject d = new org.json.JSONObject();
+                        d.put("reason", reason);
+                        d.put("ms", ms);
+                        DebugSessionLog.log("MainActivity.discardMediaPlayerAsync",
+                                "slow mediaserver teardown", "H-MP-HANG", d);
+                    }
+                } catch (Exception ignored) {}
+                // #endregion
+            }
+        }, "MediaPlayerDiscard");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /** Detach + discard the active player without waiting for mediaserver. */
+    private void discardActiveMediaPlayer(String reason) {
+        MediaPlayer mp = mediaPlayer;
+        mediaPlayer = null;
+        mediaPlayerGeneration++;
+        discardMediaPlayerAsync(mp, reason);
     }
     // 💡 [수정] 액자 전체를 숨기도록 개조
     private void syncVisualizerMetadata() {
@@ -40061,6 +40125,12 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (instance == this) instance = null;
+        if (deferredColdStartWork != null) {
+            if (layoutMainMenu != null) layoutMainMenu.removeCallbacks(deferredColdStartWork);
+            clockHandler.removeCallbacks(deferredColdStartWork);
+            deferredColdStartWork = null;
+        }
         if (usbFocusHelper != null) usbFocusHelper.onDestroy();
         stopInactivityMonitor();
         if (mediaSuite != null) mediaSuite.release();
@@ -40094,14 +40164,7 @@ public class MainActivity extends Activity {
             equalizer.release();
             equalizer = null;
         }
-        if (mediaPlayer != null) {
-            mediaPlayer.release();
-            mediaPlayer = null;
-        }
-        if (mediaPlayer != null) {
-            mediaPlayer.release();
-            mediaPlayer = null;
-        }
+        discardActiveMediaPlayer("destroy");
 
         // 🚀 [스크린 오프 완벽 제어 4단계] 앱 종료 시 권한 반납
         if (mediaSessionShim != null && android.os.Build.VERSION.SDK_INT >= 21) {
@@ -40114,12 +40177,14 @@ public class MainActivity extends Activity {
             soulseekClient = null;
         }
 
-        try {
-            unregisterReceiver(systemStatusReceiver);
-        } catch (Exception ignored) {}
-        try {
-            unregisterReceiver(systemStatusReceiver);
-        } catch (Exception ignored) {}
+        if (systemStatusReceiverRegistered) {
+            try { unregisterReceiver(systemStatusReceiver); } catch (Exception ignored) {}
+            systemStatusReceiverRegistered = false;
+        }
+        if (systemStatusMediaReceiverRegistered) {
+            try { unregisterReceiver(systemStatusReceiver); } catch (Exception ignored) {}
+            systemStatusMediaReceiverRegistered = false;
+        }
         BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
         if (adapter != null && bluetoothA2dp != null) {
             adapter.closeProfileProxy(BluetoothProfile.A2DP, bluetoothA2dp);
@@ -41678,13 +41743,9 @@ public class MainActivity extends Activity {
     }
 
     public void mediaStopMusicPlayback() {
-        try {
-            if (mediaPlayer != null) {
-                if (mediaPlayer.isPlaying()) mediaPlayer.stop();
-                mediaPlayer.reset();
-                isPausedByHand = false;
-            }
-        } catch (Exception ignored) {}
+        if (mediaPlayer == null) return;
+        discardActiveMediaPlayer("media-suite-stop");
+        isPausedByHand = false;
     }
 
     public void mediaExitToHomeMenu() { changeScreen(STATE_MENU); }
