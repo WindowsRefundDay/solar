@@ -13,7 +13,7 @@ public final class Debug843b96Log {
     private static final String TAG = "SolarDevDbg843";
     private static final String SESSION = "843b96";
     private static final String SDCARD_FILE = "/storage/sdcard0/debug-843b96.log";
-    public static volatile boolean ENABLED = true;
+    public static final boolean ENABLED = false;
 
     private Debug843b96Log() {}
 

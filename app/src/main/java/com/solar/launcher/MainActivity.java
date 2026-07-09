@@ -166,6 +166,9 @@ public class MainActivity extends Activity {
     private int cachedBatteryLevel;
     private boolean cachedBatteryCharging;
     private boolean batteryReceiverRegistered;
+    private boolean systemStatusReceiverRegistered;
+    private boolean systemStatusMediaReceiverRegistered;
+    private Runnable deferredColdStartWork;
     private final BroadcastReceiver batteryReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -469,7 +472,8 @@ public class MainActivity extends Activity {
     private MediaTransportBar videoTransport;
     private TextView tvBrightnessVal, tvStorageDetails;
 
-    private TextView tvServerStatus, tvServerIp, tvWebserverHint;
+    private TextView tvServerStatus, tvServerIp, tvWebserverHint, tvQrHint;
+    private ImageView ivWebserverQr;
     private TextView tvKeyboardHint, tvBrightnessHint, tvStorageHint;
     private Button btnServerToggle;
     // 🚀 [추가] 화면 전체를 덮는 고급 로딩 인디케이터 오버레이
@@ -611,12 +615,12 @@ public class MainActivity extends Activity {
     private List<OpenRssClient.Episode> podcastEpisodeProbeSource;
     private String podcastSavedShowFolder = "";
     private int podcastUiGen = 0;
-    private int themeDownloadGen = 0;
+    private volatile int themeDownloadGen = 0;
     private final Handler themePreviewHandler = new Handler();
     private Runnable themePreviewPending;
     private static final long THEME_PREVIEW_DEBOUNCE_MS = 200L;
-    private int libraryScanGen = 0;
-    private int activeLibraryScanGen = 0;
+    private volatile int libraryScanGen = 0;
+    private volatile int activeLibraryScanGen = 0;
     private final PlaybackCoordinator playback = new PlaybackCoordinator();
     private MediaSuiteHost mediaSuite;
     private int podcastLoadGeneration = 0;
@@ -798,8 +802,8 @@ public class MainActivity extends Activity {
     private long deezerLastProgressUiMs = 0;
     private DeezerBackgroundQueue deezerBackgroundQueue;
     /** Per-file download % for background album queue rows (absolute path → 0–100). */
-    private final java.util.HashMap<String, Integer> deezerQueueProgressByPath =
-            new java.util.HashMap<String, Integer>();
+    private final java.util.concurrent.ConcurrentHashMap<String, Integer> deezerQueueProgressByPath =
+            new java.util.concurrent.ConcurrentHashMap<String, Integer>();
     private int deezerReturnScreen = STATE_MENU;
     private DeezerScreen deezerScreen;
     private String pendingSearchPickerQuery;
@@ -1374,7 +1378,7 @@ public class MainActivity extends Activity {
             // #endregion
             return;
         }
-        if (mediaPlayer != null && android.os.Build.VERSION.SDK_INT >= 23) {
+        if (mediaPlayer != null && !com.solar.launcher.BuildConfig.Y1_ONLY && android.os.Build.VERSION.SDK_INT >= 23) {
             try {
                 float speed = speedToApply;
                 android.media.PlaybackParams params = mediaPlayer.getPlaybackParams();
@@ -2042,9 +2046,10 @@ public class MainActivity extends Activity {
 
     /** ponytail: register receivers, library scan, and full theme bootstrap after home is visible. */
     private void scheduleDeferredColdStartWork() {
-        Runnable work = new Runnable() {
+        deferredColdStartWork = new Runnable() {
             @Override
             public void run() {
+                if (!isActivityAlive()) return;
                 registerDeferredSystemReceivers();
                 triggerAutoReconnect();
                 if (consumePendingAlbumArtCacheRebuild()) {
@@ -2060,9 +2065,9 @@ public class MainActivity extends Activity {
         };
         long delayMs = 250L;
         if (layoutMainMenu != null) {
-            layoutMainMenu.postDelayed(work, delayMs);
+            layoutMainMenu.postDelayed(deferredColdStartWork, delayMs);
         } else {
-            clockHandler.postDelayed(work, delayMs);
+            clockHandler.postDelayed(deferredColdStartWork, delayMs);
         }
         new Thread(new Runnable() {
             @Override
@@ -2094,6 +2099,7 @@ public class MainActivity extends Activity {
     }
 
     private void registerDeferredSystemReceivers() {
+        if (!isActivityAlive()) return;
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_MEDIA_SCANNER_STARTED);
         filter.addAction(Intent.ACTION_MEDIA_SCANNER_FINISHED);
@@ -2113,11 +2119,17 @@ public class MainActivity extends Activity {
         filter.addAction(Intent.ACTION_SCREEN_OFF);
         filter.addAction(Intent.ACTION_SCREEN_ON);
         filter.setPriority(IntentFilter.SYSTEM_HIGH_PRIORITY);
-        registerReceiver(systemStatusReceiver, filter);
+        if (!systemStatusReceiverRegistered) {
+            registerReceiver(systemStatusReceiver, filter);
+            systemStatusReceiverRegistered = true;
+        }
 
         IntentFilter mediaFilter = new IntentFilter(Intent.ACTION_MEDIA_MOUNTED);
         mediaFilter.addDataScheme("file");
-        registerReceiver(systemStatusReceiver, mediaFilter);
+        if (!systemStatusMediaReceiverRegistered) {
+            registerReceiver(systemStatusReceiver, mediaFilter);
+            systemStatusMediaReceiverRegistered = true;
+        }
         // #region agent log
         try {
             DebugSessionLog.log("registerDeferredSystemReceivers", "receivers registered", "H3", null);
@@ -2167,30 +2179,6 @@ public class MainActivity extends Activity {
             cachedVibrator = null;
         }
         final long onCreateStartMs = android.os.SystemClock.uptimeMillis();
-        // Debug session logs enabled by default for ADB debugging
-        DebugSessionLog.ENABLED = true;
-        // #region agent log
-        Debug898913Log.ENABLED = true;
-        final Thread.UncaughtExceptionHandler prevHandler = Thread.getDefaultUncaughtExceptionHandler();
-        Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
-            @Override
-            public void uncaughtException(Thread thread, Throwable throwable) {
-                try {
-                    org.json.JSONObject d = new org.json.JSONObject();
-                    d.put("thread", thread != null ? thread.getName() : "");
-                    d.put("exception", throwable.getClass().getName());
-                    d.put("message", throwable.getMessage() != null ? throwable.getMessage() : "");
-                    java.io.StringWriter sw = new java.io.StringWriter();
-                    throwable.printStackTrace(new java.io.PrintWriter(sw));
-                    String stack = sw.toString();
-                    d.put("stack", stack.length() > 2000 ? stack.substring(0, 2000) : stack);
-                    com.solar.launcher.Debug898913Log.logAlways(
-                            "MainActivity.uncaughtException", "fatal crash", "H-CRASH", d);
-                } catch (Exception ignored) {}
-                if (prevHandler != null) prevHandler.uncaughtException(thread, throwable);
-            }
-        });
-        // #endregion
 // 🚀 앱이 켜지면 자기 자신을 변수에 등록합니다.
         instance = this;
 
@@ -2313,6 +2301,7 @@ public class MainActivity extends Activity {
                     if (usbFocusHelper != null) {
                         usbFocusHelper.bringToFrontLightPublic();
                     }
+                    UsbRecoveryAgent.stop(MainActivity.this);
                     // #region agent log
                     try {
                         org.json.JSONObject d = new org.json.JSONObject();
@@ -2376,7 +2365,7 @@ public class MainActivity extends Activity {
         audioManager.registerMediaButtonEventReceiver(componentName);
 // 🚀 [스크린 오프 완벽 제어 1단계] 시스템의 미디어/버튼 제어권을 앱이 뺏어옵니다!
         try {
-            if (android.os.Build.VERSION.SDK_INT >= 21) {
+            if (!com.solar.launcher.BuildConfig.Y1_ONLY && android.os.Build.VERSION.SDK_INT >= 21) {
                 mediaSessionShim = Class.forName("com.solar.launcher.MediaSessionShim")
                         .getMethod("create", MainActivity.class).invoke(null, this);
             }
@@ -2746,6 +2735,8 @@ public class MainActivity extends Activity {
         // (기존 코드)
         tvServerStatus = findViewById(R.id.tv_server_status);
         tvServerIp = findViewById(R.id.tv_server_ip);
+        ivWebserverQr = findViewById(R.id.iv_webserver_qr);
+        tvQrHint = findViewById(R.id.tv_qr_hint);
         tvWebserverHint = findViewById(R.id.tv_webserver_hint);
         btnServerToggle = findViewById(R.id.btn_server_toggle);
         tvKeyboardHint = findViewById(R.id.tv_keyboard_hint);
@@ -3236,9 +3227,6 @@ public class MainActivity extends Activity {
         if (fromFlag) {
             flag.delete();
         }
-        if (getIntent() != null && getIntent().getBooleanExtra("solar_adb_debug_898913", false)) {
-            Debug898913Log.ENABLED = true;
-        }
         scheduleAdbFlowCarouselHarness();
     }
     // 💡 [추가] 화면 전체를 덮는 확실한 로딩 팝업 띄우기 함수
@@ -3392,9 +3380,18 @@ public class MainActivity extends Activity {
         }, 1100);
     }
 
-    private void runOnUiThreadSafe(Runnable r) {
-        if (isFinishing()) return;
-        runOnUiThread(r);
+    private boolean isActivityAlive() {
+        return !isFinishing() && (android.os.Build.VERSION.SDK_INT < 17 || !isDestroyed());
+    }
+
+    private void runOnUiThreadSafe(final Runnable r) {
+        if (r == null || !isActivityAlive()) return;
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (isActivityAlive()) r.run();
+            }
+        });
     }
     private void refreshWidgets() {
         if (layoutWidgets != null) layoutWidgets.setVisibility(View.GONE);
@@ -5835,8 +5832,8 @@ public class MainActivity extends Activity {
 
     private void downloadAndApplyThemeVariant(final ThemeDownloader.CatalogEntry entry,
                                               final ThemeDownloader.ThemeVariant variant) {
+        final int gen = ++themeDownloadGen;
         if (layoutLoadingOverlay != null) layoutLoadingOverlay.setVisibility(View.VISIBLE);
-        final int gen = themeDownloadGen;
         ThemeDownloader.clearCancel();
 
         new Thread(new Runnable() {
@@ -5853,7 +5850,7 @@ public class MainActivity extends Activity {
                                         runOnUiThreadSafe(new Runnable() {
                                             @Override
                                             public void run() {
-                                                if (isFinishing()) return;
+                                                if (!isActivityAlive() || gen != themeDownloadGen) return;
                                                 setLoadingOverlayText("Downloading " + variant.displayName(entry.name)
                                                         + "\n" + done + " / " + total);
                                             }
@@ -5878,8 +5875,10 @@ public class MainActivity extends Activity {
                     runOnUiThreadSafe(new Runnable() {
                         @Override
                         public void run() {
-                            if (isFinishing() || gen != themeDownloadGen) {
-                                if (layoutLoadingOverlay != null) layoutLoadingOverlay.setVisibility(View.GONE);
+                            if (!isActivityAlive() || gen != themeDownloadGen) {
+                                if (gen == themeDownloadGen && layoutLoadingOverlay != null) {
+                                    layoutLoadingOverlay.setVisibility(View.GONE);
+                                }
                                 return;
                             }
                             applyThemeWithIntegrityCheck(themeIndex, theme, toastName);
@@ -5890,7 +5889,7 @@ public class MainActivity extends Activity {
                     runOnUiThreadSafe(new Runnable() {
                         @Override
                         public void run() {
-                            if (isFinishing() || gen != themeDownloadGen) return;
+                            if (!isActivityAlive() || gen != themeDownloadGen) return;
                             if (layoutLoadingOverlay != null) layoutLoadingOverlay.setVisibility(View.GONE);
                             Toast.makeText(MainActivity.this, getString(R.string.toast_download_failed), Toast.LENGTH_SHORT).show();
                         }
@@ -5901,8 +5900,8 @@ public class MainActivity extends Activity {
     }
 
     private void downloadAndApplyTheme(final ThemeDownloader.CatalogEntry entry) {
+        final int gen = ++themeDownloadGen;
         if (layoutLoadingOverlay != null) layoutLoadingOverlay.setVisibility(View.VISIBLE);
-        final int gen = themeDownloadGen;
         ThemeDownloader.clearCancel();
 
         new Thread(new Runnable() {
@@ -5916,7 +5915,7 @@ public class MainActivity extends Activity {
                                 runOnUiThreadSafe(new Runnable() {
                                     @Override
                                     public void run() {
-                                        if (isFinishing()) return;
+                                        if (!isActivityAlive() || gen != themeDownloadGen) return;
                                         setLoadingOverlayText("Downloading " + entry.name + "\n" + done + " / " + total);
                                     }
                                 });
@@ -5941,8 +5940,10 @@ public class MainActivity extends Activity {
                     runOnUiThreadSafe(new Runnable() {
                         @Override
                         public void run() {
-                            if (isFinishing() || gen != themeDownloadGen) {
-                                if (layoutLoadingOverlay != null) layoutLoadingOverlay.setVisibility(View.GONE);
+                            if (!isActivityAlive() || gen != themeDownloadGen) {
+                                if (gen == themeDownloadGen && layoutLoadingOverlay != null) {
+                                    layoutLoadingOverlay.setVisibility(View.GONE);
+                                }
                                 return;
                             }
                             applyThemeWithIntegrityCheck(themeIndex, theme, themeName);
@@ -5953,7 +5954,7 @@ public class MainActivity extends Activity {
                     runOnUiThreadSafe(new Runnable() {
                         @Override
                         public void run() {
-                            if (isFinishing() || gen != themeDownloadGen) return;
+                            if (!isActivityAlive() || gen != themeDownloadGen) return;
                             if (layoutLoadingOverlay != null) layoutLoadingOverlay.setVisibility(View.GONE);
                             Toast.makeText(MainActivity.this, getString(R.string.toast_download_failed), Toast.LENGTH_SHORT).show();
                         }
@@ -6236,7 +6237,7 @@ public class MainActivity extends Activity {
             Toast.makeText(this, getString(R.string.toast_network_required), Toast.LENGTH_SHORT).show();
             return;
         }
-        webServer = new SolarWebServer(getApplicationContext(), rootFolder);
+        webServer = new SolarWebServer(MainActivity.this, rootFolder);
         webServer.start();
         isServerRunning = true;
         android.util.Log.i("DeezerDbg", "webserver started ip=" + webServer.getLocalIpAddress());
@@ -6252,6 +6253,14 @@ public class MainActivity extends Activity {
             updateDeezerSetupUI();
             return;
         }
+        if (ivWebserverQr != null) {
+            ivWebserverQr.setVisibility(View.GONE);
+            tvServerStatus.setVisibility(View.VISIBLE);
+            tvServerIp.setVisibility(View.VISIBLE);
+            btnServerToggle.setVisibility(View.VISIBLE);
+        }
+        if (tvQrHint != null) tvQrHint.setText("Press [Center] to open QR code");
+
         if (isServerRunning) {
             tvServerStatus.setText(getString(R.string.webserver_running));
             ThemeManager.applyThemedTextStyle(tvServerStatus, ThemeManager.getItemTextColorNormal());
@@ -6272,6 +6281,13 @@ public class MainActivity extends Activity {
 
     private void updateDeezerSetupUI() {
         if (btnServerToggle != null) btnServerToggle.setVisibility(View.GONE);
+        if (ivWebserverQr != null) {
+            ivWebserverQr.setVisibility(View.GONE);
+            tvServerStatus.setVisibility(View.VISIBLE);
+            tvServerIp.setVisibility(View.VISIBLE);
+        }
+        if (tvQrHint != null) tvQrHint.setText("Press [Center] to open QR code");
+
         if (isServerRunning) {
             tvServerStatus.setText(getString(R.string.deezer_setup_running));
             ThemeManager.applyThemedTextStyle(tvServerStatus, ThemeManager.getItemTextColorNormal());
@@ -9588,7 +9604,7 @@ public class MainActivity extends Activity {
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
         boolean isScreenOn = true;
         try {
-            if (android.os.Build.VERSION.SDK_INT >= 20) isScreenOn = pm.isInteractive();
+            if (!com.solar.launcher.BuildConfig.Y1_ONLY && android.os.Build.VERSION.SDK_INT >= 20) isScreenOn = pm.isInteractive();
             else isScreenOn = pm.isScreenOn();
         } catch (Exception ignored) {}
         return !isScreenOn || ((event.getFlags() & KeyEvent.FLAG_WOKE_HERE) != 0)
@@ -13697,7 +13713,10 @@ public class MainActivity extends Activity {
         if (RowKeys.ARTWORK_PERSPECTIVE.equals(rowKey)) {
             return stateOnOff(nowPlaying3dAlbumArt);
         }
-        if (RowKeys.APP_THEME.equals(rowKey)) return ThemeManager.getCurrentTheme().name;
+        if (RowKeys.APP_THEME.equals(rowKey)) {
+            ThemeManager.ThemeEntry current = ThemeManager.getCurrentTheme();
+            return current != null && current.name != null ? current.name : "";
+        }
         if (RowKeys.STATUS_BAR_LEFT.equals(rowKey)) {
             return statusBarShowsTitle ? getString(R.string.settings_status_title) : getString(R.string.common_clock);
         }
@@ -14426,6 +14445,35 @@ public class MainActivity extends Activity {
             clickFeedback();
             return true;
         }
+        if (currentScreenState == STATE_WEBSERVER || currentScreenState == STATE_DEEZER_SETUP) {
+            if (ivWebserverQr != null) {
+                if (ivWebserverQr.getVisibility() == View.VISIBLE) {
+                    ivWebserverQr.setVisibility(View.GONE);
+                    tvServerStatus.setVisibility(View.VISIBLE);
+                    tvServerIp.setVisibility(View.VISIBLE);
+                    if (currentScreenState != STATE_DEEZER_SETUP) btnServerToggle.setVisibility(View.VISIBLE);
+                    tvWebserverHint.setVisibility(View.VISIBLE);
+                    tvQrHint.setText("Press [Center] to open QR code");
+                } else if (isServerRunning) {
+                    String url = "http://" + webServer.getLocalIpAddress() + ":8080/";
+                    if (currentScreenState == STATE_DEEZER_SETUP) {
+                        url += "deezer";
+                    }
+                    android.graphics.Bitmap qr = QrGenerator.generate(url, 200, 200);
+                    if (qr != null) {
+                        ivWebserverQr.setImageBitmap(qr);
+                        ivWebserverQr.setVisibility(View.VISIBLE);
+                        tvServerStatus.setVisibility(View.GONE);
+                        tvServerIp.setVisibility(View.GONE);
+                        btnServerToggle.setVisibility(View.GONE);
+                        tvWebserverHint.setVisibility(View.GONE);
+                        tvQrHint.setText("Press [Back] to return");
+                    }
+                }
+            }
+            clickFeedback();
+            return true;
+        }
         if (currentScreenState == STATE_FLOW && flowScreenHost != null) {
             return handleFlowCenterKeyUp(heldMs);
         }
@@ -14736,6 +14784,15 @@ public class MainActivity extends Activity {
                 }
                 return isViewDescendantOf(focused, layoutBrowserMode);
             case STATE_SOULSEEK:
+                // Unified Get Music and its embedded Deezer views render ordinary browser
+                // rows while retaining the STATE_SOULSEEK route. Treat their focus as valid;
+                // otherwise every wheel tick reseeds focus to Back before moving, trapping
+                // selection on the first actionable row.
+                if ((isGetMusicUnifiedUi() || getMusicEmbeddedInDeezer)
+                        && layoutBrowserMode != null
+                        && layoutBrowserMode.getVisibility() == View.VISIBLE) {
+                    return isViewDescendantOf(focused, layoutBrowserMode);
+                }
                 if (listConversationThread != null && listConversationThread.getVisibility() == View.VISIBLE) {
                     if (listConversationThread.hasFocus()) return true;
                     if (focused != null && isViewDescendantOf(focused, listConversationThread)) return true;
@@ -19321,12 +19378,7 @@ public class MainActivity extends Activity {
 
     private void clearPlaybackQueue() {
         finalizeReachStreamHandoff();
-        try {
-            if (mediaPlayer != null) {
-                mediaPlayer.stop();
-                mediaPlayer.reset();
-            }
-        } catch (Exception ignored) {}
+        discardActiveMediaPlayer("clear-queue");
         isPausedByHand = false;
         PlayQueueStore.clear(getApplicationContext());
         playback.clearQueue();
@@ -20505,7 +20557,7 @@ public class MainActivity extends Activity {
     private boolean isScreenInteractive() {
         try {
             PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-            if (android.os.Build.VERSION.SDK_INT >= 20) return pm.isInteractive();
+            if (!com.solar.launcher.BuildConfig.Y1_ONLY && android.os.Build.VERSION.SDK_INT >= 20) return pm.isInteractive();
             return pm.isScreenOn();
         } catch (Exception e) {
             return true;
@@ -21441,6 +21493,11 @@ public class MainActivity extends Activity {
         }
     }
 
+    public DeezerBackgroundQueue getDeezerBackgroundQueue() {
+        ensureDeezerBackgroundQueue();
+        return deezerBackgroundQueue;
+    }
+
     private void ensureDeezerBackgroundQueue() {
         if (deezerBackgroundQueue != null) return;
         deezerBackgroundQueue = new DeezerBackgroundQueue(prefs,
@@ -21461,6 +21518,9 @@ public class MainActivity extends Activity {
                         deezerQueueProgressByPath.put(job.dest.getAbsolutePath(), 100);
                         DeezerMetadata.saveForResult(MainActivity.this, job.dest, job.track);
                         prefetchDeezerCoverBg(job.dest);
+                        if (job.dest.getAbsolutePath().startsWith(rootFolder.getAbsolutePath())) {
+                            scanMediaLibraryAsync();
+                        }
                         runOnUiThread(new Runnable() {
                             @Override public void run() {
                                 refreshStreamProgressUi();
@@ -21623,6 +21683,15 @@ public class MainActivity extends Activity {
             return;
         }
         if (currentScreenState == STATE_WEBSERVER) {
+            if (ivWebserverQr != null && ivWebserverQr.getVisibility() == View.VISIBLE) {
+                ivWebserverQr.setVisibility(View.GONE);
+                tvServerStatus.setVisibility(View.VISIBLE);
+                tvServerIp.setVisibility(View.VISIBLE);
+                btnServerToggle.setVisibility(View.VISIBLE);
+                tvWebserverHint.setVisibility(View.VISIBLE);
+                tvQrHint.setText("Press [Center] to open QR code");
+                return;
+            }
             if (isServerRunning) {
                 showThemedConfirm(
                         getString(R.string.webserver_dialog_title),
@@ -21648,6 +21717,14 @@ public class MainActivity extends Activity {
             return;
         }
         if (currentScreenState == STATE_DEEZER_SETUP) {
+            if (ivWebserverQr != null && ivWebserverQr.getVisibility() == View.VISIBLE) {
+                ivWebserverQr.setVisibility(View.GONE);
+                tvServerStatus.setVisibility(View.VISIBLE);
+                tvServerIp.setVisibility(View.VISIBLE);
+                tvWebserverHint.setVisibility(View.VISIBLE);
+                tvQrHint.setText("Press [Center] to open QR code");
+                return;
+            }
             showThemedConfirm(
                     getString(R.string.deezer_setup_dialog_title),
                     getString(R.string.deezer_setup_dialog_message),
@@ -21893,11 +21970,8 @@ public class MainActivity extends Activity {
             if (soulseekClient != null) soulseekClient.shutdown();
         } catch (Exception ignored) {}
         try {
-            if (mediaPlayer != null) {
-                mediaPlayer.stop();
-                mediaPlayer.release();
-                mediaPlayer = null;
-            }
+            // Async — a wedged mediaserver must not block force-quit itself.
+            discardActiveMediaPlayer("force-quit");
             releasePodcastIjkPlayer();
         } catch (Exception ignored) {}
         finishAffinity();
@@ -21921,7 +21995,7 @@ public class MainActivity extends Activity {
     /** Theme row chrome for standalone XML buttons (scan, server toggle) and list rows. */
     private void configureY1ThemedButton(final Button btn, final int rowKind) {
         int rowW = listRowWidthPx > 0 ? listRowWidthPx : y1ActiveRowWidthPx();
-        btn.setBackground(getY1RowBackground(false, rowW, rowKind));
+        btn.setBackground(getY1RowStateBackground(rowW, rowKind));
         btn.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
         btn.setSoundEffectsEnabled(false);
         btn.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
@@ -21936,9 +22010,6 @@ public class MainActivity extends Activity {
         btn.setOnFocusChangeListener(new View.OnFocusChangeListener() {
             @Override
             public void onFocusChange(View v, boolean hasFocus) {
-                int w = btn.getWidth() > 0 ? btn.getWidth()
-                        : (listRowWidthPx > 0 ? listRowWidthPx : y1ActiveRowWidthPx());
-                btn.setBackground(getY1RowBackground(hasFocus, w, rowKind));
                 ThemeManager.applyThemedTextStyle(btn, hasFocus
                         ? y1RowTextColorSelected(rowKind) : y1RowTextColorNormal(rowKind));
                 btn.setSelected(hasFocus);
@@ -21972,7 +22043,7 @@ public class MainActivity extends Activity {
         int w = btn.getWidth() > 0 ? btn.getWidth()
                 : (listRowWidthPx > 0 ? listRowWidthPx : y1ActiveRowWidthPx());
         boolean focused = btn.hasFocus();
-        btn.setBackground(getY1RowBackground(focused, w, rowKind));
+        btn.setBackground(getY1RowStateBackground(w, rowKind));
         ThemeManager.applyThemedTextStyle(btn, focused
                 ? y1RowTextColorSelected(rowKind) : y1RowTextColorNormal(rowKind));
         btn.setTypeface(ThemeManager.getCustomFont(), android.graphics.Typeface.BOLD);
@@ -28452,7 +28523,7 @@ public class MainActivity extends Activity {
         libraryScanRunning = true;
         isCustomScanning = customLibrary.isEmpty();
         libraryScanTrackCount = 0;
-        final int gen = libraryScanGen;
+        final int gen = ++libraryScanGen;
         activeLibraryScanGen = gen;
         // #region agent log
         try {
@@ -28463,12 +28534,16 @@ public class MainActivity extends Activity {
             Debug898913Log.logAlways("MainActivity.startLibraryScan", "scan started", "H1", d);
         } catch (Exception ignored) {}
         // #endregion
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                acquireBlockingOverlay(OVERLAY_LIB_SCAN, getString(R.string.library_scanning));
-            }
-        });
+        // Startup scans run silently behind the hydrated library; overlay only when the user
+        // asked for a scan. True first run (empty DB) raises it from the worker instead.
+        if (userInitiated) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    acquireBlockingOverlay(OVERLAY_LIB_SCAN, getString(R.string.library_scanning));
+                }
+            });
+        }
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -28479,19 +28554,29 @@ public class MainActivity extends Activity {
 
     private void runLibraryScanWorker(final int gen, final boolean userInitiated) {
         final MusicLibraryStore store = MusicLibraryStore.getInstance(getApplicationContext());
-        if (customLibrary.isEmpty()) {
-            java.util.List<MusicLibraryStore.Track> cached = store.loadAll();
-            if (libraryScanGen != gen) {
-                abortLibraryScanWorker(gen);
-                return;
-            }
-            if (!cached.isEmpty()) {
-                applyCachedTracks(cached);
-                postLibraryCacheHydrated(gen);
-            }
-        }
-        if (!userInitiated && tryFinishScanFromFreshCache(gen, userInitiated)) {
+        java.util.List<MusicLibraryStore.Track> cached = store.loadAll();
+        if (libraryScanGen != gen) {
+            abortLibraryScanWorker(gen);
             return;
+        }
+        if (customLibrary.isEmpty() && !cached.isEmpty()) {
+            applyCachedTracks(cached);
+            postLibraryCacheHydrated(gen);
+        }
+        if (!userInitiated && cached.isEmpty()) {
+            // True first run — nothing to show yet, so the blocking overlay is warranted.
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (libraryScanGen != gen || !libraryScanRunning) return;
+                    acquireBlockingOverlay(OVERLAY_LIB_SCAN, getString(R.string.library_scanning));
+                }
+            });
+        }
+        final java.util.HashMap<String, MusicLibraryStore.Track> trackMap =
+                new java.util.HashMap<String, MusicLibraryStore.Track>(cached.size() * 2);
+        for (MusicLibraryStore.Track t : cached) {
+            trackMap.put(t.path, t);
         }
         final java.util.HashSet<String> seenPaths = MusicLibraryStore.newKeepSet();
         final java.util.ArrayList<SongItem> scanned = new java.util.ArrayList<SongItem>();
@@ -28506,9 +28591,10 @@ public class MainActivity extends Activity {
         };
         long tScan0 = System.currentTimeMillis();
         LibraryScanner.ScanResult result = null;
+        int staleTotal = 0;
         for (File musicFolder : com.solar.launcher.DeviceFeatures.getMusicRoots()) {
             if (!musicFolder.exists()) musicFolder.mkdirs();
-            result = LibraryScanner.scan(musicFolder, store,
+            result = LibraryScanner.scan(musicFolder, store, trackMap,
                     blacklist, prefs, seenPaths, scanCb);
             if (libraryScanGen != gen) {
                 abortLibraryScanWorker(gen);
@@ -28516,9 +28602,19 @@ public class MainActivity extends Activity {
             }
             if (result != null && result.items != null) {
                 scanned.addAll(result.items);
+                staleTotal += result.staleCount;
             }
         }
         long scanMs = System.currentTimeMillis() - tScan0;
+        // A transient storage/listFiles failure must never turn a valid hydrated library into
+        // an empty one. Keep the last known-good rows and let the next boot retry the walk.
+        if (scanned.isEmpty() && !cached.isEmpty()) {
+            for (MusicLibraryStore.Track t : cached) {
+                File f = new File(t.path);
+                if (!f.isFile() || blacklist.contains(t.path)) continue;
+                scanned.add(songItemFromStoreTrack(t, f));
+            }
+        }
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
@@ -28530,7 +28626,11 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
         // #endregion
         // Perf log: full scan timing is recorded after album-art ingest below.
-        store.deleteExcept(seenPaths);
+        // An empty walk is not proof that the library is empty (storage can be briefly
+        // unavailable during boot). Preserve the DB in that case.
+        if (!seenPaths.isEmpty()) {
+            store.deleteExcept(seenPaths);
+        }
         reconcileCustomLibrary(scanned);
         normalizeLibraryAlbumTitles();
         // Dismiss scan overlay before slow cover ingest — art cache continues on worker thread.
@@ -28541,7 +28641,8 @@ public class MainActivity extends Activity {
             }
         });
         // Art ingest off the scan critical path — do not block overlay dismissal.
-        scheduleAlbumArtIngestAsync(gen);
+        // Stamp skip only valid when nothing was re-tagged; count changes clear it anyway.
+        scheduleAlbumArtIngestAsync(gen, staleTotal == 0);
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
@@ -28645,89 +28746,14 @@ public class MainActivity extends Activity {
         prefs.edit().putInt(PREF_ART_CACHE_READY_TRACKS, customLibrary.size()).apply();
     }
 
-    /**
-     * Skip filesystem walk when SQLite-hydrated library matches on-disk mtimes.
-     * ponytail: won't detect new files until manual scan or MEDIA_MOUNTED — acceptable tradeoff.
-     */
-    private boolean tryFinishScanFromFreshCache(final int gen, final boolean userInitiated) {
-        final MusicLibraryStore store = MusicLibraryStore.getInstance(getApplicationContext());
-        purgeStaleLibraryPaths(store);
-        if (customLibrary.isEmpty()) return false;
-        int staleTrackCount = 0;
-        int zeroTrackNumCount = 0;
-        synchronized (customLibrary) {
-            for (SongItem item : customLibrary) {
-                if (item == null || item.file == null || !item.file.isFile()) return false;
-                MusicLibraryStore.Track row = store.get(item.file.getAbsolutePath());
-                if (row != null && row.trackNumber == 0) zeroTrackNumCount++;
-                if (!store.isFresh(item.file)) staleTrackCount++;
-            }
-        }
-        boolean hasGaps = albumArtCacheHasGaps();
-        // #region agent log
-        try {
-            org.json.JSONObject d = new org.json.JSONObject();
-            d.put("gen", gen);
-            d.put("userInitiated", userInitiated);
-            d.put("libSize", customLibrary.size());
-            d.put("staleTracks", staleTrackCount);
-            d.put("zeroTrackNum", zeroTrackNumCount);
-            d.put("hasGaps", hasGaps);
-            d.put("artReadyStamp", prefs != null
-                    ? prefs.getInt(PREF_ART_CACHE_READY_TRACKS, -1) : -1);
-            Debug898913Log.logAlways("MainActivity.tryFinishScanFromFreshCache",
-                    staleTrackCount == 0 ? "fast-path eligible" : "full walk required", "H1,H2", d);
-        } catch (Exception ignored) {}
-        // #endregion
-        if (staleTrackCount > 0) return false;
-        if (!hasGaps) {
-            if (libraryScanGen != gen) return true;
-            runOnUiThread(new Runnable() {
-                @Override
-                public void run() {
-                    finishLibraryScan(gen, userInitiated);
-                }
-            });
-            return true;
-        }
-        if (libraryScanGen != gen) return true;
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                finishLibraryScan(gen, userInitiated);
-            }
-        });
-        scheduleAlbumArtIngestAsync(gen);
-        return true;
-    }
-
     /** Background 240px JPEG ingest — must not extend library scan worker lifetime. */
-    private void scheduleAlbumArtIngestAsync(final int gen) {
+    private void scheduleAlbumArtIngestAsync(final int gen, final boolean allowStampSkip) {
         new Thread(new Runnable() {
             @Override
             public void run() {
-                buildAlbumArtCacheAfterScan(gen);
+                buildAlbumArtCacheAfterScan(gen, allowStampSkip);
             }
         }, "AlbumArtIngest").start();
-    }
-
-    /** True when any album rack cover is missing from internal AlbumArtCache. */
-    private boolean albumArtCacheHasGaps() {
-        if (pendingAlbumArtCacheRebuild) return true;
-        if (prefs != null) {
-            int readyTracks = prefs.getInt(PREF_ART_CACHE_READY_TRACKS, -1);
-            if (readyTracks >= 0 && readyTracks == customLibrary.size()) return false;
-        }
-        if (customLibrary.isEmpty()) return false;
-        File artDir = com.solar.launcher.flow.AlbumArtCache.cacheDir(getApplicationContext());
-        boolean multiTrack = prefs != null && prefs.getBoolean(PREF_FLOW_MULTI_TRACK_ALBUMS, false);
-        List<com.solar.launcher.flow.FlowItem> albums = com.solar.launcher.flow.FlowCatalog.buildAlbums(
-                flowLibraryRows(), libraryBrowsePrefs, policyTracksFromLibrary(), multiTrack);
-        for (com.solar.launcher.flow.FlowItem item : albums) {
-            if (item == null || item.coverKey == null || item.coverKey.isEmpty()) continue;
-            if (!com.solar.launcher.flow.AlbumArtCache.has(artDir, item.coverKey)) return true;
-        }
-        return false;
     }
 
     private void reconcileCustomLibrary(java.util.ArrayList<SongItem> scanned) {
@@ -28742,7 +28768,16 @@ public class MainActivity extends Activity {
 
     /** Pre-scale album art to 240px JPEG on internal storage for fast Flow navigation. */
     private void buildAlbumArtCacheAfterScan(int gen) {
+        buildAlbumArtCacheAfterScan(gen, false);
+    }
+
+    private void buildAlbumArtCacheAfterScan(int gen, boolean allowStampSkip) {
         if (libraryScanGen != gen) return;
+        // Ready stamp matches library size and no re-tags happened — skip the album stat sweep.
+        if (allowStampSkip && !pendingAlbumArtCacheRebuild && prefs != null) {
+            int readyTracks = prefs.getInt(PREF_ART_CACHE_READY_TRACKS, -1);
+            if (readyTracks >= 0 && readyTracks == customLibrary.size()) return;
+        }
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
@@ -28825,6 +28860,7 @@ public class MainActivity extends Activity {
                     "ingest complete", "H-PERF", d);
         } catch (Exception ignored) {}
         // #endregion
+        if (libraryScanGen != gen) return;
         markArtCacheReadyStamp();
     }
 
@@ -28890,8 +28926,8 @@ public class MainActivity extends Activity {
                     @Override
                     public void run() {
                         albumArtCacheRebuildRunning = false;
-                        if (libraryScanGen != gen) return;
                         if (showOverlay) releaseBlockingOverlay(OVERLAY_ART_CACHE);
+                        if (libraryScanGen != gen) return;
                         onAlbumArtCacheRebuildFinished(gen);
                     }
                 });
@@ -30200,9 +30236,7 @@ public class MainActivity extends Activity {
         stopPodcastDownloadFully();
         finalizeReachStreamHandoff();
         playback.clearQueue();
-        try {
-            if (mediaPlayer != null) mediaPlayer.reset();
-        } catch (Exception ignored) {}
+        discardActiveMediaPlayer("deezer-playlist-start");
         playerReturnScreen = currentScreenState;
         startDeezerPlaylistTransferAt(idx, DeezerScreen.ACTION_PLAY);
     }
@@ -36068,16 +36102,15 @@ public class MainActivity extends Activity {
 
     private void applyReachId3Metadata(File partial) {
         if (partial == null || !partial.isFile() || partial.length() < REACH_ID3_MIN_BYTES) return;
+        MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+        java.io.FileInputStream fis = null;
         try {
-            MediaMetadataRetriever mmr = new MediaMetadataRetriever();
-            java.io.FileInputStream fis = new java.io.FileInputStream(partial);
+            fis = new java.io.FileInputStream(partial);
             mmr.setDataSource(fis.getFD());
             String t = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE);
             String a = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST);
             String al = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM);
             byte[] art = mmr.getEmbeddedPicture();
-            fis.close();
-            mmr.release();
             if (t != null && !t.trim().isEmpty()) {
                 tvPlayerTitle.setText(reachProgressPrefix(reachDownloadPercentForFile(partial))
                         + stripReachProgressPrefix(t));
@@ -36092,7 +36125,13 @@ public class MainActivity extends Activity {
                 applyReachStreamCoverArt();
             }
             refreshNowPlayingPreview();
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        } finally {
+            if (fis != null) {
+                try { fis.close(); } catch (Exception ignored) {}
+            }
+            try { mmr.release(); } catch (Exception ignored) {}
+        }
     }
 
     private void applyReachStreamCoverArt() {
@@ -36174,18 +36213,23 @@ public class MainActivity extends Activity {
     private void tryDeezerStreamEmbeddedArt(File partial) {
         if (partial == null || partial.length() < REACH_ID3_MIN_BYTES) return;
         if (lastAlbumArtBytes != null && lastAlbumArtBytes.length > 0) return;
+        MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+        java.io.FileInputStream fis = null;
         try {
-            MediaMetadataRetriever mmr = new MediaMetadataRetriever();
-            java.io.FileInputStream fis = new java.io.FileInputStream(partial);
+            fis = new java.io.FileInputStream(partial);
             mmr.setDataSource(fis.getFD());
             byte[] art = mmr.getEmbeddedPicture();
-            fis.close();
-            mmr.release();
             if (art != null && art.length > 0) {
                 lastAlbumArtBytes = art;
                 applyReachStreamCoverArt();
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        } finally {
+            if (fis != null) {
+                try { fis.close(); } catch (Exception ignored) {}
+            }
+            try { mmr.release(); } catch (Exception ignored) {}
+        }
     }
 
     private void startReachPlayFromPartial(File partial) {
@@ -36391,22 +36435,22 @@ public class MainActivity extends Activity {
 
     private void startReachFromGrowingFile(File growingFile, int seekMs) {
         try {
+            invalidateWavFallback();
             progressHandler.removeCallbacks(reachGrowingEdgePoll);
             reachGrowingReprepareInFlight = true;
             reachGrowingSeekMs = seekMs;
             reachGrowingPreparedBytes = growingFile.length();
             if (seekMs <= 0) reachGrowingFinalReprepareDone = false;
-            int previousSessionId = mediaPlayer != null ? mediaPlayer.getAudioSessionId() : 0;
-            if (mediaPlayer == null) mediaPlayer = new MediaPlayer();
-            else mediaPlayer.reset();
-            if (previousSessionId != 0) {
-                try { mediaPlayer.setAudioSessionId(previousSessionId); } catch (Exception ignored) {}
-            }
-            mediaPlayer.setWakeMode(getApplicationContext(), PowerManager.PARTIAL_WAKE_LOCK);
-            mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
-            mediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+            if (mediaPlayer != null) discardMediaPlayerAsync(mediaPlayer, "reach-reprepare");
+            mediaPlayer = new MediaPlayer();
+            final MediaPlayer player = mediaPlayer;
+            final long generation = ++mediaPlayerGeneration;
+            player.setWakeMode(getApplicationContext(), PowerManager.PARTIAL_WAKE_LOCK);
+            player.setAudioStreamType(AudioManager.STREAM_MUSIC);
+            player.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
                 @Override
                 public void onCompletion(MediaPlayer mp) {
+                    if (!isCurrentMediaPlayer(mp, generation)) return;
                     if (reachGrowingCacheFile != null && reachGrowingCacheFile.isFile()) {
                         if (reachDownloadInProgress()) {
                             // #region agent log
@@ -36448,9 +36492,10 @@ public class MainActivity extends Activity {
                     nextTrack();
                 }
             });
-            mediaPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
+            player.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
                 @Override
                 public void onPrepared(MediaPlayer mp) {
+                    if (!isCurrentMediaPlayer(mp, generation)) return;
                     reachGrowingReprepareInFlight = false;
                     int dur = mp.getDuration();
                     if (reachPartialPlaybackStarted) {
@@ -36495,9 +36540,10 @@ public class MainActivity extends Activity {
                     }
                 }
             });
-            mediaPlayer.setOnErrorListener(new MediaPlayer.OnErrorListener() {
+            player.setOnErrorListener(new MediaPlayer.OnErrorListener() {
                 @Override
                 public boolean onError(MediaPlayer mp, int what, int extra) {
+                    if (!isCurrentMediaPlayer(mp, generation)) return true;
                     reachGrowingReprepareInFlight = false;
                     if (reachPartialPlaybackStarted && reachDownloadInProgress()) {
                         progressHandler.postDelayed(reachGrowingEdgePoll, 400);
@@ -36506,8 +36552,8 @@ public class MainActivity extends Activity {
                     return false;
                 }
             });
-            mediaPlayer.setDataSource(growingFile.getAbsolutePath());
-            mediaPlayer.prepareAsync();
+            player.setDataSource(growingFile.getAbsolutePath());
+            player.prepareAsync();
         } catch (Exception e) {
             reachGrowingReprepareInFlight = false;
             if (!reachPartialPlaybackStarted) {
@@ -37178,7 +37224,7 @@ public class MainActivity extends Activity {
         if (libraryScanRunning) return;
         if (isUsbMassStorageUiLocked()) return;
         libraryScanRunning = true;
-        final int gen = libraryScanGen;
+        final int gen = ++libraryScanGen;
         activeLibraryScanGen = gen;
         if (showOverlay) {
             runOnUiThread(new Runnable() {
@@ -37228,7 +37274,7 @@ public class MainActivity extends Activity {
                         refreshLibraryBrowseIfVisible();
                     }
                 });
-                scheduleAlbumArtIngestAsync(gen);
+                scheduleAlbumArtIngestAsync(gen, false);
             }
         }, "LibraryNewFiles").start();
     }
@@ -38268,6 +38314,7 @@ public class MainActivity extends Activity {
             index = playback.musicIndex();
         }
         playback.setMusicIndex(index);
+        invalidateWavFallback();
         final File track = playback.musicPlaylist().get(index);
         lastAlbumArtBytes = null;
         currentAlbumColor = ThemeManager.getListButtonFocusedBg() | 0xFF000000;
@@ -38426,14 +38473,95 @@ public class MainActivity extends Activity {
         } catch (Throwable t) {
         }
 
+        if (WavFallback.needsFallback(track)) {
+            // 24-bit / 32-bit / float WAV — StageFright rejects these on API 17, so play a
+            // background-transcoded 16-bit copy through the same MediaPlayer path (EQ,
+            // visualizer and scrub logic stay untouched).
+            final int token = wavFallbackToken;
+            wavFallback().prepare(track, new WavFallback.Listener() {
+                @Override
+                public void onReady(File playable) {
+                    if (token == wavFallbackToken) startMusicMediaPlayer(track, playable);
+                }
+
+                @Override
+                public void onFailed() {
+                    if (token == wavFallbackToken) startMusicMediaPlayer(track, track);
+                }
+            });
+            return;
+        }
+        startMusicMediaPlayer(track, track);
+    }
+
+    private WavFallback wavFallback;
+    private int wavFallbackToken = 0;
+
+    private WavFallback wavFallback() {
+        if (wavFallback == null) wavFallback = new WavFallback(getApplicationContext());
+        return wavFallback;
+    }
+
+    /** Invalidate pending wav-transcode callbacks before any new playback source takes over. */
+    private void invalidateWavFallback() {
+        wavFallbackToken++;
+        if (wavFallback != null) wavFallback.cancel();
+    }
+
+    /** Monotonically identifies the player currently owned by this Activity. */
+    private long mediaPlayerGeneration;
+
+    private boolean isCurrentMediaPlayer(MediaPlayer player, long generation) {
+        return player != null && player == mediaPlayer && generation == mediaPlayerGeneration;
+    }
+
+    /**
+     * Tear down a MediaPlayer off the UI thread. API 17 mediaserver can wedge inside
+     * stop()/reset()/release() after SD-card read failures or corrupt frames — those are
+     * synchronous binder calls, so running them on main froze the whole launcher. The discard
+     * thread is a daemon: if mediaserver never answers, the thread is orphaned and the UI
+     * stays alive; binder death or mediaserver restart reclaims the native player later.
+     */
+    private void discardMediaPlayerAsync(MediaPlayer mp, final String reason) {
+        if (mp == null) return;
+        final MediaPlayer doomed = mp;
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                long t0 = System.currentTimeMillis();
+                try { doomed.reset(); } catch (Throwable ignored) {}
+                try { doomed.release(); } catch (Throwable ignored) {}
+                // #region agent log
+                try {
+                    long ms = System.currentTimeMillis() - t0;
+                    if (ms > 500L) {
+                        org.json.JSONObject d = new org.json.JSONObject();
+                        d.put("reason", reason);
+                        d.put("ms", ms);
+                        DebugSessionLog.log("MainActivity.discardMediaPlayerAsync",
+                                "slow mediaserver teardown", "H-MP-HANG", d);
+                    }
+                } catch (Exception ignored) {}
+                // #endregion
+            }
+        }, "MediaPlayerDiscard");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /** Detach + discard the active player without waiting for mediaserver. */
+    private void discardActiveMediaPlayer(String reason) {
+        MediaPlayer mp = mediaPlayer;
+        mediaPlayer = null;
+        mediaPlayerGeneration++;
+        discardMediaPlayerAsync(mp, reason);
+    }
+
+    /** MediaPlayer setup tail of prepareMusicTrack; playFile is track itself or its 16-bit WAV transcode. */
+    private void startMusicMediaPlayer(final File track, final File playFile) {
         try {
             // 🚀 [가장 우아하고 근본적인 해결책]
             // 1. 플레이어를 리셋하기 전에 현재 사용 중인 '오디오 회선 번호(Session ID)'를 기억해 둡니다.
-            int previousSessionId = 0;
-            if (mediaPlayer != null) {
-                try { previousSessionId = mediaPlayer.getAudioSessionId(); } catch (Exception e) {}
-            }
-
             // 🚀 [추가] 시각화 엔진(Visualizer)은 안드로이드 내부 버그로 인해 살려둔 채로 3곡 이상 넘기면
             // 메모리가 터져서 시스템을 다운시켜버립니다(3곡 프리징의 원인!).
             // 따라서 곡이 바뀔 때는 반드시 '완전히 파괴(release)' 해 주어야 합니다.
@@ -38445,27 +38573,25 @@ public class MainActivity extends Activity {
                 } catch (Exception e) {}
             }
 
-            if (mediaPlayer == null) {
-                mediaPlayer = new MediaPlayer();
-            } else {
-                mediaPlayer.reset();
+            // Never reset() in place on the UI thread — a wedged mediaserver blocks the binder
+            // call forever (observed after SD read failure mid-MP3). Discard async, start fresh.
+            if (mediaPlayer != null) {
+                discardMediaPlayerAsync(mediaPlayer, "track-change");
             }
-
-            // 2. 리셋된 플레이어에 방금 기억해둔 회선 번호를 다시 연결해 줍니다!
-            // 이렇게 하면 이퀄라이저가 유지한 회선에 다시 탑승하게 되어, 볼륨이 리셋되는 버그가 원천 차단됩니다.
-            if (previousSessionId != 0) {
-                try { mediaPlayer.setAudioSessionId(previousSessionId); } catch (Exception e) {}
-            }
+            mediaPlayer = new MediaPlayer();
+            final MediaPlayer player = mediaPlayer;
+            final long generation = ++mediaPlayerGeneration;
 
             // 🚀 [버그 수정] 권한 누락으로 인해 음악 재생이 통째로 취소되는 것을 막는 방어막!
             try {
-                mediaPlayer.setWakeMode(getApplicationContext(), PowerManager.PARTIAL_WAKE_LOCK);
+            player.setWakeMode(getApplicationContext(), PowerManager.PARTIAL_WAKE_LOCK);
             } catch (Exception e) { }
-            mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
+            player.setAudioStreamType(AudioManager.STREAM_MUSIC);
 
-            mediaPlayer.setOnErrorListener(new MediaPlayer.OnErrorListener() {
+            player.setOnErrorListener(new MediaPlayer.OnErrorListener() {
                 @Override
                 public boolean onError(MediaPlayer mp, int what, int extra) {
+                    if (!isCurrentMediaPlayer(mp, generation)) return true;
                     String err = "Audio Error: what=" + what + " extra=" + extra;
                     try {
                         java.io.File log = new java.io.File(com.solar.launcher.DeviceFeatures.getPrimaryStorageRoot(), "solar_audio_error.txt");
@@ -38485,12 +38611,13 @@ public class MainActivity extends Activity {
                 } catch (Exception e) {
                 }
             }
-            currentFileInputStream = new java.io.FileInputStream(track);
+            currentFileInputStream = new java.io.FileInputStream(playFile);
 
-            mediaPlayer.setDataSource(currentFileInputStream.getFD());
-            mediaPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
+            player.setDataSource(currentFileInputStream.getFD());
+            player.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
                 @Override
                 public void onPrepared(MediaPlayer mp) {
+                    if (!isCurrentMediaPlayer(mp, generation)) return;
                     try {
                         setupVisualizer();
                         try {
@@ -38498,7 +38625,7 @@ public class MainActivity extends Activity {
                                 try { equalizer.release(); } catch (Exception ignored) {}
                                 equalizer = null;
                             }
-                            equalizer = new Equalizer(0, mediaPlayer.getAudioSessionId());
+                            equalizer = new Equalizer(0, mp.getAudioSessionId());
                             equalizer.setEnabled(true);
                             if (currentEqPresetIndex < equalizer.getNumberOfPresets()) {
                                 equalizer.usePreset((short) currentEqPresetIndex);
@@ -38543,13 +38670,14 @@ public class MainActivity extends Activity {
                     } catch (Exception ignored) {}
                 }
             });
-            mediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+            player.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
                 @Override
                 public void onCompletion(MediaPlayer mp) {
+                    if (!isCurrentMediaPlayer(mp, generation)) return;
                     try {
                         if (repeatMode == 1) {
-                            mediaPlayer.seekTo(0);
-                            mediaPlayer.start();
+                            mp.seekTo(0);
+                            mp.start();
                             applyPlaybackSpeed();
                         } else if (repeatMode == 2) {
                             nextTrack();
@@ -38567,7 +38695,7 @@ public class MainActivity extends Activity {
                     }
                 }
             });
-            mediaPlayer.prepareAsync();
+            player.prepareAsync();
         } catch (Throwable e) {
             tvPlayerTitle.setText("Load Failed: " + track.getName());
         }
@@ -38592,7 +38720,7 @@ public class MainActivity extends Activity {
     }
 
     private void toggleVisualizer() {
-        if (android.os.Build.VERSION.SDK_INT >= 23) {
+        if (!com.solar.launcher.BuildConfig.Y1_ONLY && android.os.Build.VERSION.SDK_INT >= 23) {
             if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, 101);
                 Toast.makeText(this, getString(R.string.toast_audio_permission), Toast.LENGTH_SHORT).show();
@@ -38728,7 +38856,7 @@ public class MainActivity extends Activity {
                     if (ivAlbumArt3d != null) ivAlbumArt3d.setAlpha(1.0f);
                     ivPauseOverlay.setVisibility(View.GONE);
                     progressHandler.post(updateProgressTask);
-                    if (mediaSessionShim != null && android.os.Build.VERSION.SDK_INT >= 21) {
+                    if (!com.solar.launcher.BuildConfig.Y1_ONLY && mediaSessionShim != null && android.os.Build.VERSION.SDK_INT >= 21) {
                         mediaSessionShim.getClass().getMethod("setPlaying", int.class)
                                 .invoke(mediaSessionShim, podcastIjkPlayer.getCurrentPosition());
                     }
@@ -38737,7 +38865,7 @@ public class MainActivity extends Activity {
                     if (ivAlbumArt3d != null) ivAlbumArt3d.setAlpha(0.4f);
                     ivPauseOverlay.setVisibility(View.VISIBLE);
                     progressHandler.removeCallbacks(updateProgressTask);
-                    if (mediaSessionShim != null && android.os.Build.VERSION.SDK_INT >= 21) {
+                    if (!com.solar.launcher.BuildConfig.Y1_ONLY && mediaSessionShim != null && android.os.Build.VERSION.SDK_INT >= 21) {
                         int pos = 0;
                         try {
                             pos = podcastIjkPlayer.getCurrentPosition();
@@ -38758,7 +38886,7 @@ public class MainActivity extends Activity {
                 progressHandler.post(updateProgressTask);
 
                 // 🚀 [스크린 오프 완벽 제어 3단계] 재생 상태(PLAYING)를 시스템에 신고하여 제어권 유지
-                if (mediaSessionShim != null && android.os.Build.VERSION.SDK_INT >= 21) {
+                if (!com.solar.launcher.BuildConfig.Y1_ONLY && mediaSessionShim != null && android.os.Build.VERSION.SDK_INT >= 21) {
                     mediaSessionShim.getClass().getMethod("setPlaying", int.class)
                             .invoke(mediaSessionShim, mediaPlayer.getCurrentPosition());
                 }
@@ -38769,7 +38897,7 @@ public class MainActivity extends Activity {
                 progressHandler.removeCallbacks(updateProgressTask);
 
                 // 일시정지 상태(PAUSED) 신고
-                if (mediaSessionShim != null && android.os.Build.VERSION.SDK_INT >= 21) {
+                if (!com.solar.launcher.BuildConfig.Y1_ONLY && mediaSessionShim != null && android.os.Build.VERSION.SDK_INT >= 21) {
                     int pos = mediaPlayer == null ? 0 : mediaPlayer.getCurrentPosition();
                     mediaSessionShim.getClass().getMethod("setPaused", int.class).invoke(mediaSessionShim, pos);
                 }
@@ -39003,7 +39131,8 @@ public class MainActivity extends Activity {
         return false;
     }
 
-    private void playOrPauseMusic() {
+    /** Package-private (not private) so SolarWebServer's transport endpoints can call it. */
+    void playOrPauseMusic() {
         try {
             if (playback.isRadioActive() && mediaSuite != null) {
                 mediaSuite.toggleRadioPlayPause();
@@ -39076,7 +39205,8 @@ public class MainActivity extends Activity {
         } catch (Throwable e) {
         }
     }
-    private void nextTrack() {
+    /** Package-private (not private) so SolarWebServer's transport endpoints can call it. */
+    void nextTrack() {
         lastTrackChangeTime = System.currentTimeMillis();
         if (avrcpTrackInfoWriter != null) avrcpTrackInfoWriter.markTrackChange();
         finalizeReachStreamHandoff();
@@ -39111,7 +39241,8 @@ public class MainActivity extends Activity {
         refreshContextQueueTierIfOpen();
     }
 
-    private void prevTrack() {
+    /** Package-private (not private) so SolarWebServer's transport endpoints can call it. */
+    void prevTrack() {
         lastTrackChangeTime = System.currentTimeMillis();
         if (avrcpTrackInfoWriter != null) avrcpTrackInfoWriter.markTrackChange();
         finalizeReachStreamHandoff();
@@ -39129,10 +39260,55 @@ public class MainActivity extends Activity {
         refreshContextQueueTierIfOpen();
     }
 
+    /**
+     * Read-only playback snapshot for the LAN web control panel (SolarWebServer).
+     * Only touches mediaPlayer getters + the playback queue — no view access — so it is
+     * safe to call from the web server's background request thread.
+     */
+    public org.json.JSONObject getNowPlayingJson() {
+        org.json.JSONObject o = new org.json.JSONObject();
+        try {
+            boolean active = playback.isMusicActive() && mediaPlayer != null;
+            boolean playing = false;
+            try { playing = active && mediaPlayer.isPlaying(); } catch (Exception ignored) {}
+            o.put("playing", playing);
+            if (active) {
+                PlayQueue.QueueItem cur = playback.currentItem();
+                File f = cur != null ? cur.file : null;
+                String title = "", artist = "", album = "";
+                if (f != null) {
+                    try {
+                        MusicLibraryStore.Track t =
+                                MusicLibraryStore.getInstance(this).get(f.getAbsolutePath());
+                        if (t != null) {
+                            title = t.title;
+                            artist = t.artist;
+                            album = t.album;
+                        }
+                    } catch (Exception ignored) {}
+                    if (title == null || title.isEmpty()) title = f.getName();
+                }
+                o.put("title", title != null ? title : "");
+                o.put("artist", artist != null ? artist : "");
+                o.put("album", album != null ? album : "");
+                int pos = 0, dur = 0;
+                try {
+                    pos = mediaPlayer.getCurrentPosition();
+                    dur = mediaPlayer.getDuration();
+                } catch (Exception ignored) {}
+                o.put("positionMs", pos);
+                o.put("durationMs", dur);
+                o.put("trackIndex", playback.musicIndex() + 1);
+                o.put("trackCount", playback.musicPlaylist().size());
+            }
+        } catch (Exception ignored) {}
+        return o;
+    }
+
     private boolean isScreenOff() {
         try {
             PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-            if (android.os.Build.VERSION.SDK_INT >= 20) {
+            if (!com.solar.launcher.BuildConfig.Y1_ONLY && android.os.Build.VERSION.SDK_INT >= 20) {
                 return !pm.isInteractive();
             } else {
                 return !pm.isScreenOn();
@@ -39229,6 +39405,10 @@ public class MainActivity extends Activity {
         if (reachPartialPlaybackStarted && reachDownloadInProgress()) {
             int reachBuf = reachBufferedSeekLimitMs();
             if (reachBuf > 0) return reachBuf;
+        }
+        if (wavFallback != null) {
+            int wavBuf = wavFallback.bufferedSeekLimitMs();
+            if (wavBuf >= 0) return wavBuf;
         }
         int dur = playbackDurationForScrub();
         return dur > 0 ? dur : Integer.MAX_VALUE;
@@ -39786,7 +39966,7 @@ public class MainActivity extends Activity {
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
         boolean isScreenOn = true;
         try {
-            if (android.os.Build.VERSION.SDK_INT >= 20)
+            if (!com.solar.launcher.BuildConfig.Y1_ONLY && android.os.Build.VERSION.SDK_INT >= 20)
                 isScreenOn = pm.isInteractive();
             else
                 isScreenOn = pm.isScreenOn();
@@ -40034,6 +40214,35 @@ public class MainActivity extends Activity {
         }
 
         if (currentScreenState == STATE_WEBSERVER || currentScreenState == STATE_DEEZER_SETUP) {
+            if (isCenterKey(keyCode)) {
+                if (ivWebserverQr != null) {
+                    if (ivWebserverQr.getVisibility() == View.VISIBLE) {
+                        ivWebserverQr.setVisibility(View.GONE);
+                        tvServerStatus.setVisibility(View.VISIBLE);
+                        tvServerIp.setVisibility(View.VISIBLE);
+                        if (currentScreenState != STATE_DEEZER_SETUP) btnServerToggle.setVisibility(View.VISIBLE);
+                        tvWebserverHint.setVisibility(View.VISIBLE);
+                        tvQrHint.setText("Press [Center] to open QR code");
+                    } else if (isServerRunning) {
+                        String url = "http://" + webServer.getLocalIpAddress() + ":8080/";
+                        if (currentScreenState == STATE_DEEZER_SETUP) {
+                            url += "deezer";
+                        }
+                        android.graphics.Bitmap qr = QrGenerator.generate(url, 200, 200);
+                        if (qr != null) {
+                            ivWebserverQr.setImageBitmap(qr);
+                            ivWebserverQr.setVisibility(View.VISIBLE);
+                            tvServerStatus.setVisibility(View.GONE);
+                            tvServerIp.setVisibility(View.GONE);
+                            btnServerToggle.setVisibility(View.GONE);
+                            tvWebserverHint.setVisibility(View.GONE);
+                            tvQrHint.setText("Press [Back] to return");
+                        }
+                    }
+                }
+                clickFeedback();
+                return true;
+            }
             return true;
         }
 
@@ -40251,7 +40460,7 @@ public class MainActivity extends Activity {
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
         boolean isScreenOn = true;
         try {
-            if (android.os.Build.VERSION.SDK_INT >= 20)
+            if (!com.solar.launcher.BuildConfig.Y1_ONLY && android.os.Build.VERSION.SDK_INT >= 20)
                 isScreenOn = pm.isInteractive();
             else
                 isScreenOn = pm.isScreenOn();
@@ -40343,9 +40552,6 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        if (intent != null && intent.getBooleanExtra("solar_adb_debug_898913", false)) {
-            Debug898913Log.ENABLED = true;
-        }
         scheduleAdbOpenSoulseekMessagesIfRequested();
         scheduleThemeAutoVariantIfRequested();
         scheduleAdbFlowCarouselIfRequested();
@@ -40434,7 +40640,14 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (instance == this) instance = null;
+        if (deferredColdStartWork != null) {
+            if (layoutMainMenu != null) layoutMainMenu.removeCallbacks(deferredColdStartWork);
+            clockHandler.removeCallbacks(deferredColdStartWork);
+            deferredColdStartWork = null;
+        }
         if (usbFocusHelper != null) usbFocusHelper.onDestroy();
+        if (wavFallback != null) wavFallback.cancel();
         stopInactivityMonitor();
         if (mediaSuite != null) mediaSuite.release();
         stopSettingsPreviewVerticalMarquee();
@@ -40471,17 +40684,10 @@ public class MainActivity extends Activity {
             equalizer.release();
             equalizer = null;
         }
-        if (mediaPlayer != null) {
-            mediaPlayer.release();
-            mediaPlayer = null;
-        }
-        if (mediaPlayer != null) {
-            mediaPlayer.release();
-            mediaPlayer = null;
-        }
+        discardActiveMediaPlayer("destroy");
 
         // 🚀 [스크린 오프 완벽 제어 4단계] 앱 종료 시 권한 반납
-        if (mediaSessionShim != null && android.os.Build.VERSION.SDK_INT >= 21) {
+        if (!com.solar.launcher.BuildConfig.Y1_ONLY && mediaSessionShim != null && android.os.Build.VERSION.SDK_INT >= 21) {
             try {
                 mediaSessionShim.getClass().getMethod("release").invoke(mediaSessionShim);
             } catch (Exception e) {}
@@ -40491,12 +40697,14 @@ public class MainActivity extends Activity {
             soulseekClient = null;
         }
 
-        try {
-            unregisterReceiver(systemStatusReceiver);
-        } catch (Exception ignored) {}
-        try {
-            unregisterReceiver(systemStatusReceiver);
-        } catch (Exception ignored) {}
+        if (systemStatusReceiverRegistered) {
+            try { unregisterReceiver(systemStatusReceiver); } catch (Exception ignored) {}
+            systemStatusReceiverRegistered = false;
+        }
+        if (systemStatusMediaReceiverRegistered) {
+            try { unregisterReceiver(systemStatusReceiver); } catch (Exception ignored) {}
+            systemStatusMediaReceiverRegistered = false;
+        }
         BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
         if (adapter != null && bluetoothA2dp != null) {
             adapter.closeProfileProxy(BluetoothProfile.A2DP, bluetoothA2dp);
@@ -40563,11 +40771,13 @@ public class MainActivity extends Activity {
     }
 
     private boolean isWallpaperPickActive(ThemeManager.WallpaperPick pick) {
+        if (pick == null || pick.themeFolder == null) return false;
         if (BG_MODE_CUSTOM.equals(getBackgroundMode())) return false;
         String saved = prefs.getString(PREF_BG_THEME_WALLPAPER, null);
         if (saved != null) return saved.equals(pick.prefToken());
         ThemeManager.ThemeEntry cur = ThemeManager.getCurrentTheme();
-        return pick.themeFolder.equalsIgnoreCase(cur.folderName)
+        return cur != null && cur.folderName != null
+                && pick.themeFolder.equalsIgnoreCase(cur.folderName)
                 && ThemeManager.WallpaperPick.KEY_DESKTOP.equals(pick.configKey);
     }
 
@@ -40678,9 +40888,11 @@ public class MainActivity extends Activity {
                         com.solar.launcher.flow.AlbumBackdropCache.cacheDir(getApplicationContext()), key);
                 if (cached != null) return cached;
             }
-            return Bitmap.createScaledBitmap(original,
+            Bitmap scaled = Bitmap.createScaledBitmap(original,
                     com.solar.launcher.flow.AlbumBackdropCache.SIZE_PX,
                     com.solar.launcher.flow.AlbumBackdropCache.SIZE_PX, true);
+            com.solar.launcher.flow.AlbumBackdropCache.darkenInPlace(scaled);
+            return scaled;
         } catch (Exception e) {
             return original;
         }
@@ -41170,65 +41382,75 @@ public class MainActivity extends Activity {
                 ? android.graphics.Color.TRANSPARENT : 0xFF222222);
     }
 
-    private void applyCachedCoverArt(String imagePath) {
-        try {
-            // 중앙의 선명한 앨범 아트
-            android.graphics.BitmapFactory.Options optsCenter = new android.graphics.BitmapFactory.Options();
-            optsCenter.inSampleSize = 2;
-            android.graphics.Bitmap bmpCenter = android.graphics.BitmapFactory.decodeFile(imagePath, optsCenter);
-            bindPlayerAlbumArt(bmpCenter);
+    /** Decode + file read run off the UI thread; only the final bitmap/bytes cross back. */
+    private void applyCachedCoverArt(final String imagePath) {
+        IO_EXECUTOR.submit(new Runnable() {
+            @Override
+            public void run() {
+                android.graphics.Bitmap bmpCenter = null;
+                int color = ThemeManager.getListButtonFocusedBg() | 0xFF000000;
+                android.graphics.Bitmap blurredBg = null;
+                android.graphics.Bitmap sourceBg = null;
+                byte[] bytes = null;
+                try {
+                    android.graphics.BitmapFactory.Options optsCenter = new android.graphics.BitmapFactory.Options();
+                    optsCenter.inSampleSize = 2;
+                    optsCenter.inPreferredConfig = android.graphics.Bitmap.Config.RGB_565;
+                    bmpCenter = android.graphics.BitmapFactory.decodeFile(imagePath, optsCenter);
+                    if (bmpCenter != null) {
+                        try {
+                            int centerX = bmpCenter.getWidth() / 2;
+                            int centerY = (int) (bmpCenter.getHeight() * 0.8);
+                            color = bmpCenter.getPixel(centerX, centerY) | 0xFF000000;
+                        } catch (Exception ignored) {}
+                    }
 
-            // 🚀 [완벽 수정] 앨범 아트의 하단 중앙 색상을 스포이드로 정확히 뽑아냅니다!
-            try {
-                int centerX = bmpCenter.getWidth() / 2;
-                int centerY = (int)(bmpCenter.getHeight() * 0.8); // 정중앙보다 약간 아래의 포인트 색상
-                currentAlbumColor = bmpCenter.getPixel(centerX, centerY) | 0xFF000000;
-            } catch (Exception e) {
-                currentAlbumColor = ThemeManager.getListButtonFocusedBg() | 0xFF000000;
-            }
+                    android.graphics.BitmapFactory.Options optsBg = new android.graphics.BitmapFactory.Options();
+                    optsBg.inSampleSize = 4;
+                    sourceBg = android.graphics.BitmapFactory.decodeFile(imagePath, optsBg);
+                    if (sourceBg != null) {
+                        blurredBg = preparePlayerBackdrop(sourceBg);
+                    }
 
-            // 뒷배경 블러 처리
-            final String path = imagePath;
-            IO_EXECUTOR.submit(new Runnable() {
-                @Override
-                public void run() {
+                    java.io.File file = new java.io.File(imagePath);
+                    int size = (int) file.length();
+                    byte[] buf = new byte[size];
+                    java.io.BufferedInputStream in = new java.io.BufferedInputStream(new java.io.FileInputStream(file));
                     try {
-                        android.graphics.BitmapFactory.Options optsBg = new android.graphics.BitmapFactory.Options();
-                        optsBg.inSampleSize = 4;
-                        final android.graphics.Bitmap sourceBg = android.graphics.BitmapFactory.decodeFile(path, optsBg);
-                        if (sourceBg != null) {
-                            final android.graphics.Bitmap blurredBg = preparePlayerBackdrop(sourceBg);
-                            runOnUiThread(new Runnable() {
-                                @Override
-                                public void run() {
-                                    if (ivPlayerBgBlur != null) {
-                                        ivPlayerBgBlur.animate().cancel();
-                                        ivPlayerBgBlur.setAlpha(0f);
-                                        ivPlayerBgBlur.setImageBitmap(blurredBg);
-                                        ivPlayerBgBlur.animate().alpha(1f).setDuration(150).start();
-                                        if (!playerAlbumBlurEnabled) ivPlayerBgBlur.setImageResource(0);
-                                    }
-                                    if (sourceBg != blurredBg) sourceBg.recycle();
-                                }
-                            });
+                        in.read(buf, 0, buf.length);
+                    } finally {
+                        in.close();
+                    }
+                    bytes = buf;
+                } catch (Exception ignored) {}
+
+                final android.graphics.Bitmap finalCenter = bmpCenter;
+                final int finalColor = color;
+                final android.graphics.Bitmap finalSourceBg = sourceBg;
+                final android.graphics.Bitmap finalBlurredBg = blurredBg;
+                final byte[] finalBytes = bytes;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (finalCenter != null) bindPlayerAlbumArt(finalCenter);
+                        currentAlbumColor = finalColor;
+                        if (finalBlurredBg != null && ivPlayerBgBlur != null) {
+                            ivPlayerBgBlur.animate().cancel();
+                            ivPlayerBgBlur.setAlpha(0f);
+                            ivPlayerBgBlur.setImageBitmap(finalBlurredBg);
+                            ivPlayerBgBlur.animate().alpha(1f).setDuration(150).start();
+                            if (!playerAlbumBlurEnabled) ivPlayerBgBlur.setImageResource(0);
                         }
-                    } catch (Exception ignored) {}
-                }
-            });
-
-            // 메인 메뉴 배경도 연동하기 위해 파일 데이터를 byte[]로 변환해서 lastAlbumArtBytes에 집어넣습니다!
-            java.io.File file = new java.io.File(imagePath);
-            int size = (int) file.length();
-            byte[] bytes = new byte[size];
-            java.io.BufferedInputStream buf = new java.io.BufferedInputStream(new java.io.FileInputStream(file));
-            buf.read(bytes, 0, bytes.length);
-            buf.close();
-
-            lastAlbumArtBytes = bytes;
-            updateMainMenuBackground();
-            refreshNowPlayingPreview();
-
-        } catch (Exception e) {}
+                        if (finalSourceBg != null && finalSourceBg != finalBlurredBg) finalSourceBg.recycle();
+                        if (finalBytes != null) {
+                            lastAlbumArtBytes = finalBytes;
+                            updateMainMenuBackground();
+                            refreshNowPlayingPreview();
+                        }
+                    }
+                });
+            }
+        });
     }
 
     // 💡 [수정] 정밀 검색 및 기존 태그(가수/제목) 보호 기능이 추가된 Deezer 스크래핑 엔진
@@ -41246,8 +41468,10 @@ public class MainActivity extends Activity {
                     java.net.URL imgUrl = new java.net.URL(url.replace("https://", "http://"));
                     java.net.HttpURLConnection imgConn = (java.net.HttpURLConnection) imgUrl.openConnection();
                     java.io.InputStream in = imgConn.getInputStream();
+                    android.graphics.BitmapFactory.Options coverOpts = new android.graphics.BitmapFactory.Options();
+                    coverOpts.inPreferredConfig = android.graphics.Bitmap.Config.RGB_565;
                     final android.graphics.Bitmap coverBitmap =
-                            android.graphics.BitmapFactory.decodeStream(in);
+                            android.graphics.BitmapFactory.decodeStream(in, null, coverOpts);
                     in.close();
                     if (coverBitmap == null) return;
                     File coverFolder = getCoversFolder();
@@ -41322,7 +41546,9 @@ public class MainActivity extends Activity {
                         java.net.URL imgUrl = new java.net.URL(coverUrl);
                         java.net.HttpURLConnection imgConn = (java.net.HttpURLConnection) imgUrl.openConnection();
                         java.io.InputStream in = imgConn.getInputStream();
-                        final android.graphics.Bitmap coverBitmap = android.graphics.BitmapFactory.decodeStream(in);
+                        android.graphics.BitmapFactory.Options coverOpts = new android.graphics.BitmapFactory.Options();
+                        coverOpts.inPreferredConfig = android.graphics.Bitmap.Config.RGB_565;
+                        final android.graphics.Bitmap coverBitmap = android.graphics.BitmapFactory.decodeStream(in, null, coverOpts);
                         in.close();
 
                         persistFetchedMetadata(track, finalTitle, finalArtist, finalAlbum, coverBitmap);
@@ -42173,13 +42399,9 @@ public class MainActivity extends Activity {
     }
 
     public void mediaStopMusicPlayback() {
-        try {
-            if (mediaPlayer != null) {
-                if (mediaPlayer.isPlaying()) mediaPlayer.stop();
-                mediaPlayer.reset();
-                isPausedByHand = false;
-            }
-        } catch (Exception ignored) {}
+        if (mediaPlayer == null) return;
+        discardActiveMediaPlayer("media-suite-stop");
+        isPausedByHand = false;
     }
 
     public void mediaExitToHomeMenu() { changeScreen(STATE_MENU); }

@@ -53,6 +53,19 @@ public final class DeezerClient {
         return soundFormat;
     }
 
+    public void setSoundFormat(String format) {
+        if (format == null) return;
+        if ("FLAC".equalsIgnoreCase(format) || "flac".equalsIgnoreCase(format)) {
+            this.soundFormat = "FLAC";
+        } else if ("MP3_320".equalsIgnoreCase(format) || "320".equalsIgnoreCase(format)) {
+            this.soundFormat = "MP3_320";
+        } else if ("MP3_128".equalsIgnoreCase(format) || "128".equalsIgnoreCase(format)) {
+            this.soundFormat = "MP3_128";
+        } else {
+            this.soundFormat = format;
+        }
+    }
+
     public boolean isPremium() {
         return premium;
     }

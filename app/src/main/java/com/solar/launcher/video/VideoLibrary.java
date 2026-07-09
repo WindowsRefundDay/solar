@@ -54,6 +54,10 @@ public final class VideoLibrary {
     public static boolean isBrowsablePath(File dir) {
         if (dir == null || !dir.isDirectory()) return false;
         String path = dir.getAbsolutePath();
+        if (deviceRootOverride != null) {
+            String rootPath = deviceRootOverride.getAbsolutePath();
+            return path.equals(rootPath) || path.startsWith(rootPath + File.separator);
+        }
         for (File root : com.solar.launcher.DeviceFeatures.getStorageRoots()) {
             String rootPath = root.getAbsolutePath();
             if (path.equals(rootPath) || path.startsWith(rootPath + File.separator)) {

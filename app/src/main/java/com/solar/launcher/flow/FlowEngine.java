@@ -28,6 +28,9 @@ public final class FlowEngine {
             new CoverFlowLayout.SlidePose[CoverFlowLayout.SIDE_SLIDES];
     private final CoverFlowLayout.SlidePose[] rightSlides =
             new CoverFlowLayout.SlidePose[CoverFlowLayout.SIDE_SLIDES];
+    /** Scratch poses keep normal carousel frames allocation-free. */
+    private final CoverFlowLayout.SlidePose renderPose = new CoverFlowLayout.SlidePose();
+    private final CoverFlowLayout.SlidePose orderingPose = new CoverFlowLayout.SlidePose();
 
     private float viewportW = 480f;
     private float viewportH = 360f;
@@ -196,19 +199,32 @@ public final class FlowEngine {
     }
 
     public SlotTransform slotTransform(int itemIndex, float viewW, float viewH, float ignoredVisual) {
+        SlotTransform out = new SlotTransform();
+        slotTransformInto(itemIndex, viewW, viewH, ignoredVisual, out);
+        return out;
+    }
+
+    /** Writes the current item transform into caller-owned storage. */
+    public void slotTransformInto(int itemIndex, float viewW, float viewH, float ignoredVisual,
+            SlotTransform out) {
+        if (out == null) return;
         if (itemIndex < 0 || itemIndex >= itemCount) {
-            SlotTransform empty = new SlotTransform();
-            empty.alpha = 0f;
-            return empty;
+            out.alpha = 0f;
+            return;
         }
-        float rel = itemIndex - getVisualOffset();
-        CoverFlowLayout.SlidePose pose = CoverFlowLayout.poseFromRelative(rel, metrics());
-        pose.itemIndex = itemIndex;
-        return CoverFlowLayout.toSlotTransform(pose, metrics());
+        CoverFlowLayout.Metrics metrics = metrics();
+        CoverFlowLayout.poseFromRelative(itemIndex - getVisualOffset(), metrics, renderPose);
+        renderPose.itemIndex = itemIndex;
+        CoverFlowLayout.toSlotTransform(renderPose, metrics, out);
     }
 
     public SlotTransform centerSlotTransform(float viewW, float viewH) {
         return slotTransform(getVisualCenterIndex(), viewW, viewH, 0f);
+    }
+
+    /** Writes the visual-center transform into caller-owned storage. */
+    public void centerSlotTransformInto(float viewW, float viewH, SlotTransform out) {
+        slotTransformInto(getVisualCenterIndex(), viewW, viewH, 0f, out);
     }
 
     public int findIndexForKey(java.util.List<FlowItem> items, String focusKey) {
@@ -380,9 +396,9 @@ public final class FlowEngine {
         CoverFlowLayout.Metrics m = metrics();
         for (int i = 0; i < raw; i++) {
             float rel = out[i] - getVisualOffset();
-            CoverFlowLayout.SlidePose pose = CoverFlowLayout.poseFromRelative(rel, m);
-            pose.itemIndex = out[i];
-            depthOut[i] = CoverFlowLayout.depthOrderFromPose(pose, m);
+            CoverFlowLayout.poseFromRelative(rel, m, orderingPose);
+            orderingPose.itemIndex = out[i];
+            depthOut[i] = CoverFlowLayout.depthOrderFromPose(orderingPose, m);
         }
         for (int i = 1; i < raw; i++) {
             int idx = out[i];
@@ -407,8 +423,8 @@ public final class FlowEngine {
         CoverFlowLayout.Metrics m = metrics();
         int n = 0;
         for (int idx = lo; idx <= hi && n < out.length; idx++) {
-            CoverFlowLayout.SlidePose pose = CoverFlowLayout.poseFromRelative(idx - visual, m);
-            if (pose.alpha > 0) out[n++] = idx;
+            CoverFlowLayout.poseFromRelative(idx - visual, m, orderingPose);
+            if (orderingPose.alpha > 0) out[n++] = idx;
         }
         return n;
     }

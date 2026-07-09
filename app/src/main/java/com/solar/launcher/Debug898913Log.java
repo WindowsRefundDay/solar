@@ -14,16 +14,16 @@ public final class Debug898913Log {
     private static final String TAG = "SolarDbg898913";
     private static final String SESSION = "898913";
     private static final String FILE = "debug-898913.log";
-  /** Async file append — sync SD I/O on the UI thread caused wheel/scroll jank. */
-    private static final ExecutorService FILE_EXEC = Executors.newSingleThreadExecutor();
-
-    public static volatile boolean ENABLED = true;
+    public static final boolean ENABLED = false;
+    /** Lazily absent from device builds; diagnostic writes never create a UI-adjacent worker there. */
+    private static final ExecutorService FILE_EXEC = ENABLED ? Executors.newSingleThreadExecutor() : null;
 
     private Debug898913Log() {}
 
     /** Always emits — uncaught crashes and critical path (debug session 898913). */
     public static void logAlways(String location, String message, String hypothesisId,
             JSONObject data) {
+        if (!ENABLED) return;
         emit(location, message, hypothesisId, data, true);
     }
 

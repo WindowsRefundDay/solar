@@ -137,21 +137,36 @@ public final class CoverFlowLayout {
      */
     public static SlidePose poseFromRelative(float relativePos, Metrics m) {
         SlidePose out = new SlidePose();
+        poseFromRelative(relativePos, m, out);
+        return out;
+    }
+
+    /** Writes a pose into caller-owned storage for per-frame rendering. */
+    public static void poseFromRelative(float relativePos, Metrics m, SlidePose out) {
+        if (out == null) return;
         float abs = Math.abs(relativePos);
         // Deep scroll fade — slots far past the visible rack.
         float deepFadeStart = SIDE_SLIDES + 0.55f;
         float deepFadeEnd = SIDE_SLIDES + 1.05f;
         if (abs > deepFadeEnd) {
             out.alpha = 0;
-            return out;
+            return;
         }
         // Unified floor lerp — negative rel must mirror positive (Classipod continuous page).
         int i0 = (int) Math.floor(relativePos);
         int i1 = i0 + 1;
         float frac = relativePos - i0;
-        SlidePose a = keyframePose(i0, m);
-        SlidePose b = keyframePose(i1, m);
-        lerpPose(out, a, b, frac);
+        float cx0 = keyframeCx(i0, m);
+        float cx1 = keyframeCx(i1, m);
+        float cy0 = i0 == 0 ? 0f : m.offsetY;
+        float cy1 = i1 == 0 ? 0f : m.offsetY;
+        float angle0 = keyframeAngleDeg(i0, m);
+        float angle1 = keyframeAngleDeg(i1, m);
+        out.cx = cx0 + (cx1 - cx0) * frac;
+        out.cy = cy0 + (cy1 - cy0) * frac;
+        out.angleDeg = angle0 + (angle1 - angle0) * frac;
+        out.angle = Math.round(out.angleDeg * IANGLE_MAX / 360f);
+        out.alpha = 256;
         out.sideRank = Math.min(SIDE_SLIDES, (int) Math.floor(abs));
         // Outer rack egress — endmost covers drift off-screen into shadow instead of popping.
         applyOutboundEgress(out, relativePos, abs, m);
@@ -159,7 +174,17 @@ public final class CoverFlowLayout {
             float edgeT = (abs - deepFadeStart) / (deepFadeEnd - deepFadeStart);
             out.alpha = (int) (out.alpha * (1f - edgeT));
         }
-        return out;
+    }
+
+    private static float keyframeCx(int rank, Metrics m) {
+        if (rank == 0) return 0f;
+        return rank > 0 ? cxForSideRank(rank, m) : -cxForSideRank(-rank, m);
+    }
+
+    private static float keyframeAngleDeg(int rank, Metrics m) {
+        if (rank == 0) return 0f;
+        float tilt = angleToDegrees(m.sideTilt);
+        return rank > 0 ? -tilt : tilt;
     }
 
     /** Rank ±2+ slide outward, fade, and tilt away during scroll — iPod-class depth cue. */
@@ -252,9 +277,16 @@ public final class CoverFlowLayout {
     /** Map slide pose to screen transform for {@link FlowView}. */
     public static FlowEngine.SlotTransform toSlotTransform(SlidePose pose, Metrics m) {
         FlowEngine.SlotTransform t = new FlowEngine.SlotTransform();
+        toSlotTransform(pose, m, t);
+        return t;
+    }
+
+    /** Writes a transform into caller-owned storage for per-frame rendering. */
+    public static void toSlotTransform(SlidePose pose, Metrics m, FlowEngine.SlotTransform t) {
+        if (t == null) return;
         if (pose == null || pose.alpha <= 0) {
             t.alpha = 0f;
-            return t;
+            return;
         }
         float angleRad = (float) Math.toRadians(pose.angleDeg);
         float sinr = (float) Math.sin(angleRad);
@@ -297,7 +329,6 @@ public final class CoverFlowLayout {
         }
         // Continuous depth: focused cover advances with scroll, no end-of-scroll pop.
         t.depthOrder = depthOrderFromPose(pose, m);
-        return t;
     }
 
     /** Paint-order key only — cheaper than full {@link #toSlotTransform} during sort. */

@@ -15,8 +15,8 @@ public final class DebugSessionLog {
     private static final String TAG = "SolarDbg6a585a";
     private static final String SESSION = "6a585a";
     private static final String FILE = "debug-6a585a.log";
-    /** ponytail: hot-path sync SD I/O — on only for short debug sessions. */
-    public static volatile boolean ENABLED = true;
+    /** Device diagnostics are compiled out of Y1 builds to keep UI paths allocation- and I/O-free. */
+    public static final boolean ENABLED = false;
 
     private DebugSessionLog() {}
 

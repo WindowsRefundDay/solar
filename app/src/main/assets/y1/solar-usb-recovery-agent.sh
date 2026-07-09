@@ -56,11 +56,16 @@ if [ -f "$PIDFILE" ]; then
 fi
 echo $$ >"$PIDFILE"
 
+IDLE_MAX=12
+idle_count=0
 while pidof "$SOLAR_PKG" >/dev/null 2>&1; do
     if solar_enabled && rockbox_disabled && systemui_usb_on_top && ! ums_exported; then
         bring_solar_home
+        idle_count=0
         sleep "$COOLDOWN"
     else
+        idle_count=$((idle_count + 1))
+        [ "$idle_count" -ge "$IDLE_MAX" ] && break
         sleep "$INTERVAL"
     fi
 done

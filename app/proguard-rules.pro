@@ -19,3 +19,24 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# JNI-bound native methods — native code binds by exact class/method/field name.
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
+
+# ijkplayer/ffmpeg JNI bindings — native side references fields/methods by name.
+-keep class tv.danmaku.ijk.media.player.** { *; }
+-dontwarn tv.danmaku.ijk.media.player.**
+
+# Conscrypt JNI crypto provider.
+-keep class org.conscrypt.** { *; }
+-dontwarn org.conscrypt.**
+
+# MediaSessionShim (API21+) is gated behind BuildConfig.Y1_ONLY (always true on this
+# fixed-API17 device) — the reflective Class.forName call is now dead code by design,
+# so R8 is intentionally left free to strip the whole class instead of keeping it.
+
+# jaudiotagger resolves ID3/Vorbis/FLAC frame body classes via Class.forName at runtime.
+-keep class org.jaudiotagger.** { *; }
+-dontwarn org.jaudiotagger.**

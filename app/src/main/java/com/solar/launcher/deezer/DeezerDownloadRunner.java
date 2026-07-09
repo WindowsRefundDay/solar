@@ -38,13 +38,18 @@ public final class DeezerDownloadRunner {
      */
     public static String downloadWithFallback(SharedPreferences prefs, final DeezerResult result,
             final File dest, final String ext, final Progress progress) {
+        return downloadWithFallback(prefs, result, dest, ext, null, progress);
+    }
+
+    public static String downloadWithFallback(SharedPreferences prefs, final DeezerResult result,
+            final File dest, final String ext, final String qualityOverride, final Progress progress) {
         if (result == null || dest == null) return "Invalid track";
         List<DeezerAccount.ArlFallbackTier> tiers = downloadTierOrder(prefs);
         if (tiers.isEmpty()) return "Deezer not available";
         String lastErr = "Download failed";
         for (DeezerAccount.ArlFallbackTier tier : tiers) {
             for (int attempt = 0; attempt < 2; attempt++) {
-                String err = downloadOnce(prefs, tier, result, dest, ext, progress);
+                String err = downloadOnce(prefs, tier, result, dest, ext, qualityOverride, progress);
                 if (err == null) return null;
                 lastErr = err;
             }
@@ -55,7 +60,7 @@ public final class DeezerDownloadRunner {
 
     private static String downloadOnce(SharedPreferences prefs, DeezerAccount.ArlFallbackTier tier,
             final DeezerResult result, final File dest, final String ext,
-            final Progress progress) {
+            final String qualityOverride, final Progress progress) {
         if (dest.exists()) dest.delete();
         final DeezerClient client = new DeezerClient(prefs);
         String arl = DeezerAccount.arlForTier(tier, prefs);
@@ -65,6 +70,9 @@ public final class DeezerDownloadRunner {
         }
         try {
             if (!client.isSessionValid()) client.initSession();
+            if (qualityOverride != null) {
+                client.setSoundFormat(qualityOverride);
+            }
         } catch (Exception e) {
             return e.getMessage() != null ? e.getMessage() : "Session failed";
         }

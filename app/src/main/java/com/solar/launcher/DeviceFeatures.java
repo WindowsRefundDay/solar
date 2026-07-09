@@ -83,6 +83,11 @@ public final class DeviceFeatures {
             if (sd0.isDirectory() && new File("/storage/sdcard1").isDirectory()) {
                 return sd0;
             }
+        } else {
+            File sd1 = new File("/storage/sdcard1");
+            if (sd1.isDirectory()) {
+                return sd1;
+            }
         }
         return null;
     }

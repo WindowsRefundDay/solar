@@ -227,25 +227,33 @@ public final class FlowCoverResolver {
     }
 
     private static Bitmap decodeFile(File f, int thumbPx) {
+        FileInputStream in = null;
         try {
             android.graphics.BitmapFactory.Options opts = new android.graphics.BitmapFactory.Options();
             opts.inSampleSize = sampleSize(f, thumbPx);
             opts.inPreferredConfig = Bitmap.Config.RGB_565;
-            Bitmap raw = android.graphics.BitmapFactory.decodeStream(new FileInputStream(f), null, opts);
+            in = new FileInputStream(f);
+            Bitmap raw = android.graphics.BitmapFactory.decodeStream(in, null, opts);
             if (raw == null) return null;
             Bitmap out = AlbumCoverPipeline.scaleForFlow(raw, thumbPx, thumbPx);
             if (raw != out && !raw.isRecycled()) raw.recycle();
             return out;
         } catch (Exception ignored) {
             return null;
+        } finally {
+            if (in != null) {
+                try { in.close(); } catch (Exception ignored) {}
+            }
         }
     }
 
     private static int sampleSize(File f, int target) {
+        FileInputStream in = null;
         try {
             android.graphics.BitmapFactory.Options bounds = new android.graphics.BitmapFactory.Options();
             bounds.inJustDecodeBounds = true;
-            android.graphics.BitmapFactory.decodeStream(new FileInputStream(f), null, bounds);
+            in = new FileInputStream(f);
+            android.graphics.BitmapFactory.decodeStream(in, null, bounds);
             int w = bounds.outWidth;
             int h = bounds.outHeight;
             if (w <= 0 || h <= 0) return 1;
@@ -255,6 +263,10 @@ public final class FlowCoverResolver {
             return sample;
         } catch (Exception e) {
             return 2;
+        } finally {
+            if (in != null) {
+                try { in.close(); } catch (Exception ignored) {}
+            }
         }
     }
 
@@ -280,15 +292,16 @@ public final class FlowCoverResolver {
     }
 
     private static Bitmap readEmbeddedArt(File track) {
+        android.media.MediaMetadataRetriever mmr = new android.media.MediaMetadataRetriever();
         try {
-            android.media.MediaMetadataRetriever mmr = new android.media.MediaMetadataRetriever();
             mmr.setDataSource(track.getAbsolutePath());
             byte[] raw = mmr.getEmbeddedPicture();
-            mmr.release();
             if (raw == null || raw.length == 0) return null;
             return android.graphics.BitmapFactory.decodeByteArray(raw, 0, raw.length);
         } catch (Exception ignored) {
             return null;
+        } finally {
+            try { mmr.release(); } catch (Exception ignored) {}
         }
     }
 

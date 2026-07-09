@@ -163,6 +163,7 @@ public class MusicLibraryStore extends SolarDbHelper {
 
     /** All cached tracks (may include files removed from disk until next purge). */
     public List<Track> loadAll() {
+        migrateLegacyZeroTrackNumbers();
         List<Track> out = new ArrayList<Track>();
         SolarDatabase db = openReadable();
         SolarCursor c = null;

@@ -68,6 +68,7 @@ public final class AlbumBackdropCache {
         boxPass(input, temp, width, height, true);
         boxPass(temp, input, width, height, false);
         boxPass(input, temp, width, height, true);
+        darken(temp);
         Bitmap output = Bitmap.createBitmap(width, height, Bitmap.Config.RGB_565);
         output.setPixels(temp, 0, width, 0, 0, width, height);
         return output;
@@ -91,6 +92,35 @@ public final class AlbumBackdropCache {
                 output[y * width + x] = (a / count << 24) | (r / count << 16)
                         | (g / count << 8) | b / count;
             }
+        }
+    }
+
+    /**
+     * Equivalent to compositing #44000000 over the backdrop (0x44/255 ~= 0.267 alpha) —
+     * baked in once at scan time so the player screen can drop its runtime full-screen
+     * scrim View and its extra overdraw pass at 60 FPS during the visualizer.
+     */
+    private static final float DARKEN_MULTIPLIER = 1f - (0x44 / 255f);
+
+    /** Cache-miss fallback path (no blur/bake yet) — apply the same darken so both paths match. */
+    public static void darkenInPlace(Bitmap bmp) {
+        if (bmp == null || bmp.isRecycled()) return;
+        int width = bmp.getWidth();
+        int height = bmp.getHeight();
+        int[] pixels = new int[width * height];
+        bmp.getPixels(pixels, 0, width, 0, 0, width, height);
+        darken(pixels);
+        bmp.setPixels(pixels, 0, width, 0, 0, width, height);
+    }
+
+    private static void darken(int[] pixels) {
+        for (int i = 0; i < pixels.length; i++) {
+            int color = pixels[i];
+            int a = color >>> 24;
+            int r = (int) ((color >> 16 & 0xff) * DARKEN_MULTIPLIER);
+            int g = (int) ((color >> 8 & 0xff) * DARKEN_MULTIPLIER);
+            int b = (int) ((color & 0xff) * DARKEN_MULTIPLIER);
+            pixels[i] = (a << 24) | (r << 16) | (g << 8) | b;
         }
     }
 }

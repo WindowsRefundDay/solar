@@ -730,7 +730,7 @@ public final class MediaSuiteHost {
     private void loadNetCountriesAsync() {
         final int gen = ++netLoadGen;
         netLoading = true;
-        new Thread(new Runnable() {
+        com.solar.launcher.ShortTaskExecutor.POOL.submit(new Runnable() {
             @Override
             public void run() {
                 List<RadioBrowserClient.Country> loaded = new ArrayList<RadioBrowserClient.Country>();
@@ -765,7 +765,7 @@ public final class MediaSuiteHost {
                     }
                 });
             }
-        }).start();
+        });
     }
 
     private void loadNetStatesAsync() {
@@ -793,7 +793,7 @@ public final class MediaSuiteHost {
                 }
             }
         });
-        new Thread(new Runnable() {
+        com.solar.launcher.ShortTaskExecutor.POOL.submit(new Runnable() {
             @Override
             public void run() {
                 List<RadioBrowserClient.State> loaded = new ArrayList<RadioBrowserClient.State>();
@@ -829,7 +829,7 @@ public final class MediaSuiteHost {
                     }
                 });
             }
-        }).start();
+        });
     }
 
     private void loadNetTagsAsync() {
@@ -859,7 +859,7 @@ public final class MediaSuiteHost {
                 }
             }
         });
-        new Thread(new Runnable() {
+        com.solar.launcher.ShortTaskExecutor.POOL.submit(new Runnable() {
             @Override
             public void run() {
                 List<RadioBrowserClient.Tag> loaded = new ArrayList<RadioBrowserClient.Tag>();
@@ -892,7 +892,7 @@ public final class MediaSuiteHost {
                     }
                 });
             }
-        }).start();
+        });
     }
 
     private void loadNetStationsAsync() {
@@ -915,7 +915,7 @@ public final class MediaSuiteHost {
                 }
             }
         });
-        new Thread(new Runnable() {
+        com.solar.launcher.ShortTaskExecutor.POOL.submit(new Runnable() {
             @Override
             public void run() {
                 List<RadioBrowserClient.Station> loaded = new ArrayList<RadioBrowserClient.Station>();
@@ -939,7 +939,7 @@ public final class MediaSuiteHost {
                     }
                 });
             }
-        }).start();
+        });
     }
 
     private void showNetStationsUi() {
@@ -1042,14 +1042,14 @@ public final class MediaSuiteHost {
         host.playback().startRadioStation(PlayQueue.QueueItem.internetRadio(
                 station.stationuuid, station.name, station.urlResolved,
                 station.countrycode, station.favicon));
-        new Thread(new Runnable() {
+        com.solar.launcher.ShortTaskExecutor.POOL.submit(new Runnable() {
             @Override
             public void run() {
                 try {
                     radioBrowser.reportClick(station.stationuuid);
                 } catch (Exception ignored) {}
             }
-        }).start();
+        });
         host.changeScreen(STATE_PLAYER);
         host.refreshPlayerUi();
     }
@@ -1750,7 +1750,7 @@ public final class MediaSuiteHost {
             return;
         }
         final int gen = ++photoLoadGen;
-        new Thread(new Runnable() {
+        com.solar.launcher.ShortTaskExecutor.POOL.submit(new Runnable() {
             @Override
             public void run() {
                 Bitmap bmp = decodeSampled(file, host.getScreenWidthPx(), host.getScreenWidthPx());
@@ -1763,7 +1763,7 @@ public final class MediaSuiteHost {
                     }
                 });
             }
-        }).start();
+        });
     }
 
     public void photoViewerNext() {

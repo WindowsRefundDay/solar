@@ -10,6 +10,7 @@ public final class FlowMarquee {
 
     private float offsetPx;
     private long lastMs;
+    private final Paint.FontMetrics fontMetrics = new Paint.FontMetrics();
 
     public void reset() {
         offsetPx = 0f;
@@ -17,18 +18,18 @@ public final class FlowMarquee {
     }
 
     /** Draw single-line text clipped to [x, x+maxW]; scrolls when text overflows. */
-    public void draw(Canvas canvas, String text, float x, float y, float maxW, Paint paint) {
-        if (text == null || text.isEmpty()) return;
+    public boolean draw(Canvas canvas, String text, float x, float y, float maxW, Paint paint) {
+        if (text == null || text.isEmpty()) return false;
         float textW = paint.measureText(text);
-        Paint.FontMetrics fm = paint.getFontMetrics();
-        float top = y + fm.ascent;
-        float bottom = y + fm.descent;
+        paint.getFontMetrics(fontMetrics);
+        float top = y + fontMetrics.ascent;
+        float bottom = y + fontMetrics.descent;
         canvas.save();
         canvas.clipRect(x, top, x + maxW, bottom);
         if (textW <= maxW) {
             canvas.drawText(text, x, y, paint);
             canvas.restore();
-            return;
+            return false;
         }
         long now = System.currentTimeMillis();
         if (lastMs > 0L) {
@@ -42,5 +43,6 @@ public final class FlowMarquee {
         canvas.drawText(text, x - offsetPx, y, paint);
         canvas.drawText(text, x - offsetPx + loop, y, paint);
         canvas.restore();
+        return true;
     }
 }

@@ -7,6 +7,8 @@ import org.json.JSONObject;
 import java.io.File;
 import java.io.FileWriter;
 
+import com.solar.launcher.BuildConfig;
+
 /**
  * Debug session c472d1 — Flow Back navigation + NP volume after Flow.
  * Pull: adb pull /storage/sdcard0/solar/debug-c472d1.log .cursor/debug-c472d1.log
@@ -15,7 +17,7 @@ public final class FlowBackDebugLog {
     private static final String TAG = "SolarDbgC472d1";
     private static final String SESSION = "c472d1";
     private static final String FILE = "debug-c472d1.log";
-    public static volatile boolean ENABLED = true;
+    public static final boolean ENABLED = false;
 
     private FlowBackDebugLog() {}
 

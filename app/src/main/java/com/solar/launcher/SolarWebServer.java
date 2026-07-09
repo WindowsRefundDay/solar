@@ -15,6 +15,13 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URLDecoder;
 import java.util.Locale;
+import java.util.List;
+import java.util.ArrayList;
+import org.json.JSONObject;
+import org.json.JSONArray;
+import com.solar.launcher.deezer.DeezerSearch;
+import com.solar.launcher.deezer.DeezerResult;
+import com.solar.launcher.deezer.DeezerBackgroundQueue;
 
 public class SolarWebServer extends Thread {
     private ServerSocket serverSocket;
@@ -26,6 +33,22 @@ public class SolarWebServer extends Thread {
     public SolarWebServer(Context context, File rootFolder) {
         this.context = context;
         this.rootFolder = rootFolder;
+    }
+
+    private String spaHtmlCache = null;
+
+    private String getSpaHtml() {
+        if (spaHtmlCache == null) {
+            try {
+                InputStream is = context.getAssets().open("web/index.html");
+                java.util.Scanner s = new java.util.Scanner(is).useDelimiter("\\A");
+                spaHtmlCache = s.hasNext() ? s.next() : "";
+                is.close();
+            } catch (Exception e) {
+                spaHtmlCache = "<html><body>Error loading index.html</body></html>";
+            }
+        }
+        return spaHtmlCache;
     }
 
     public void run() {
@@ -128,54 +151,319 @@ public class SolarWebServer extends Thread {
                     }
                 }
 
-                if (method.equals("GET") && path.equals("/")) {
-                    StringBuilder foldersHtml = new StringBuilder("<option value=\"ROOT\">[Root Folder] /Music</option>");
-                    File[] files = rootFolder.listFiles();
-                    if (files != null) {
-                        for (File f : files) {
-                            if (f.isDirectory()) {
-                                foldersHtml.append("<option value=\"").append(f.getName()).append("\">📁 ").append(f.getName()).append("</option>");
+                SharedPreferences prefs = context.getSharedPreferences(
+                        DeezerAccount.PREFS_NAME, Context.MODE_PRIVATE);
+                DeezerClient client = new DeezerClient(prefs);
+
+                if (method.equals("GET") && path.equals("/api/deezer/status")) {
+                    boolean hasArl = DeezerAccount.isUserArlConfigured(prefs);
+                    JSONObject res = new JSONObject();
+                    res.put("authenticated", hasArl);
+                    res.put("quality", DeezerAccount.loadQuality(prefs));
+                    String response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n" + res.toString();
+                    os.write(response.getBytes("UTF-8"));
+                }
+                else if (method.equals("GET") && path.startsWith("/api/deezer/search")) {
+                    String q = getQueryParam(path, "q");
+                    String type = getQueryParam(path, "type");
+                    JSONArray arr = new JSONArray();
+                    if (q != null && !q.trim().isEmpty()) {
+                        DeezerSearch search = new DeezerSearch(client);
+                        if ("artist".equalsIgnoreCase(type)) {
+                            List<DeezerSearch.DeezerArtist> artists = search.searchArtists(q);
+                            for (DeezerSearch.DeezerArtist a : artists) {
+                                JSONObject obj = new JSONObject();
+                                obj.put("id", a.id);
+                                obj.put("name", a.name);
+                                obj.put("pictureUrl", a.pictureUrl);
+                                arr.put(obj);
+                            }
+                        } else if ("album".equalsIgnoreCase(type)) {
+                            List<DeezerSearch.DeezerAlbum> albums = search.searchAlbums(q);
+                            for (DeezerSearch.DeezerAlbum alb : albums) {
+                                JSONObject obj = new JSONObject();
+                                obj.put("id", alb.id);
+                                obj.put("title", alb.title);
+                                obj.put("recordType", alb.recordType);
+                                obj.put("trackCount", alb.trackCount);
+                                obj.put("coverUrl", alb.coverUrl);
+                                arr.put(obj);
+                            }
+                        } else {
+                            List<DeezerResult> tracks = search.searchTracks(q);
+                            for (DeezerResult r : tracks) {
+                                JSONObject obj = new JSONObject();
+                                obj.put("id", r.id);
+                                obj.put("title", r.title);
+                                obj.put("artist", r.artist);
+                                obj.put("album", r.album);
+                                obj.put("albumId", r.albumId);
+                                obj.put("durationSec", r.durationSec);
+                                obj.put("coverUrl", r.coverUrl);
+                                arr.put(obj);
                             }
                         }
                     }
+                    String response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n" + arr.toString();
+                    os.write(response.getBytes("UTF-8"));
+                }
+                else if (method.equals("GET") && path.startsWith("/api/deezer/artist/") && path.endsWith("/albums")) {
+                    String[] segments = path.split("/");
+                    JSONArray arr = new JSONArray();
+                    if (segments.length >= 5) {
+                        try {
+                            long artistId = Long.parseLong(segments[4]);
+                            DeezerSearch search = new DeezerSearch(client);
+                            List<DeezerSearch.DeezerAlbum> albums = search.listArtistAlbums(artistId);
+                            for (DeezerSearch.DeezerAlbum alb : albums) {
+                                JSONObject obj = new JSONObject();
+                                obj.put("id", alb.id);
+                                obj.put("title", alb.title);
+                                obj.put("recordType", alb.recordType);
+                                obj.put("trackCount", alb.trackCount);
+                                obj.put("coverUrl", alb.coverUrl);
+                                arr.put(obj);
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                    String response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n" + arr.toString();
+                    os.write(response.getBytes("UTF-8"));
+                }
+                else if (method.equals("GET") && path.startsWith("/api/deezer/album/")) {
+                    String[] segments = path.split("/");
+                    JSONArray arr = new JSONArray();
+                    if (segments.length >= 4) {
+                        try {
+                            long albumId = Long.parseLong(segments[3]);
+                            DeezerSearch search = new DeezerSearch(client);
+                            List<DeezerResult> tracks = search.listAlbumTracks(albumId);
+                            for (DeezerResult r : tracks) {
+                                JSONObject obj = new JSONObject();
+                                obj.put("id", r.id);
+                                obj.put("title", r.title);
+                                obj.put("artist", r.artist);
+                                obj.put("album", r.album);
+                                obj.put("albumId", r.albumId);
+                                obj.put("durationSec", r.durationSec);
+                                obj.put("coverUrl", r.coverUrl);
+                                arr.put(obj);
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                    String response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n" + arr.toString();
+                    os.write(response.getBytes("UTF-8"));
+                }
+                else if (method.equals("POST") && path.equals("/api/deezer/download")) {
+                    byte[] bodyBytes = readBody(is, contentLength);
+                    String bodyString = new String(bodyBytes, "UTF-8");
+                    JSONObject json = new JSONObject(bodyString);
+                    long trackId = json.getLong("id");
+                    String title = json.optString("title", "");
+                    String artist = json.optString("artist", "");
+                    String album = json.optString("album", "");
+                    long albumId = json.optLong("albumId", 0);
+                    String coverUrl = json.optString("coverUrl", "");
+                    String quality = json.optString("quality", null);
 
-                    String html = "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>" +
-                            "<title>Solar Music Server</title><style>" +
-                            "body{font-family:sans-serif; background:#111; color:#fff; padding:20px; text-align:center;} " +
-                            "input, select, button{font-size:16px; padding:10px; margin:5px 0; width:100%; max-width:400px; box-sizing:border-box;} " +
-                            "button{background:#00ffff; color:#000; border:none; font-weight:bold; cursor:pointer;} " +
-                            ".box{background:#222; padding:20px; border-radius:10px; margin:10px auto; max-width:400px;}" +
-                            "</style></head><body>" +
-                            "<h2>🎧 Solar Wireless Upload</h2>" +
-                            "<p><a href='/deezer' style='color:#0ff'>Deezer account setup →</a></p>" +
-                            "<p><a href='/scan_stats' style='color:#0ff'>Last library scan stats →</a></p>" +
-                            "<div class='box'><h3>1. Create Folder</h3>" +
-                            "<input type='text' id='fName' placeholder='e.g., Pop, Jazz'>" +
-                            "<button onclick='createFolder()'>Create</button></div>" +
-                            "<div class='box'><h3>2. Upload Music</h3>" +
-                            "<select id='tFolder'>" + foldersHtml.toString() + "</select>" +
-                            "<input type='file' id='fInput' multiple accept='.mp3,.flac,.wav,.ogg,.m4a,.aac,.ape,.wma,.jpg,.png'>" +
-                            "<button onclick='uploadAll()'>Upload All</button>" +
-                            "<div id='status' style='margin-top:10px; color:#0f0;'></div></div>" +
-                            "<script>" +
-                            "function createFolder() { " +
-                            "  var n = document.getElementById('fName').value; " +
-                            "  if(!n) return;" +
-                            "  fetch('/create_folder?name=' + encodeURIComponent(n)).then(() => location.reload()); " +
-                            "}" +
-                            "async function uploadAll() { " +
-                            "  var files = document.getElementById('fInput').files; " +
-                            "  var folder = document.getElementById('tFolder').value; " +
-                            "  var st = document.getElementById('status'); " +
-                            "  if(files.length === 0) return;" +
-                            "  for(var i=0; i<files.length; i++) { " +
-                            "    st.innerText = 'Uploading: ' + files[i].name + ' (' + (i+1) + '/' + files.length + ')'; " +
-                            "    await fetch('/upload?folder=' + encodeURIComponent(folder) + '&name=' + encodeURIComponent(files[i].name), {method:'POST', body:files[i]}); " +
-                            "  } " +
-                            "  st.innerText = '✅ All uploads completed!'; " +
-                            "}" +
-                            "</script></body></html>";
+                    DeezerResult r = new DeezerResult(trackId, title, artist, album, albumId, 0, "", coverUrl);
+                    String qualityFormat = null;
+                    String ext = "mp3";
+                    if (quality != null && !quality.isEmpty()) {
+                        if ("flac".equalsIgnoreCase(quality)) {
+                            qualityFormat = "FLAC";
+                            ext = "flac";
+                        } else if ("320".equals(quality) || "mp3_320".equalsIgnoreCase(quality)) {
+                            qualityFormat = "MP3_320";
+                            ext = "mp3";
+                        } else if ("128".equals(quality) || "mp3_128".equalsIgnoreCase(quality)) {
+                            qualityFormat = "MP3_128";
+                            ext = "mp3";
+                        }
+                    }
 
+                    String safeName = r.filenameBase() + "." + ext;
+                    File dest = new File(rootFolder, safeName);
+                    int n = 1;
+                    while (dest.exists()) {
+                        dest = new File(rootFolder, r.filenameBase() + " (" + n + ")." + ext);
+                        n++;
+                    }
+
+                    DeezerBackgroundQueue.Job job = new DeezerBackgroundQueue.Job(r, dest, qualityFormat);
+                    ArrayList<DeezerBackgroundQueue.Job> list = new ArrayList<DeezerBackgroundQueue.Job>();
+                    list.add(job);
+
+                    MainActivity mainActivity = null;
+                    if (context instanceof MainActivity) {
+                        mainActivity = (MainActivity) context;
+                    }
+                    if (mainActivity != null) {
+                        mainActivity.getDeezerBackgroundQueue().enqueue(list);
+                    }
+
+                    JSONObject res = new JSONObject();
+                    res.put("status", "queued");
+                    res.put("dest", dest.getName());
+                    String response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n" + res.toString();
+                    os.write(response.getBytes("UTF-8"));
+                }
+                else if (method.equals("POST") && path.equals("/api/deezer/download/album")) {
+                    byte[] bodyBytes = readBody(is, contentLength);
+                    String bodyString = new String(bodyBytes, "UTF-8");
+                    JSONObject json = new JSONObject(bodyString);
+                    long albumId = json.getLong("albumId");
+                    String quality = json.optString("quality", null);
+
+                    DeezerSearch search = new DeezerSearch(client);
+                    List<DeezerResult> tracks = search.listAlbumTracks(albumId);
+                    ArrayList<DeezerBackgroundQueue.Job> jobsToEnqueue = new ArrayList<DeezerBackgroundQueue.Job>();
+
+                    String qualityFormat = null;
+                    String ext = "mp3";
+                    if (quality != null && !quality.isEmpty()) {
+                        if ("flac".equalsIgnoreCase(quality)) {
+                            qualityFormat = "FLAC";
+                            ext = "flac";
+                        } else if ("320".equals(quality) || "mp3_320".equalsIgnoreCase(quality)) {
+                            qualityFormat = "MP3_320";
+                            ext = "mp3";
+                        } else if ("128".equals(quality) || "mp3_128".equalsIgnoreCase(quality)) {
+                            qualityFormat = "MP3_128";
+                            ext = "mp3";
+                        }
+                    }
+
+                    for (DeezerResult r : tracks) {
+                        String safeName = r.filenameBase() + "." + ext;
+                        File dest = new File(rootFolder, safeName);
+                        int n = 1;
+                        while (dest.exists()) {
+                            dest = new File(rootFolder, r.filenameBase() + " (" + n + ")." + ext);
+                            n++;
+                        }
+                        jobsToEnqueue.add(new DeezerBackgroundQueue.Job(r, dest, qualityFormat));
+                    }
+
+                    MainActivity mainActivity = null;
+                    if (context instanceof MainActivity) {
+                        mainActivity = (MainActivity) context;
+                    }
+                    if (mainActivity != null && !jobsToEnqueue.isEmpty()) {
+                        mainActivity.getDeezerBackgroundQueue().enqueue(jobsToEnqueue);
+                    }
+
+                    JSONObject res = new JSONObject();
+                    res.put("status", "queued");
+                    res.put("count", jobsToEnqueue.size());
+                    String response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n" + res.toString();
+                    os.write(response.getBytes("UTF-8"));
+                }
+                else if (method.equals("GET") && path.equals("/api/deezer/download/status")) {
+                    JSONArray arr = new JSONArray();
+                    MainActivity mainActivity = null;
+                    if (context instanceof MainActivity) {
+                        mainActivity = (MainActivity) context;
+                    }
+                    if (mainActivity != null) {
+                        List<DeezerBackgroundQueue.Job> activeJobs = mainActivity.getDeezerBackgroundQueue().getJobs();
+                        for (DeezerBackgroundQueue.Job j : activeJobs) {
+                            JSONObject obj = new JSONObject();
+                            obj.put("id", j.track.id);
+                            obj.put("title", j.track.title);
+                            obj.put("artist", j.track.artist);
+                            obj.put("status", j.status);
+                            obj.put("progress", j.progress);
+                            obj.put("error", j.error != null ? j.error : JSONObject.NULL);
+                            if ("complete".equals(j.status) && j.dest != null) {
+                                try {
+                                    String rootCanon = rootFolder.getCanonicalPath();
+                                    String destCanon = j.dest.getCanonicalPath();
+                                    if (destCanon.startsWith(rootCanon + File.separator)) {
+                                        obj.put("path", destCanon.substring(rootCanon.length() + 1));
+                                    }
+                                } catch (Exception ignored) {}
+                            }
+                            arr.put(obj);
+                        }
+                    }
+                    String response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n" + arr.toString();
+                    os.write(response.getBytes("UTF-8"));
+                }
+                else if (method.equals("GET") && path.equals("/api/library")) {
+                    JSONArray arr = new JSONArray();
+                    try {
+                        List<MusicLibraryStore.Track> tracks = MusicLibraryStore.getInstance(context).loadAll();
+                        String rootCanon = rootFolder.getCanonicalPath();
+                        for (MusicLibraryStore.Track t : tracks) {
+                            String rel = t.path;
+                            try {
+                                String canon = new File(t.path).getCanonicalPath();
+                                if (canon.equals(rootCanon)) rel = "";
+                                else if (canon.startsWith(rootCanon + File.separator)) rel = canon.substring(rootCanon.length() + 1);
+                            } catch (Exception ignored) {}
+                            JSONObject obj = new JSONObject();
+                            obj.put("path", rel);
+                            obj.put("title", t.title != null && !t.title.isEmpty() ? t.title : new File(t.path).getName());
+                            obj.put("artist", t.artist != null ? t.artist : "");
+                            obj.put("album", t.album != null ? t.album : "");
+                            obj.put("durationSec", t.durationSec());
+                            arr.put(obj);
+                        }
+                    } catch (Exception ignored) {}
+                    String response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n" + arr.toString();
+                    os.write(response.getBytes("UTF-8"));
+                }
+                else if (method.equals("GET") && path.equals("/api/now_playing")) {
+                    JSONObject np = (context instanceof MainActivity)
+                            ? ((MainActivity) context).getNowPlayingJson() : new JSONObject();
+                    String response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n" + np.toString();
+                    os.write(response.getBytes("UTF-8"));
+                }
+                else if (method.equals("GET") && path.equals("/api/now_playing/art")) {
+                    File artFile = null;
+                    if (context instanceof MainActivity) {
+                        JSONObject np = ((MainActivity) context).getNowPlayingJson();
+                        String album = np.optString("album", "");
+                        String artist = np.optString("artist", "");
+                        if (np.optBoolean("playing", false) || !np.optString("title", "").isEmpty()) {
+                            String key = com.solar.launcher.flow.FlowCoverResolver.albumMatchKey(album, artist);
+                            File dir = com.solar.launcher.flow.AlbumArtCache.cacheDir(context);
+                            if (com.solar.launcher.flow.AlbumArtCache.has(dir, key)) {
+                                artFile = com.solar.launcher.flow.AlbumArtCache.fileForKey(dir, key);
+                            }
+                        }
+                    }
+                    if (artFile != null && artFile.exists()) {
+                        byte[] bytes = new byte[(int) artFile.length()];
+                        InputStream fis = new java.io.FileInputStream(artFile);
+                        int off = 0, n;
+                        while (off < bytes.length && (n = fis.read(bytes, off, bytes.length - off)) != -1) off += n;
+                        fis.close();
+                        os.write(("HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: " + bytes.length + "\r\n\r\n").getBytes("UTF-8"));
+                        os.write(bytes);
+                    } else {
+                        os.write("HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n\r\nNo art".getBytes("UTF-8"));
+                    }
+                }
+                else if (method.equals("POST") && (path.equals("/api/transport/play_pause") || path.equals("/api/transport/next") || path.equals("/api/transport/prev"))) {
+                    if (context instanceof MainActivity) {
+                        final MainActivity ma = (MainActivity) context;
+                        final String p = path;
+                        ma.runOnUiThread(new Runnable() {
+                            public void run() {
+                                try {
+                                    if (p.endsWith("play_pause")) ma.playOrPauseMusic();
+                                    else if (p.endsWith("next")) ma.nextTrack();
+                                    else ma.prevTrack();
+                                } catch (Exception ignored) {}
+                            }
+                        });
+                    }
+                    String response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\n\r\n{\"status\":\"ok\"}";
+                    os.write(response.getBytes("UTF-8"));
+                }
+                else if (method.equals("GET") && (path.equals("/") || path.equals("/deezer_search") || path.equals("/deezer") || path.startsWith("/deezer?"))) {
+                    String html = getSpaHtml();
                     String response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n" + html;
                     os.write(response.getBytes("UTF-8"));
                 }
@@ -191,10 +479,7 @@ public class SolarWebServer extends Thread {
                     String response = "HTTP/1.1 200 OK\r\n\r\nOK";
                     os.write(response.getBytes("UTF-8"));
                 }
-                else if (path.equals("/deezer") || path.startsWith("/deezer?")) {
-                    if (method.equals("GET")) {
-                        writeDeezerSetupPage(os, null);
-                    } else if (method.equals("POST")) {
+                else if (method.equals("POST") && (path.equals("/deezer") || path.startsWith("/deezer?"))) {
                         byte[] body = readBody(is, contentLength);
                         String bodyStr = new String(body, "UTF-8");
                         String arl = formValue(bodyStr, "arl");
@@ -203,7 +488,7 @@ public class SolarWebServer extends Thread {
                         if (arl == null || arl.trim().length() < 64) {
                             msg = "ARL cookie is too short. Log in at deezer.com, copy the arl cookie from DevTools.";
                         } else {
-                            SharedPreferences prefs = context.getSharedPreferences(
+                            prefs = context.getSharedPreferences(
                                     DeezerAccount.PREFS_NAME, Context.MODE_PRIVATE);
                             DeezerAccount.saveUserArl(prefs, arl.trim());
                             if (quality != null && !quality.isEmpty()) {
@@ -223,7 +508,7 @@ public class SolarWebServer extends Thread {
                                         "SolarWebServer.deezer", "pre-test", "A", d);
                             } catch (Exception ignored) {}
                             // #endregion
-                            DeezerClient client = new DeezerClient(prefs);
+                            client = new DeezerClient(prefs);
                             boolean ok = false;
                             try {
                                 ok = client.initSession();
@@ -252,9 +537,9 @@ public class SolarWebServer extends Thread {
                             ConnectivityHelper.setDeezerLoginOk(ok);
                             msg = ok ? "✅ Deezer login verified!" : "❌ Saved ARL but login test failed. Check the cookie.";
                         }
-                        writeDeezerSetupPage(os, msg);
+                        String response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n" + msg;
+                        os.write(response.getBytes("UTF-8"));
                     }
-                }
                 else if (method.equals("GET") && path.equals("/scan_stats")) {
                     ScanPerfLog.LastScan last = ScanPerfLog.last();
                     org.json.JSONObject d = new org.json.JSONObject();
@@ -276,6 +561,31 @@ public class SolarWebServer extends Thread {
                     } catch (Exception ignored) {}
                     String response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" + d.toString();
                     os.write(response.getBytes("UTF-8"));
+                }
+                else if (method.equals("GET") && path.startsWith("/download")) {
+                    File f = null;
+                    try { f = resolveUnderRoot(getQueryParam(path, "path")); } catch (Exception ignored) {}
+                    if (f == null || !f.exists() || !f.isFile()) {
+                        os.write("HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n\r\nNot found".getBytes("UTF-8"));
+                    } else {
+                        String headers = "HTTP/1.1 200 OK\r\nContent-Type: " + contentTypeFor(f.getName())
+                                + "\r\nContent-Length: " + f.length()
+                                + "\r\nContent-Disposition: attachment; filename=\"" + f.getName().replace("\"", "") + "\"\r\n\r\n";
+                        os.write(headers.getBytes("UTF-8"));
+                        streamFile(f, os);
+                    }
+                }
+                else if (method.equals("GET") && path.startsWith("/stream")) {
+                    File f = null;
+                    try { f = resolveUnderRoot(getQueryParam(path, "path")); } catch (Exception ignored) {}
+                    if (f == null || !f.exists() || !f.isFile()) {
+                        os.write("HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n\r\nNot found".getBytes("UTF-8"));
+                    } else {
+                        String headers = "HTTP/1.1 200 OK\r\nContent-Type: " + contentTypeFor(f.getName())
+                                + "\r\nContent-Length: " + f.length() + "\r\n\r\n";
+                        os.write(headers.getBytes("UTF-8"));
+                        streamFile(f, os);
+                    }
                 }
                 else if (method.equals("POST") && path.startsWith("/upload")) {
                     String q = path.split("\\?")[1];
@@ -369,63 +679,50 @@ public class SolarWebServer extends Thread {
             return "";
         }
 
-        private void writeDeezerSetupPage(OutputStream os, String message) throws java.io.IOException {
-            SharedPreferences prefs = context.getSharedPreferences(
-                    DeezerAccount.PREFS_NAME, Context.MODE_PRIVATE);
-            boolean hasArl = DeezerAccount.isUserArlConfigured(prefs);
-            String quality = DeezerAccount.loadQuality(prefs);
-            String status = hasArl ? "Logged in" : "Not configured";
-            String msgHtml = message != null
-                    ? "<p style='color:" + (message.startsWith("✅") ? "#0f0" : "#f66") + "'>"
-                    + htmlEscape(message) + "</p>" : "";
-            String demoNote = "";
-            String instructions =
-                    "<div class='box' style='text-align:left;font-size:14px;line-height:1.5'>" +
-                    "<p><b>What is the arl?</b> After you log in at deezer.com, your browser stores an " +
-                    "<code>arl</code> cookie. Solar uses it to stream and download as your account.</p>" +
-                    "<p style='color:#f88'><b>Keep it secret.</b> Paste it only on this page on your home " +
-                    "network. Log out of Deezer on shared PCs when done.</p>" +
-                    "<h3 style='margin-top:16px'>Google Chrome</h3>" +
-                    "<ol style='padding-left:20px'>" +
-                    "<li>Open <a href='https://www.deezer.com/login' target='_blank'>deezer.com</a> and sign in.</li>" +
-                    "<li>Press <b>F12</b> (or menu → More tools → Developer tools).</li>" +
-                    "<li>Open the <b>Application</b> tab (Chrome 96+: may be under »).</li>" +
-                    "<li>Under <b>Storage → Cookies</b>, select <code>https://www.deezer.com</code>.</li>" +
-                    "<li>Find the row named <b>arl</b> and copy its <b>Value</b> (long hex string).</li>" +
-                    "</ol>" +
-                    "<h3 style='margin-top:16px'>Mozilla Firefox</h3>" +
-                    "<ol style='padding-left:20px'>" +
-                    "<li>Open <a href='https://www.deezer.com/login' target='_blank'>deezer.com</a> and sign in.</li>" +
-                    "<li>Press <b>F12</b> to open Developer Tools.</li>" +
-                    "<li>Open the <b>Storage</b> tab.</li>" +
-                    "<li>Expand <b>Cookies</b> → <code>https://www.deezer.com</code>.</li>" +
-                    "<li>Click <b>arl</b> and copy the value from the pane on the right.</li>" +
-                    "</ol>" +
-                    "<p style='color:#aaa;margin-top:12px'>If you do not see <code>arl</code>, refresh deezer.com " +
-                    "while logged in, or try logging out and back in.</p>" +
-                    "</div>";
-            String html = "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>" +
-                    "<title>Solar Deezer Setup</title><style>" +
-                    "body{font-family:sans-serif;background:#111;color:#fff;padding:20px;text-align:center;max-width:520px;margin:0 auto;}" +
-                    "input,select,button{font-size:16px;padding:10px;margin:5px 0;width:100%;max-width:400px;box-sizing:border-box;}" +
-                    "textarea{font-size:14px;padding:10px;width:100%;max-width:400px;height:80px;box-sizing:border-box;}" +
-                    "button{background:#00ffff;color:#000;border:none;font-weight:bold;cursor:pointer;}" +
-                    ".box{background:#222;padding:20px;border-radius:10px;margin:10px auto;max-width:480px;}" +
-                    "code{background:#333;padding:2px 4px;border-radius:3px;}" +
-                    "a{color:#0ff;}</style></head><body>" +
-                    "<h2>🎵 Deezer Account</h2>" +
-                    demoNote +
-                    instructions +
-                    "<div class='box'><p>Status: <b>" + htmlEscape(status) + "</b></p>" +
-                    msgHtml +
-                    "<form method='POST' action='/deezer'>" +
-                    "<textarea name='arl' placeholder='Paste arl cookie here'></textarea>" +
-                    "<select name='quality'><option value='mp3'" + ("mp3".equals(quality) ? " selected" : "") + ">MP3</option>" +
-                    "<option value='flac'" + ("flac".equals(quality) ? " selected" : "") + ">FLAC (Premium)</option></select>" +
-                    "<button type='submit'>Save &amp; Test</button></form></div>" +
-                    "<p><a href='/'>← Back to upload</a></p></body></html>";
-            String response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n" + html;
-            os.write(response.getBytes("UTF-8"));
+        /** Resolves a user-supplied relative path under rootFolder, rejecting anything that escapes it. */
+        private File resolveUnderRoot(String relPath) throws java.io.IOException {
+            if (relPath == null || relPath.trim().isEmpty()) return null;
+            File f = new File(rootFolder, relPath);
+            String rootCanon = rootFolder.getCanonicalPath();
+            String fCanon = f.getCanonicalPath();
+            if (!fCanon.equals(rootCanon) && !fCanon.startsWith(rootCanon + File.separator)) return null;
+            return f;
+        }
+
+        private String contentTypeFor(String fileName) {
+            String n = fileName.toLowerCase(Locale.US);
+            if (n.endsWith(".mp3")) return "audio/mpeg";
+            if (n.endsWith(".flac")) return "audio/flac";
+            if (n.endsWith(".m4a")) return "audio/mp4";
+            if (n.endsWith(".wav")) return "audio/wav";
+            if (n.endsWith(".ogg")) return "audio/ogg";
+            return "application/octet-stream";
+        }
+
+        private void streamFile(File f, OutputStream os) throws java.io.IOException {
+            InputStream fis = new java.io.FileInputStream(f);
+            byte[] buffer = new byte[8192];
+            int n;
+            while ((n = fis.read(buffer)) != -1) os.write(buffer, 0, n);
+            fis.close();
+        }
+
+        private String getQueryParam(String path, String key) {
+            int qIdx = path.indexOf('?');
+            if (qIdx == -1) return null;
+            String query = path.substring(qIdx + 1);
+            String[] pairs = query.split("&");
+            for (String pair : pairs) {
+                int eqIdx = pair.indexOf('=');
+                if (eqIdx == -1) continue;
+                try {
+                    String k = URLDecoder.decode(pair.substring(0, eqIdx), "UTF-8");
+                    if (k.equals(key)) {
+                        return URLDecoder.decode(pair.substring(eqIdx + 1), "UTF-8");
+                    }
+                } catch (Exception ignored) {}
+            }
+            return null;
         }
 
         private String htmlEscape(String s) {

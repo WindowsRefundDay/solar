@@ -33,7 +33,8 @@ if [ -f /system/etc/solar/sync-y1-keymap.sh ]; then
     sh /system/etc/solar/sync-y1-keymap.sh
 fi
 # ponytail: side keys live in mtk-kpd — mtk-tpd-kpd must mirror it (not Y1-Rockbox DPAD 21/22).
-if [ -f /system/usr/keylayout/mtk-kpd.kl ]; then
+if [ -f /system/usr/keylayout/mtk-kpd.kl ] \
+        && ! cmp -s /system/usr/keylayout/mtk-kpd.kl /system/usr/keylayout/mtk-tpd-kpd.kl; then
     cp /system/usr/keylayout/mtk-kpd.kl /system/usr/keylayout/mtk-tpd-kpd.kl
     chmod 644 /system/usr/keylayout/mtk-tpd-kpd.kl
 fi

@@ -134,5 +134,7 @@ while true; do
                 fi
             fi
         fi
+    else
+        sleep 1
     fi
 done

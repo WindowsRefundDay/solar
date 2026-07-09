@@ -22,22 +22,28 @@ public final class SolarLog {
     private static final String ERROR_FILE = "error.log";
     private static final long MAX_BYTES = 512 * 1024;
     private static final Object LOCK = new Object();
+    /** Process-wide guard: Activity recreation must not wrap the crash handler repeatedly. */
+    private static boolean uncaughtHandlerInstalled;
 
     private SolarLog() {}
 
     public static void installUncaughtHandler() {
-        final Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
-        Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
-            @Override
-            public void uncaughtException(Thread thread, Throwable e) {
-                logCrash(thread, e);
-                if (previous != null) {
-                    previous.uncaughtException(thread, e);
-                } else {
-                    System.exit(1);
+        synchronized (LOCK) {
+            if (uncaughtHandlerInstalled) return;
+            uncaughtHandlerInstalled = true;
+            final Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
+            Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
+                @Override
+                public void uncaughtException(Thread thread, Throwable e) {
+                    logCrash(thread, e);
+                    if (previous != null) {
+                        previous.uncaughtException(thread, e);
+                    } else {
+                        System.exit(1);
+                    }
                 }
-            }
-        });
+            });
+        }
     }
 
     public static void e(String tag, String message, Throwable t) {

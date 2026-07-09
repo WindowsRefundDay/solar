@@ -41,6 +41,31 @@ public final class DeezerSearch {
         return out;
     }
 
+    public List<DeezerAlbum> searchAlbums(String query) throws IOException {
+        List<DeezerAlbum> out = new ArrayList<DeezerAlbum>();
+        try {
+            JSONObject root = new JSONObject(new String(
+                    searchPublic("search/album?q=" + encodeQuery(query)), utf8()));
+            JSONArray data = root.optJSONArray("data");
+            if (data == null) return out;
+            for (int i = 0; i < data.length(); i++) {
+                JSONObject item = data.optJSONObject(i);
+                if (item == null) continue;
+                out.add(new DeezerAlbum(
+                        item.optLong("id", 0),
+                        item.optString("title", ""),
+                        item.optString("record_type", "album"),
+                        item.optInt("nb_tracks", 0),
+                        albumListCover(item)));
+            }
+        } catch (Exception e) {
+            throw new IOException(e.getMessage() != null ? e.getMessage() : "Album search failed");
+        }
+        return out;
+    }
+
+
+
     public List<DeezerAlbum> listArtistAlbums(long artistId) throws IOException {
         List<DeezerAlbum> out = new ArrayList<DeezerAlbum>();
         if (artistId <= 0) return out;

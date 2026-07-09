@@ -521,8 +521,9 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:visibility="gone">
+        <!-- Darkening is pre-baked into the backdrop bitmap (AlbumBackdropCache.darken) —
+             no separate full-screen scrim needed, saves an overdraw pass at 60 FPS. -->
         <ImageView android:id="@+id/iv_player_bg_blur" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="centerCrop" android:src="#111111"/>
-        <View android:layout_width="match_parent" android:layout_height="match_parent" android:background="#44000000"/>
 
         <LinearLayout
             android:id="@+id/player_content_row"
@@ -753,6 +754,8 @@
         <TextView android:id="@+id/tv_server_ip" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/webserver_ip_placeholder" android:textSize="18sp" android:textStyle="bold" android:layout_marginBottom="24dp"/>
         <Button android:id="@+id/btn_server_toggle" android:layout_width="match_parent" android:layout_height="@dimen/y1_menu_item_height" android:text="@string/webserver_start" android:background="@android:color/transparent" android:layout_marginBottom="16dp" android:focusable="true"/>
         <TextView android:id="@+id/tv_webserver_hint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/webserver_hint" android:textSize="16sp" android:gravity="center"/>
+        <TextView android:id="@+id/tv_qr_hint" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Press [Center] to open QR code" android:textSize="16sp" android:textStyle="bold" android:gravity="center" android:layout_marginTop="8dp"/>
+        <ImageView android:id="@+id/iv_webserver_qr" android:layout_width="200dp" android:layout_height="200dp" android:layout_marginTop="20dp" android:visibility="gone"/>
     </LinearLayout>
 
     <FrameLayout

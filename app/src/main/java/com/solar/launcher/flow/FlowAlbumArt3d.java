@@ -100,7 +100,7 @@ public final class FlowAlbumArt3d {
     public static void drawCover(Canvas canvas, Bitmap bmp, RectF rect, float rotationYDeg,
             float alpha, Paint paint) {
         if (canvas == null || bmp == null || bmp.isRecycled() || rect == null || paint == null) return;
-        RectF square = squareBounds(rect);
+        RectF square = isSquare(rect) ? rect : squareBounds(rect);
         if (square.width() <= 0f) return;
 
         canvas.save();
@@ -155,7 +155,7 @@ public final class FlowAlbumArt3d {
             Matrix slotMatrix, int maxBands) {
         if (canvas == null || bmp == null || bmp.isRecycled() || squareRect == null) return;
         if (reflectHeight <= 0f || reflectionPaint == null) return;
-        RectF square = squareBounds(squareRect);
+        RectF square = isSquare(squareRect) ? squareRect : squareBounds(squareRect);
 
         int rows = reflectTable != null && reflectTable.length > 0
                 ? reflectTable.length : Math.max(1, Math.round(reflectHeight));
@@ -207,5 +207,9 @@ public final class FlowAlbumArt3d {
             canvas.restore();
         }
         reflectionPaint.setAlpha(oldAlpha);
+    }
+
+    private static boolean isSquare(RectF rect) {
+        return Math.abs(rect.width() - rect.height()) < 0.01f;
     }
 }

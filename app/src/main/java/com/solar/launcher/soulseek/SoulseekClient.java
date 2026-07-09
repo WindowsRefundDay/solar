@@ -618,7 +618,7 @@ public final class SoulseekClient extends Thread {
   }
 
   private void runServerOp(String name, Runnable op) {
-    new Thread(new Runnable() {
+    com.solar.launcher.ShortTaskExecutor.POOL.submit(new Runnable() {
       @Override
       public void run() {
         try {
@@ -626,7 +626,7 @@ public final class SoulseekClient extends Thread {
           op.run();
         } catch (Exception ignored) {}
       }
-    }, name).start();
+    });
   }
 
   /** Lightweight login probe — no listen socket or background reader. */

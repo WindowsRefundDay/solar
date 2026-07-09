@@ -19,6 +19,7 @@ public final class UsbRecoveryAgent {
     private static final String ASSET = "y1/solar-usb-recovery-agent.sh";
     private static final String SYSTEM_SCRIPT = "/system/etc/solar/solar-usb-recovery-agent.sh";
     private static final String DATA_SCRIPT = "/data/data/solar-usb-recovery-agent.sh";
+    private static final String PIDFILE = "/data/data/.solar_usb_recovery.pid";
     private static final long START_MIN_INTERVAL_MS = 60_000L;
     private static volatile long lastStartMs = 0L;
 
@@ -45,6 +46,17 @@ public final class UsbRecoveryAgent {
                 }
             }
         }, "UsbRecoveryAgent").start();
+    }
+
+    /** Kill the poll loop on USB disconnect so it doesn't idle-poll until Solar exits. */
+    public static void stop(final Context context) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                runSu("kill $(cat " + shellQuote(PIDFILE) + " 2>/dev/null) 2>/dev/null; rm -f "
+                        + shellQuote(PIDFILE));
+            }
+        }, "UsbRecoveryAgentStop").start();
     }
 
     private static String resolveScriptPath(Context context) {

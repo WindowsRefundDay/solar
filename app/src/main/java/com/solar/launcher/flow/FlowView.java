@@ -56,12 +56,26 @@ public final class FlowView extends View {
     private final Paint backSelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint placeholderPaint = new Paint();
     private final Paint shadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    /** Back-face draw — cached across frames, rebuilt only when header size/theme changes. */
+    private final Paint backHeaderGradPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final RectF backHeaderRect = new RectF();
+    private final RectF backRowRect = new RectF();
+    private float cachedBackHeaderW = -1f;
+    private float cachedBackHeaderH = -1f;
+    private Typeface cachedBackBoldTypeface;
+    private Typeface cachedBackNormalTypeface;
+    private boolean cachedBackTypefaceDebugTheme;
+    private Typeface cachedFrontBoldTypeface;
+    private Typeface cachedFrontNormalTypeface;
+    private boolean cachedFrontTypefaceDebugTheme;
     private final RectF drawRect = new RectF();
     private final RectF shadowRect = new RectF();
     private final Matrix matrix = new Matrix();
     private final Camera camera = new Camera();
     private final int[] drawOrder = new int[CoverFlowLayout.SIDE_SLIDES * 2 + 1];
     private final float[] drawDepth = new float[CoverFlowLayout.SIDE_SLIDES * 2 + 1];
+    private final FlowEngine.SlotTransform[] drawTransforms =
+            new FlowEngine.SlotTransform[CoverFlowLayout.SIDE_SLIDES * 2 + 1];
     private final FlowMarquee titleMarquee = new FlowMarquee();
     private final FlowMarquee subtitleMarquee = new FlowMarquee();
     private final FlowMarquee backTitleMarquee = new FlowMarquee();
@@ -76,8 +90,9 @@ public final class FlowView extends View {
     private boolean noReflections = false;
     private static final float FLOW_REFLECTION_ALPHA = 0.18f;
     private static final float FLOW_REFLECTION_CENTER_ALPHA = 0.50f;
-    private static final int CENTER_REFLECTION_MAX_BANDS = 36;
-    private static final int SIDE_REFLECTION_MAX_BANDS = 14;
+    private static final int CENTER_REFLECTION_MAX_BANDS = 8;
+    private static final int SIDE_REFLECTION_MAX_BANDS = 6;
+    private static final int SIDE_REFLECTION_SCROLL_MAX_BANDS = 4;
     private boolean debugTheme;
     private int lastNotifiedFocus = -1;
     private float viewW;
@@ -135,12 +150,22 @@ public final class FlowView extends View {
     private final Runnable frontMarqueeTick = new Runnable() {
         @Override
         public void run() {
+            if (!isShown()) return;
             int s = flip.getState();
             if (s == FlowFlipController.STATE_BACK
                     || s == FlowFlipController.STATE_FLIP_TO_BACK) return;
             if (titleAlpha < 0.01f) return;
             postInvalidateOnAnimation();
             postDelayed(this, 48);
+        }
+    };
+
+    /** Back-face row marquee — single reused instance, not reallocated per draw. */
+    private final Runnable backFaceMarqueeTick = new Runnable() {
+        @Override
+        public void run() {
+            if (!isShown()) return;
+            if (flip.getState() == FlowFlipController.STATE_BACK) invalidate();
         }
     };
 
@@ -175,7 +200,6 @@ public final class FlowView extends View {
             }
             notifyFocusIfChanged();
             if (callback != null) callback.onCarouselFrameTick();
-            boolean pendingCovers = callback != null && callback.hasPendingCoverDecodes();
             boolean needsFrame = scrolling || flipping
                     || flip.getState() == FlowFlipController.STATE_FLIP_TO_BACK
                     || flip.getState() == FlowFlipController.STATE_FLIP_TO_FRONT
@@ -184,8 +208,7 @@ public final class FlowView extends View {
                     || handoffRevealActive
                     || handoffReflectRevealStartMs > 0L
                     || guidedScrollTarget >= 0
-                    || guidedScrollPendingComplete != null
-                    || pendingCovers;
+                    || guidedScrollPendingComplete != null;
             if (needsFrame) {
                 // Under load, skip redundant invalidates — state still advances via wall clock.
                 long sinceDraw = now - lastAnimInvalidateMs;
@@ -216,6 +239,9 @@ public final class FlowView extends View {
     }
 
     private void initFlowView() {
+        for (int i = 0; i < drawTransforms.length; i++) {
+            drawTransforms[i] = new FlowEngine.SlotTransform();
+        }
         coverPaint.setFilterBitmap(false);
         reflectionPaint.setFilterBitmap(false);
         textPaint.setColor(0xFFFFFFFF);
@@ -231,6 +257,23 @@ public final class FlowView extends View {
         reflectionTint = ThemeManager.getListButtonNormalBg() & 0x00FFFFFF | 0x55000000;
     }
 
+    @Override
+    protected void onDetachedFromWindow() {
+        super.onDetachedFromWindow();
+        stopFrontFaceMarqueeTick();
+        removeCallbacks(backFaceMarqueeTick);
+        removeCallbacks(animTick);
+    }
+
+    @Override
+    protected void onVisibilityChanged(View changedView, int visibility) {
+        super.onVisibilityChanged(changedView, visibility);
+        if (visibility != VISIBLE) {
+            stopFrontFaceMarqueeTick();
+            removeCallbacks(backFaceMarqueeTick);
+        }
+    }
+
     public FlowEngine engine() {
         return engine;
     }
@@ -241,6 +284,7 @@ public final class FlowView extends View {
 
     public void setCoverCache(FlowCoverCache cache) {
         this.cache = cache;
+        prepareEmptyPlaceholder();
     }
 
     public void setItems(List<FlowItem> items) {
@@ -825,14 +869,20 @@ public final class FlowView extends View {
 
     private FlowEngine.SlotTransform centerTransformWithBackEncroach(
             CoverFlowLayout.Metrics metrics, float flipPastMid) {
-        FlowEngine.SlotTransform t = engine.centerSlotTransform(metrics.viewW, metrics.viewH);
+        FlowEngine.SlotTransform t = new FlowEngine.SlotTransform();
+        centerTransformWithBackEncroach(metrics, flipPastMid, t);
+        return t;
+    }
+
+    private void centerTransformWithBackEncroach(CoverFlowLayout.Metrics metrics,
+            float flipPastMid, FlowEngine.SlotTransform t) {
+        engine.centerSlotTransformInto(metrics.viewW, metrics.viewH, t);
         if (flipPastMid > 0f) {
             float density = getResources().getDisplayMetrics().density;
             float topInset = getResources().getDimension(R.dimen.y1_status_bar_height) + 4f * density;
             float bottomMargin = CoverFlowLayout.BACK_FACE_BOTTOM_MARGIN_DP * density;
             CoverFlowLayout.applyBackFaceSouthEncroach(t, metrics, flipPastMid, topInset, bottomMargin);
         }
-        return t;
     }
 
     /** Y rotation of center cover at handoff start (0 = front, 180 = flipped back). */
@@ -943,7 +993,7 @@ public final class FlowView extends View {
 
     private void postAnimTick() {
         removeCallbacks(animTick);
-        post(animTick);
+        postOnAnimation(animTick);
     }
 
     /** Coalesced choreographer tick — idle cover decodes and scroll share one loop. */
@@ -963,6 +1013,13 @@ public final class FlowView extends View {
         viewH = h;
         engine.setViewport(viewW, viewH);
         cachedMetrics = null;
+        prepareEmptyPlaceholder();
+    }
+
+    private void prepareEmptyPlaceholder() {
+        if (cache != null && viewW > 0f && viewH > 0f) {
+            cache.emptyPlaceholder((int) viewportMetrics().displaySize);
+        }
     }
 
     @Override
@@ -1062,12 +1119,12 @@ public final class FlowView extends View {
         for (int k = 0; k < count; k++) {
             int idx = drawOrder[k];
             if (idx == centerIdx && flip.isFlippedOrFlipping()) {
-                drawFlippingCenter(canvas, idx, metrics, flipP);
+                drawFlippingCenter(canvas, idx, metrics, flipP, drawTransforms[k]);
             } else {
                 // ponytail: one dim factor via sideDimAlpha — art + reflection share t.alpha in drawCoverAt.
                 float dim = (flip.isFlippedOrFlipping() && idx != centerIdx)
                         ? flip.sideDimAlpha() : 1f;
-                drawSlot(canvas, idx, metrics, dim, flipP, centerIdx);
+                drawSlot(canvas, idx, metrics, dim, flipP, centerIdx, drawTransforms[k]);
             }
         }
 
@@ -1174,6 +1231,7 @@ public final class FlowView extends View {
     /** Debug 898913 — detect bake+tilt distortion, matrix blow-up, or bad slot sizing. */
     private void logDrawCoverGlitchIfNeeded(int index, float totalRotY, float pivotX,
             FlowEngine.SlotTransform t, CoverFlowLayout.Metrics metrics, boolean usingBaked) {
+        if (!com.solar.launcher.Debug898913Log.ENABLED) return;
         long nowMs = System.currentTimeMillis();
         matrix.getValues(dbg898913MatrixVals);
         float scaleX = (float) Math.hypot(dbg898913MatrixVals[0], dbg898913MatrixVals[1]);
@@ -1187,7 +1245,6 @@ public final class FlowView extends View {
         boolean hugeSlot = drawRect.width() > metrics.viewW * 0.75f;
         // Always log bake+tilt (hypothesis A); throttle other suspects.
         if (!bakedOnTilt) {
-            if (!com.solar.launcher.Debug898913Log.ENABLED) return;
             if (!matrixBlowup && !tinySide && !hugeSlot) return;
             if (nowMs - dbg898913LastGlitchLogMs < 250L) return;
         } else if (nowMs - dbg898913LastGlitchLogMs < 150L) {
@@ -1286,36 +1343,32 @@ public final class FlowView extends View {
     }
 
     private void scheduleBackFaceMarqueeTick() {
+        removeCallbacks(backFaceMarqueeTick);
         if (flip.getState() == FlowFlipController.STATE_BACK) {
-            postDelayed(new Runnable() {
-                @Override
-                public void run() {
-                    if (flip.getState() == FlowFlipController.STATE_BACK) invalidate();
-                }
-            }, 48);
+            postDelayed(backFaceMarqueeTick, 48);
         }
     }
 
     private void drawSlot(Canvas canvas, int index, CoverFlowLayout.Metrics metrics,
-            float alphaMul, float flipP, int centerIdx) {
-        FlowEngine.SlotTransform t = engine.slotTransform(index, metrics.viewW, metrics.viewH, 0f);
+            float alphaMul, float flipP, int centerIdx, FlowEngine.SlotTransform t) {
+        engine.slotTransformInto(index, metrics.viewW, metrics.viewH, 0f, t);
         if (t.alpha <= 0.01f) return;
         if (flipP > 0f && index != centerIdx) {
-            CoverFlowLayout.SlidePose pose = engine.poseForItemPublic(index);
-            CoverFlowLayout.applyFlipFanOut(t, pose != null ? pose.cx : 0f, flipP);
+            CoverFlowLayout.applyFlipFanOut(t, t.centerX - metrics.viewW * 0.5f, flipP);
         }
         t.alpha *= alphaMul;
         drawCoverAt(canvas, index, t, metrics, 0f, false, 1f);
     }
 
-    private void drawFlippingCenter(Canvas canvas, int index, CoverFlowLayout.Metrics metrics, float flipP) {
+    private void drawFlippingCenter(Canvas canvas, int index, CoverFlowLayout.Metrics metrics,
+            float flipP, FlowEngine.SlotTransform t) {
         float angle = flipP * 180f;
         boolean showBack = angle >= 90f;
         float drawAngle = showBack ? angle - 180f : angle;
         // ponytail: south encroach after midpoint — tall tracklist card; handoff morphs back to square.
         float flipPastMid = flipP > 0.5f ? (flipP - 0.5f) * 2f : 0f;
         float encroach = showBack ? 1f : flipPastMid;
-        FlowEngine.SlotTransform t = centerTransformWithBackEncroach(metrics, encroach);
+        centerTransformWithBackEncroach(metrics, encroach, t);
         drawCoverAt(canvas, index, t, metrics, drawAngle, showBack, 1f);
     }
 
@@ -1433,7 +1486,7 @@ public final class FlowView extends View {
                     // #region agent log
                     logDrawPathIfNeeded(index, "coverOnly", totalRotY, t, metrics, false);
                     // #endregion
-                    FlowAlbumArt3d.drawCover(canvas, bmp, drawRect, 0f, slotAlpha, coverPaint);
+                    canvas.drawBitmap(bmp, null, drawRect, coverPaint);
                 } else {
                     // #region agent log
                     logDrawPathIfNeeded(index, isVisualCenter ? "reflect-center" : "reflect-side",
@@ -1450,15 +1503,15 @@ public final class FlowView extends View {
                     bmp = handoffPinBitmap;
                 }
                 if (bmp != null && !bmp.isRecycled()) {
-                    FlowAlbumArt3d.drawCover(canvas, bmp, drawRect, 0f, slotAlpha, coverPaint);
+                    canvas.drawBitmap(bmp, null, drawRect, coverPaint);
                 } else {
                     Bitmap empty = cache != null
                             ? cache.emptyPlaceholder((int) metrics.displaySize) : null;
                     placeholderPaint.setAlpha((int) (255 * slotAlpha));
                     if (empty != null && !empty.isRecycled()) {
-                        canvas.drawBitmap(empty, null, FlowAlbumArt3d.squareBounds(drawRect), placeholderPaint);
+                        canvas.drawBitmap(empty, null, drawRect, placeholderPaint);
                     } else {
-                        canvas.drawRect(FlowAlbumArt3d.squareBounds(drawRect), placeholderPaint);
+                        canvas.drawRect(drawRect, placeholderPaint);
                     }
                 }
             }
@@ -1469,10 +1522,12 @@ public final class FlowView extends View {
 
     private void drawDynamicCoverAndReflection(Canvas canvas, Bitmap bmp, RectF rect, float slotAlpha,
             float reflectH, CoverFlowLayout.Metrics metrics, boolean isVisualCenter, float totalRotY) {
-        FlowAlbumArt3d.drawCover(canvas, bmp, rect, 0f, slotAlpha, coverPaint);
+        canvas.drawBitmap(bmp, null, rect, coverPaint);
         if (reflectH <= 0f) return;
         float reflectionAlpha = reflectionAlphaForDraw(slotAlpha, handoffReflectRevealAlpha, totalRotY);
-        int bands = isVisualCenter ? CENTER_REFLECTION_MAX_BANDS : SIDE_REFLECTION_MAX_BANDS;
+        int bands = isVisualCenter ? CENTER_REFLECTION_MAX_BANDS
+                : (engine.isCarouselScrolling() ? SIDE_REFLECTION_SCROLL_MAX_BANDS
+                : SIDE_REFLECTION_MAX_BANDS);
         FlowAlbumArt3d.drawReflectionFloorCoarse(canvas, bmp, rect, reflectionAlpha,
                 reflectH, metrics.reflectTable, reflectionPaint, null, bands);
     }
@@ -1524,15 +1579,26 @@ public final class FlowView extends View {
         backPaint.setColor(0xF2E8ECF0);
         canvas.drawRect(rect, backPaint);
 
-        RectF header = new RectF(rect.left, rect.top, rect.right, rect.top + headerH);
-        Paint headerGrad = new Paint(Paint.ANTI_ALIAS_FLAG);
-        headerGrad.setShader(new LinearGradient(
-                header.left, header.top, header.left, header.bottom,
-                0xFF4A90D9, 0xFF2B6CB0, Shader.TileMode.CLAMP));
-        canvas.drawRect(header, headerGrad);
+        backHeaderRect.set(rect.left, rect.top, rect.right, rect.top + headerH);
+        if (backHeaderRect.width() != cachedBackHeaderW || backHeaderRect.height() != cachedBackHeaderH) {
+            cachedBackHeaderW = backHeaderRect.width();
+            cachedBackHeaderH = backHeaderRect.height();
+            backHeaderGradPaint.setShader(new LinearGradient(
+                    backHeaderRect.left, backHeaderRect.top, backHeaderRect.left, backHeaderRect.bottom,
+                    0xFF4A90D9, 0xFF2B6CB0, Shader.TileMode.CLAMP));
+        }
+        canvas.drawRect(backHeaderRect, backHeaderGradPaint);
+
+        if (cachedBackBoldTypeface == null || cachedBackNormalTypeface == null
+                || cachedBackTypefaceDebugTheme != debugTheme) {
+            cachedBackTypefaceDebugTheme = debugTheme;
+            Typeface font = ThemeManager.getFlowFont(debugTheme);
+            cachedBackBoldTypeface = Typeface.create(font, Typeface.BOLD);
+            cachedBackNormalTypeface = Typeface.create(font, Typeface.NORMAL);
+        }
 
         backRowPaint.setTextSize(headerTitlePx);
-        backRowPaint.setTypeface(Typeface.create(ThemeManager.getFlowFont(debugTheme), Typeface.BOLD));
+        backRowPaint.setTypeface(cachedBackBoldTypeface);
         backRowPaint.setColor(0xFFFFFFFF);
         String title = flip.headerTitle() != null ? flip.headerTitle() : "";
         backTitleMarquee.draw(canvas, title, rect.left + pad,
@@ -1541,7 +1607,7 @@ public final class FlowView extends View {
         String subtitle = flip.headerSubtitle();
         if (subtitle != null && !subtitle.isEmpty()) {
             backRowPaint.setTextSize(headerSubPx);
-            backRowPaint.setTypeface(Typeface.create(ThemeManager.getFlowFont(debugTheme), Typeface.NORMAL));
+            backRowPaint.setTypeface(cachedBackNormalTypeface);
             backRowPaint.setColor(0xFFE0E8F0);
             backSubtitleMarquee.draw(canvas, subtitle, rect.left + pad,
                     rect.top + headerH * 0.76f, rect.width() - pad * 2f, backRowPaint);
@@ -1550,7 +1616,7 @@ public final class FlowView extends View {
         int count = flip.visibleBackRowCount();
         int start = flip.visibleBackRowStart();
         List<FlowScreenHost.FlowBackRow> rows = flip.backRows();
-        backRowPaint.setTypeface(Typeface.create(ThemeManager.getFlowFont(debugTheme), Typeface.NORMAL));
+        backRowPaint.setTypeface(cachedBackNormalTypeface);
         backRowPaint.setTextSize(rowTextPx);
         backSelPaint.setColor(0xFF0066CC);
         for (int i = 0; i < count; i++) {
@@ -1558,9 +1624,9 @@ public final class FlowView extends View {
             if (rowIdx >= rows.size()) break;
             FlowScreenHost.FlowBackRow row = rows.get(rowIdx);
             float y0 = rect.top + headerH + i * rowH;
-            RectF rowRect = new RectF(rect.left, y0, rect.right, y0 + rowH);
+            backRowRect.set(rect.left, y0, rect.right, y0 + rowH);
             if (rowIdx == flip.backIndex()) {
-                canvas.drawRect(rowRect, backSelPaint);
+                canvas.drawRect(backRowRect, backSelPaint);
                 backRowPaint.setColor(0xFFFFFFFF);
             } else {
                 backRowPaint.setColor(0xFF1A1A22);
@@ -1582,17 +1648,19 @@ public final class FlowView extends View {
         textPaint.setAlpha((int) (255 * titleAlpha));
         textPaint.setTextAlign(Paint.Align.LEFT);
         textPaint.setTextSize(w * 0.068f);
-        textPaint.setTypeface(Typeface.create(ThemeManager.getFlowFont(debugTheme), Typeface.BOLD));
+        ensureFrontTitleTypefaces();
+        textPaint.setTypeface(cachedFrontBoldTypeface);
         textPaint.setColor(0xFFFFFFFF);
-        titleMarquee.draw(canvas, title != null ? title : "", x, titleY, maxW, textPaint);
-        boolean titleOverflow = title != null && textPaint.measureText(title) > maxW;
+        boolean titleOverflow = titleMarquee.draw(canvas, title != null ? title : "",
+                x, titleY, maxW, textPaint);
         if (subtitle != null && !subtitle.isEmpty()) {
             textPaint.setTextSize(w * 0.046f);
-            textPaint.setTypeface(Typeface.create(ThemeManager.getFlowFont(debugTheme), Typeface.NORMAL));
+            textPaint.setTypeface(cachedFrontNormalTypeface);
             textPaint.setColor(ThemeManager.getTextColorSecondary());
-            subtitleMarquee.draw(canvas, subtitle, x, titleY + h * 0.055f, maxW, textPaint);
+            boolean subtitleOverflow = subtitleMarquee.draw(canvas, subtitle,
+                    x, titleY + h * 0.055f, maxW, textPaint);
             if (!titleOverflow) {
-                titleOverflow = textPaint.measureText(subtitle) > maxW;
+                titleOverflow = subtitleOverflow;
             }
             textPaint.setColor(0xFFFFFFFF);
         }
@@ -1604,6 +1672,16 @@ public final class FlowView extends View {
             stopFrontFaceMarqueeTick();
         }
         if (titleAlpha < 1f) scheduleFrontFaceMarqueeTick();
+    }
+
+    private void ensureFrontTitleTypefaces() {
+        if (cachedFrontBoldTypeface == null || cachedFrontNormalTypeface == null
+                || cachedFrontTypefaceDebugTheme != debugTheme) {
+            cachedFrontTypefaceDebugTheme = debugTheme;
+            Typeface font = ThemeManager.getFlowFont(debugTheme);
+            cachedFrontBoldTypeface = Typeface.create(font, Typeface.BOLD);
+            cachedFrontNormalTypeface = Typeface.create(font, Typeface.NORMAL);
+        }
     }
 
     private void drawEmptyHint(Canvas canvas, float w, float h) {

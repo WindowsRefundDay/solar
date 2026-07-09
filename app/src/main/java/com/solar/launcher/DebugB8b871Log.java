@@ -13,6 +13,7 @@ public final class DebugB8b871Log {
     private static final String TAG = "SolarDbgB8b871";
     private static final String SESSION = "b8b871";
     private static final String SDCARD_FILE = "/storage/sdcard0/solar/debug-b8b871.log";
+    public static final boolean ENABLED = false;
 
     private DebugB8b871Log() {}
 
@@ -23,6 +24,7 @@ public final class DebugB8b871Log {
 
     public static void log(Context ctx, String location, String message, String hypothesisId,
             JSONObject data, String runId) {
+        if (!ENABLED) return;
         try {
             JSONObject o = new JSONObject();
             o.put("sessionId", SESSION);

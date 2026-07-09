@@ -48,6 +48,8 @@ public final class LibraryScanner {
     /** Result of a scan: resolved items plus per-phase timing. */
     public static final class ScanResult {
         public final List<MainActivity.SongItem> items;
+        /** Files that needed a fresh ID3 read — 0 means the cache fully covered the walk. */
+        public final int staleCount;
         public final long totalMs;
         public final long collectMs;
         public final long partitionMs;
@@ -55,9 +57,10 @@ public final class LibraryScanner {
         public final long persistMs;
         public final long mergeMs;
 
-        ScanResult(List<MainActivity.SongItem> items, long totalMs, long collectMs,
+        ScanResult(List<MainActivity.SongItem> items, int staleCount, long totalMs, long collectMs,
                 long partitionMs, long tagReadMs, long persistMs, long mergeMs) {
             this.items = items;
+            this.staleCount = staleCount;
             this.totalMs = totalMs;
             this.collectMs = collectMs;
             this.partitionMs = partitionMs;
@@ -74,19 +77,23 @@ public final class LibraryScanner {
     /**
      * Scan {@code root} for audio files and return a deduplicated list of library items.
      *
-     * @param root        music root directory
-     * @param store       music metadata cache
-     * @param blacklist   paths to skip
-     * @param prefs       shared prefs for tag overlay
-     * @param seenPaths   populated with every audio file path found on disk (for stale-row purge)
-     * @param cb          cancellation/progress callback
+     * @param root         music root directory
+     * @param store        music metadata cache (batch upsert only)
+     * @param cachedTracks preloaded store rows keyed by absolute path — freshness checks run
+     *                     against this map so the walk issues zero per-file SQLite queries
+     * @param blacklist    paths to skip
+     * @param prefs        shared prefs for tag overlay
+     * @param seenPaths    populated with every audio file path found on disk (for stale-row purge)
+     * @param cb           cancellation/progress callback
      * @return resolved song items, never null
      */
     public static ScanResult scan(File root, MusicLibraryStore store,
+            java.util.Map<String, MusicLibraryStore.Track> cachedTracks,
             Set<String> blacklist, SharedPreferences prefs, Set<String> seenPaths, Callback cb) {
         if (root == null || !root.isDirectory() || cb == null || seenPaths == null) {
             return emptyResult();
         }
+        if (cachedTracks == null) cachedTracks = Collections.emptyMap();
         long t0 = System.currentTimeMillis();
         if (cb.isCancelled()) return emptyResult();
 
@@ -100,7 +107,7 @@ public final class LibraryScanner {
         t1 = System.currentTimeMillis();
         List<MainActivity.SongItem> freshItems = new ArrayList<MainActivity.SongItem>();
         List<File> staleFiles = new ArrayList<File>();
-        partitionByFreshness(audioFiles, store, freshItems, staleFiles);
+        partitionByFreshness(audioFiles, cachedTracks, freshItems, staleFiles);
         long partitionMs = System.currentTimeMillis() - t1;
 
         if (cb.isCancelled()) return emptyResult();
@@ -120,11 +127,12 @@ public final class LibraryScanner {
         long mergeMs = System.currentTimeMillis() - t1;
 
         long totalMs = System.currentTimeMillis() - t0;
-        return new ScanResult(items, totalMs, collectMs, partitionMs, tagReadMs, persistMs, mergeMs);
+        return new ScanResult(items, staleFiles.size(), totalMs, collectMs, partitionMs,
+                tagReadMs, persistMs, mergeMs);
     }
 
     private static ScanResult emptyResult() {
-        return new ScanResult(Collections.<MainActivity.SongItem>emptyList(), 0, 0, 0, 0, 0, 0);
+        return new ScanResult(Collections.<MainActivity.SongItem>emptyList(), 0, 0, 0, 0, 0, 0, 0);
     }
 
     private static List<File> collectAudioFiles(File root, Set<String> blacklist,
@@ -150,11 +158,15 @@ public final class LibraryScanner {
         }
     }
 
-    private static void partitionByFreshness(List<File> files, MusicLibraryStore store,
+    private static void partitionByFreshness(List<File> files,
+            java.util.Map<String, MusicLibraryStore.Track> cachedTracks,
             List<MainActivity.SongItem> freshOut, List<File> staleOut) {
         for (File f : files) {
-            MusicLibraryStore.Track cached = store.getFresh(f);
-            if (cached != null) {
+            MusicLibraryStore.Track cached = cachedTracks.get(f.getAbsolutePath());
+            // lastModified()==0 means the file vanished mid-walk — treat as stale.
+            long mtime = cached != null ? f.lastModified() : 0;
+            if (cached != null && mtime != 0
+                    && cached.mtime == mtime && cached.size == f.length()) {
                 freshOut.add(songItemFromTrack(cached, f));
             } else {
                 staleOut.add(f);

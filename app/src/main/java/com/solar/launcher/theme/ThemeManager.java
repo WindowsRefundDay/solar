@@ -21,11 +21,9 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 
 /**
@@ -61,9 +59,14 @@ public class ThemeManager {
     public static List<ThemeEntry> availableThemes = new ArrayList<>();
     private static int currentThemeIndex = 0;
     private static int styleGeneration = 1;
-    private static final Map<String, Bitmap> bitmapCache = new HashMap<>();
+    /** Byte-budgeted — unbounded HashMaps of full-res theme bitmaps could exhaust a 512MB device. */
+    private static final int THEME_BITMAP_CACHE_BYTES = 6 * 1024 * 1024;
+    private static final int ROW_BITMAP_CACHE_BYTES = 2 * 1024 * 1024;
+    private static final ByteBudgetLruMap<String, Bitmap> bitmapCache =
+            new ByteBudgetLruMap<>(THEME_BITMAP_CACHE_BYTES, Bitmap::getByteCount);
     /** ponytail: cache scaled row tiles — focus scroll was re-scaling on every D-pad step (Y1 jank) */
-    private static final Map<String, Bitmap> scaledRowBitmapCache = new HashMap<>();
+    private static final ByteBudgetLruMap<String, Bitmap> scaledRowBitmapCache =
+            new ByteBudgetLruMap<>(ROW_BITMAP_CACHE_BYTES, Bitmap::getByteCount);
     private static Typeface cachedFont;
     private static String cachedFontKey = "";
     /** While UMS exports SD card, avoid mmap on theme files so vold can unmount without killing us. */
@@ -131,8 +134,8 @@ public class ThemeManager {
      * ponytail: vold kills processes holding open filemaps on the exported volume.
      */
     public static void releaseSdcardFileHandles() {
-        bitmapCache.clear();
-        scaledRowBitmapCache.clear();
+        bitmapCache.evictAll();
+        scaledRowBitmapCache.evictAll();
         cachedFont = null;
         cachedFontKey = "";
         auraFont = null;
@@ -481,7 +484,7 @@ public class ThemeManager {
     public static void loadAllThemes(Context ctx) {
         if (ctx != null) themesRootPath = resolveThemesRoot(ctx);
         availableThemes.clear();
-        bitmapCache.clear();
+        bitmapCache.evictAll();
         cachedFont = null;
         cachedFontKey = "";
         auraFont = null;
@@ -493,7 +496,7 @@ public class ThemeManager {
     /** Rescan theme folders; clears stale bitmap cache so home icons match the active theme. */
     public static void rescanInstalled(Context ctx) {
         styleGeneration++;
-        bitmapCache.clear();
+        bitmapCache.evictAll();
         if (ctx != null) themesRootPath = resolveThemesRoot(ctx);
         String prevFolder = availableThemes.isEmpty() ? BUILTIN_DEFAULT_FOLDER
                 : availableThemes.get(Math.min(currentThemeIndex, availableThemes.size() - 1)).folderName;
@@ -624,8 +627,8 @@ public class ThemeManager {
         styleGeneration++;
         if (index >= 0 && index < availableThemes.size()) {
             currentThemeIndex = index;
-            bitmapCache.clear();
-            scaledRowBitmapCache.clear();
+            bitmapCache.evictAll();
+            scaledRowBitmapCache.evictAll();
             cachedFont = null;
             cachedFontKey = "";
             auraFont = null;
@@ -1633,12 +1636,14 @@ public class ThemeManager {
         if (relativePath == null || relativePath.isEmpty()) return null;
         ThemeEntry t = getCurrentTheme();
         String cacheKey = (t != null ? t.folderPath : "") + ":" + relativePath;
-        if (bitmapCache.containsKey(cacheKey)) return bitmapCache.get(cacheKey);
+        Bitmap _cached = bitmapCache.get(cacheKey);
+        if (_cached != null) return _cached;
         if (t != null && shouldSkipExternalThemeFile(t.folderPath)) {
             preferInternalCacheForActiveTheme(assetContext);
             t = getCurrentTheme();
             cacheKey = (t != null ? t.folderPath : "") + ":" + relativePath;
-            if (bitmapCache.containsKey(cacheKey)) return bitmapCache.get(cacheKey);
+            Bitmap cachedAfterPrefer = bitmapCache.get(cacheKey);
+            if (cachedAfterPrefer != null) return cachedAfterPrefer;
         }
         if (t == null) return null;
         Bitmap bmp = decodeThemeBitmapForEntry(t, relativePath, 0);
@@ -1708,7 +1713,8 @@ public class ThemeManager {
         // ponytail: check cache before JSON parse — settings rows re-query on every scroll
         ThemeEntry t = getCurrentTheme();
         String cacheKey = t.folderPath + ":setting:" + key;
-        if (bitmapCache.containsKey(cacheKey)) return bitmapCache.get(cacheKey);
+        Bitmap _cached = bitmapCache.get(cacheKey);
+        if (_cached != null) return _cached;
         JSONObject setting = t.root.optJSONObject("settingConfig");
         if (setting == null) return null;
         String path = setting.optString(key, "").trim();
@@ -1723,7 +1729,8 @@ public class ThemeManager {
         if (relativePath == null || relativePath.isEmpty()) return null;
         ThemeEntry t = getCurrentTheme();
         String cacheKey = t.folderPath + ":only:" + relativePath;
-        if (bitmapCache.containsKey(cacheKey)) return bitmapCache.get(cacheKey);
+        Bitmap _cached = bitmapCache.get(cacheKey);
+        if (_cached != null) return _cached;
         Bitmap bmp = decodeThemeBitmapForEntry(t, relativePath, 0);
         if (bmp != null) bitmapCache.put(cacheKey, bmp);
         return bmp;
@@ -1796,7 +1803,8 @@ public class ThemeManager {
         // ponytail: cache check first — icons are per-theme only, never merge bundled Aura solarConfig into third-party themes.
         ThemeEntry t = getCurrentTheme();
         String cacheKey = t.folderPath + ":solar:" + key;
-        if (bitmapCache.containsKey(cacheKey)) return bitmapCache.get(cacheKey);
+        Bitmap _cached = bitmapCache.get(cacheKey);
+        if (_cached != null) return _cached;
         JSONObject solar = solarBlock(t.root);
         if (solar == null) return null;
         String path = solar.optString(key, "").trim();
