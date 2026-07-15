@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  SOLAR_GITHUB_REPO: thesolarproject/solar
+  SOLAR_GITHUB_REPO: WindowsRefundDay/solar
 
 concurrency:
   group: solar-release-${{ github.ref }}
@@ -41,6 +41,7 @@ jobs:
           ./solar-rom/scripts/prepare-release.sh
 
       - name: Verify OTA PAT can push to solar-update
+        if: ${{ secrets.SOLAR_GITHUB_PAT != '' }}
         env:
           SOLAR_GITHUB_PAT: ${{ secrets.SOLAR_GITHUB_PAT }}
         run: |
@@ -105,7 +106,7 @@ jobs:
 
       - name: Build ROM images
         env:
-          SOLAR_GITHUB_REPO: thesolarproject/solar
+          SOLAR_GITHUB_REPO: WindowsRefundDay/solar
         run: |
           APK="$GITHUB_WORKSPACE/app/build/outputs/apk/release/app-release.apk"
           test -f "$APK"
@@ -146,13 +147,10 @@ jobs:
           generate_release_notes: false
 
       - name: Publish OTA catalog
+        if: ${{ secrets.SOLAR_GITHUB_PAT != '' }}
         env:
           SOLAR_GITHUB_PAT: ${{ secrets.SOLAR_GITHUB_PAT }}
         run: |
-          if [ -z "$SOLAR_GITHUB_PAT" ]; then
-            echo "::error::SOLAR_GITHUB_PAT secret is missing — OTA publish to thesolarproject/solar-update requires a PAT with repo write access."
-            exit 1
-          fi
           chmod +x scripts/publish-ota-updates.sh
           NIGHTLY=false
           if [ "${{ github.ref }}" = "refs/heads/nightly" ]; then NIGHTLY=true; fi
@@ -170,7 +168,7 @@ jobs:
       - name: Commit stable version bump
         if: github.ref == 'refs/heads/main'
         env:
-          GH_TOKEN: ${{ secrets.SOLAR_GITHUB_PAT }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "thesolarproject"
           git config user.email "anonymous@local"
@@ -180,7 +178,7 @@ jobs:
             exit 0
           fi
           git commit -m "Bump stable version for next release."
-          git push "https://x-access-token:${GH_TOKEN}@github.com/thesolarproject/solar.git" HEAD:main
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" HEAD:main
 
       - name: Bump nightly version for next release
         if: github.ref == 'refs/heads/nightly'
@@ -189,7 +187,7 @@ jobs:
       - name: Commit nightly version bump
         if: github.ref == 'refs/heads/nightly'
         env:
-          GH_TOKEN: ${{ secrets.SOLAR_GITHUB_PAT }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "thesolarproject"
           git config user.email "anonymous@local"
@@ -199,7 +197,7 @@ jobs:
             exit 0
           fi
           git commit -m "Bump nightly version for next release."
-          git push "https://x-access-token:${GH_TOKEN}@github.com/thesolarproject/solar.git" HEAD:nightly
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" HEAD:nightly
 
       - name: Remove signing keys
         if: always()
