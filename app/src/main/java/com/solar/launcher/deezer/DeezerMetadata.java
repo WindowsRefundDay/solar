@@ -58,7 +58,7 @@ public final class DeezerMetadata {
                 .putString(KEY_ARTIST + path, artist != null ? artist : "")
                 .putString(KEY_ALBUM + path, album != null ? album : "")
                 .putString(KEY_COVER_URL + path, cover)
-                .commit();
+                .apply();
     }
 
     private static String pick(String fromResult, String fromTrack) {
@@ -116,7 +116,7 @@ public final class DeezerMetadata {
                 .remove(KEY_ARTIST + absolutePath)
                 .remove(KEY_ALBUM + absolutePath)
                 .remove(KEY_COVER_URL + absolutePath)
-                .commit();
+                .apply();
     }
 
     /** Cache high-res cover next to other album art for library + player. */

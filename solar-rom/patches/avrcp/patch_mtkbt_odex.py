@@ -24,13 +24,16 @@ import sys
 import zlib
 from pathlib import Path
 
-STOCK_MD5         = "11566bc23001e78de64b5db355238175"
-OUTPUT_MD5        = "00cc642742044286966cbb7b01135ca7"
+STOCK_OUTPUT_MD5 = {
+    # Original Koensayr reference image.
+    "11566bc23001e78de64b5db355238175": "00cc642742044286966cbb7b01135ca7",
+    # Pinned rockbox-y1 Type-A base.
+    "aa54320cef3422a699e17129abc25998": "607edc5d259b578141342ceba644f1dc",
+    # Pinned rockbox-y1 Type-B base.
+    "72124df3ee3c8fd88934bd247acf77c3": "8b3d942d8bc3e426f48eef7d03514a7d",
+}
 
-DEBUG_LOGGING     = os.environ.get("KOENSAYR_DEBUG", "") == "1"
-OUTPUT_DEBUG_MD5  = OUTPUT_MD5
-
-EXPECTED_OUTPUT_MD5 = OUTPUT_DEBUG_MD5 if DEBUG_LOGGING else OUTPUT_MD5
+KNOWN_OUTPUT_MD5 = frozenset(STOCK_OUTPUT_MD5.values())
 
 DEX_OFFSET     = 0x28
 ADLER_FILE_OFF = 0x30
@@ -148,12 +151,13 @@ def main() -> None:
 
     data = bytearray(input_path.read_bytes())
     input_md5 = md5(data)
+    expected_output_md5 = STOCK_OUTPUT_MD5.get(input_md5)
 
     # Already-at-expected-output fast path. MD5 over the whole file is
     # strictly stronger evidence than verifying a handful of patch sites,
     # so when the input already hashes to the expected output for the
     # current build mode (release or debug) there's nothing to do.
-    if EXPECTED_OUTPUT_MD5 is not None and input_md5 == EXPECTED_OUTPUT_MD5:
+    if input_md5 in KNOWN_OUTPUT_MD5:
         print(f"Input:  {input_path}  ({len(data):,} bytes)")
         print(f"MD5:    {input_md5}  [OK — already at expected output]")
         print("Nothing to do.")
@@ -161,18 +165,17 @@ def main() -> None:
 
     if args.skip_md5:
         md5_tag = "(stock check skipped)"
-    elif input_md5 == STOCK_MD5:
+    elif input_md5 in STOCK_OUTPUT_MD5:
         md5_tag = "[OK — matches stock]"
     else:
-        md5_tag = f"[MISMATCH — expected {STOCK_MD5}]"
+        md5_tag = "[MISMATCH — input hash is not in the pinned stock set]"
 
     print(f"Input:  {input_path}  ({len(data):,} bytes)")
     print(f"MD5:    {input_md5}  {md5_tag}")
 
-    if not args.skip_md5 and input_md5 != STOCK_MD5:
+    if not args.skip_md5 and input_md5 not in STOCK_OUTPUT_MD5:
         print("ERROR: input is not the expected stock build.")
-        if EXPECTED_OUTPUT_MD5 is not None:
-            print(f"       Expected stock ({STOCK_MD5}) or already-patched ({EXPECTED_OUTPUT_MD5}).")
+        print("       Expected one of the pinned stock or already-patched hashes.")
         print("       Use --skip-md5 for alternate stock builds.")
         sys.exit(1)
 
@@ -184,7 +187,7 @@ def main() -> None:
     # sufficient: alternate stock build (--skip-md5) or development mode
     # where the expected output MD5 isn't pinned yet. On the normal happy
     # path the input-MD5 and output-MD5 checks cover every byte in the file.
-    show_sites = args.skip_md5 or EXPECTED_OUTPUT_MD5 is None
+    show_sites = args.skip_md5
 
     if show_sites:
         pre_ok, pre_results = verify(data, "before")
@@ -223,7 +226,7 @@ def main() -> None:
     struct.pack_into("<I", data, ADLER_FILE_OFF, new_adler)
 
     output_md5 = md5(data)
-    output_md5_mismatch = EXPECTED_OUTPUT_MD5 is not None and output_md5 != EXPECTED_OUTPUT_MD5
+    output_md5_mismatch = expected_output_md5 is not None and output_md5 != expected_output_md5
 
     # Post-patch site verification fires either when we're already in a
     # site-aware mode (developer / alternate stock) or as a diagnostic when
@@ -252,13 +255,12 @@ def main() -> None:
 
     output_path.write_bytes(data)
 
-    md5_var = "OUTPUT_DEBUG_MD5" if DEBUG_LOGGING else "OUTPUT_MD5"
-    if EXPECTED_OUTPUT_MD5 is None:
-        out_tag = f"[set {md5_var} = \"{output_md5}\"]"
-    elif output_md5 == EXPECTED_OUTPUT_MD5:
+    if expected_output_md5 is None:
+        out_tag = f"[unpinned diagnostic output {output_md5}]"
+    elif output_md5 == expected_output_md5:
         out_tag = "[OK — matches expected]"
     else:
-        out_tag = f"[MISMATCH — expected {EXPECTED_OUTPUT_MD5}]"
+        out_tag = f"[MISMATCH — expected {expected_output_md5}]"
 
     print(f"\nOutput: {output_path}  ({len(data):,} bytes)")
     print(f"MD5:    {output_md5}  {out_tag}")

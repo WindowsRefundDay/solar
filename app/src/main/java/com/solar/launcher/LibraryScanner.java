@@ -28,8 +28,12 @@ import org.json.JSONObject;
 public final class LibraryScanner {
 
     /** Thread count for tag extraction — bounded to avoid thrashing low-end Y1 storage. */
-    private static final int TAG_THREADS = Math.max(2, Math.min(4,
+    private static final int TAG_THREADS = BuildConfig.Y1_ONLY ? 1 : Math.max(2, Math.min(4,
             Runtime.getRuntime().availableProcessors()));
+
+    static int tagThreadCount() {
+        return TAG_THREADS;
+    }
 
     private LibraryScanner() {}
 

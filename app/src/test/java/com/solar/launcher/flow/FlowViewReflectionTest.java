@@ -51,4 +51,20 @@ public class FlowViewReflectionTest {
         assertTrue(FlowView.shouldSkipCoverReflection(true, false, false, true));
         assertTrue(FlowView.shouldSkipCoverReflection(true, false, true, false));
     }
+
+    @Test
+    public void motionUsesCheaperReflectionBandsWithoutChangingSettledQuality() {
+        assertEquals(8, FlowView.reflectionBandCount(true, false));
+        assertEquals(6, FlowView.reflectionBandCount(false, false));
+        assertEquals(4, FlowView.reflectionBandCount(true, true));
+        assertEquals(3, FlowView.reflectionBandCount(false, true));
+    }
+
+    @Test
+    public void motionKeepsCenterShadowAndDropsOnlySideShadows() {
+        assertTrue(FlowView.shouldDrawSlotShadow(false, true));
+        assertTrue(FlowView.shouldDrawSlotShadow(false, false));
+        assertTrue(FlowView.shouldDrawSlotShadow(true, true));
+        assertFalse(FlowView.shouldDrawSlotShadow(true, false));
+    }
 }

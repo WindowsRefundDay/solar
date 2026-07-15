@@ -22,9 +22,9 @@ is_disabled() {
     pm list packages -d 2>/dev/null | grep -q "^package:${ROCKBOX_PKG}$"
 }
 
-# ponytail: try immediately at init.d; pm may not be ready until boot progresses — retry without blocking 90s first.
+# Deferred boot work owns this bounded retry; the foreground init.d entry never waits.
 i=0
-while [ "$i" -lt 120 ]; do
+while [ "$i" -lt 30 ]; do
     try_disable
     is_disabled && break
     sleep 1

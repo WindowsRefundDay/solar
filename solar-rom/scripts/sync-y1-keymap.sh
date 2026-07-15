@@ -18,7 +18,11 @@ if [ -f "$KPD" ]; then
 fi
 [ "$needs_write" -eq 0 ] && exit 0
 
-mount -o remount,rw /system 2>/dev/null || true
+mount -o remount,rw /system 2>/dev/null || exit 1
+remount_read_only() {
+    mount -o remount,ro /system 2>/dev/null
+}
+trap 'remount_read_only' 0 1 2 15
 for f in Generic.kl Stock.kl Rockbox.kl Y1-Rockbox.kl; do
     cmp -s "$SRC" "/system/usr/keylayout/$f" && continue
     cp "$SRC" "/system/usr/keylayout/$f"
@@ -34,3 +38,6 @@ if [ -f "$KPD" ]; then
         chmod 644 "$TPD"
     fi
 fi
+
+remount_read_only || exit 1
+trap - 0 1 2 15

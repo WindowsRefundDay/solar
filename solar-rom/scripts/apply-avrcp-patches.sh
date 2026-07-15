@@ -2,13 +2,18 @@
 # Apply Koensayr-style AVRCP patches to a mounted system partition (or sysroot).
 # Does NOT touch Y1-Rockbox.kl / hardware keylayouts.
 #
-# Usage: apply-avrcp-patches.sh <system_mount_root>
+# Usage: apply-avrcp-patches.sh <system_mount_root> <metadata|metadata+no-standby>
 set -euo pipefail
 
 die() { echo "apply-avrcp-patches: $*" >&2; exit 1; }
 
 MOUNT="${1:-}"
-[ -n "$MOUNT" ] || die "usage: apply-avrcp-patches.sh <system_mount_root>"
+PROFILE="${2:-metadata}"
+[ -n "$MOUNT" ] || die "usage: apply-avrcp-patches.sh <system_mount_root> <metadata|metadata+no-standby>"
+case "$PROFILE" in
+    metadata|metadata+no-standby) ;;
+    *) die "unknown AVRCP profile: $PROFILE" ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Vendored from koensayr (GPL-3) — reference/ is gitignored and absent in CI.
@@ -26,11 +31,8 @@ patch_in_place() {
     trap 'rm -rf "$stage"' RETURN
     cp "$src" "$stage/stock"
     echo "  patching $rel via $script"
-    if ! python3 "$KOENSAYR_PATCHES/$script" "$stage/stock" --output "$stage/patched" 2>/dev/null; then
-        python3 "$KOENSAYR_PATCHES/$script" "$stage/stock" --skip-md5 --output "$stage/patched" \
-            || die "$script failed for $rel"
-        echo "  WARN: $rel stock MD5 mismatch — used --skip-md5" >&2
-    fi
+    python3 "$KOENSAYR_PATCHES/$script" "$stage/stock" --output "$stage/patched" \
+        || die "$script rejected $rel (unknown input or output hash)"
     if [ -f "$stage/patched" ]; then
         cp "$stage/patched" "$src"
         chmod "$mode" "$src"
@@ -48,7 +50,11 @@ patch_in_place "app/MtkBt.odex" "patch_mtkbt_odex.py" 644
 patch_in_place "bin/mtkbt" "patch_mtkbt.py" 755
 patch_in_place "lib/libextavrcp_jni.so" "patch_libextavrcp_jni.py" 644
 patch_in_place "lib/libextavrcp.so" "patch_libextavrcp.py" 644
-patch_in_place "lib/libaudio.a2dp.default.so" "patch_libaudio_a2dp.py" 644
+if [ "$PROFILE" = "metadata+no-standby" ]; then
+    patch_in_place "lib/libaudio.a2dp.default.so" "patch_libaudio_a2dp.py" 644
+else
+    echo "  retaining stock libaudio.a2dp.default.so standby behavior"
+fi
 patch_in_place "usr/keylayout/AVRCP.kl" "patch_avrcp_kl.py" 644
 
 if [ -f "$Y1_BRIDGE_SRC" ]; then
@@ -58,7 +64,7 @@ if [ -f "$Y1_BRIDGE_SRC" ]; then
     chmod 644 "$MOUNT/app/Y1Bridge.apk"
     chown root:root "$MOUNT/app/Y1Bridge.apk" 2>/dev/null || true
 else
-    echo "WARN: Y1Bridge.apk not found at $Y1_BRIDGE_SRC — skip" >&2
+    die "Y1Bridge.apk not found at $Y1_BRIDGE_SRC"
 fi
 
 echo "==> AVRCP patch apply complete"

@@ -47,6 +47,8 @@ public final class Y1RomPrep {
                             "/system/etc/solar/disable-rockbox-for-solar.sh") ? 1 : 0;
                     patched += patchSwitchScript(context, "y1/solar-usb-recovery-agent.sh",
                             "/system/etc/solar/solar-usb-recovery-agent.sh") ? 1 : 0;
+                    patched += patchSwitchScript(context, "y1/solar-deferred-init.sh",
+                            "/system/etc/solar/solar-deferred-init.sh") ? 1 : 0;
                     patched += patchSwitchScript(context, "y1/Y1-Rockbox.kl",
                             "/system/etc/solar/Y1-Rockbox.kl") ? 1 : 0;
                     RockboxCoexistence.ensureOnSolarStart(context);
@@ -57,6 +59,7 @@ public final class Y1RomPrep {
                             + "/system/etc/solar/sync-rockbox-libs.sh /system/etc/solar/sync-y1-keymap.sh "
                             + "/system/etc/solar/disable-rockbox-for-solar.sh "
                             + "/system/etc/solar/solar-usb-recovery-agent.sh "
+                            + "/system/etc/solar/solar-deferred-init.sh "
                             + "2>/dev/null; chmod 644 /system/etc/solar/Y1-Rockbox.kl 2>/dev/null");
                     Log.i(TAG, "patched " + patched + "/4 switch script paths"
                             + (legacy ? " (replaced legacy rockbox-y1 script)" : ""));

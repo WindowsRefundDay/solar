@@ -25,6 +25,10 @@ public final class DeezerDownloader {
     public static final int EARLY_PLAY_PERCENT = 10;
     /** Fallback when Content-Length is unknown — still start before full file. */
     private static final long PARTIAL_READY_MIN_BYTES = 128 * 1024;
+    /** Bound progress delivery before callers post it onto the UI thread. */
+    static final long PROGRESS_MIN_INTERVAL_MS = 250L;
+    static final long PROGRESS_MIN_BYTES = 64L * 1024L;
+    private static final int DEEZER_BLOCK_SIZE = 2048;
 
     private final DeezerClient client;
     private final DeezerTrackResolver resolver;
@@ -42,6 +46,19 @@ public final class DeezerDownloader {
         if (alreadyFired || done <= 0) return false;
         if (total > 0 && done * 100 / total >= EARLY_PLAY_PERCENT) return true;
         return total <= 0 && done >= PARTIAL_READY_MIN_BYTES;
+    }
+
+    static boolean shouldNotifyProgress(long done, long total, long lastDone, int lastPercent,
+            long nowMs, long lastNotifyMs) {
+        if (done <= 0) return false;
+        if (total > 0 && done >= total) return true;
+        if (nowMs - lastNotifyMs < PROGRESS_MIN_INTERVAL_MS
+                || done - lastDone < PROGRESS_MIN_BYTES) {
+            return false;
+        }
+        if (total <= 0) return true;
+        int percent = (int) (done * 100 / total);
+        return percent != lastPercent;
     }
 
     public void cancel() {
@@ -156,8 +173,11 @@ public final class DeezerDownloader {
             int lastNotifyPct = -1;
             boolean partialFired = false;
 
-            java.io.ByteArrayOutputStream blockBuf = new java.io.ByteArrayOutputStream(2048);
+            byte[] block = new byte[DEEZER_BLOCK_SIZE];
+            byte[] decryptedBlock = new byte[DEEZER_BLOCK_SIZE];
+            int blockFill = 0;
             int blockIndex = 0;
+            long lastNotifyMs = System.currentTimeMillis();
             String keyStr = DeezerDecrypt.calcBfKey(sngId);
             javax.crypto.Cipher cipher = javax.crypto.Cipher.getInstance("Blowfish/CBC/NoPadding");
             cipher.init(javax.crypto.Cipher.DECRYPT_MODE,
@@ -166,53 +186,54 @@ public final class DeezerDownloader {
             int n;
             while ((n = in.read(buf)) != -1) {
                 if (cancel.get()) throw new IOException("Cancelled");
-                blockBuf.write(buf, 0, n);
-                while (blockBuf.size() >= 2048) {
-                    byte[] block = blockBuf.toByteArray();
-                    byte[] chunk = new byte[2048];
-                    System.arraycopy(block, 0, chunk, 0, 2048);
-                    byte[] remainder = new byte[block.length - 2048];
-                    if (remainder.length > 0) {
-                        System.arraycopy(block, 2048, remainder, 0, remainder.length);
-                    }
-                    blockBuf.reset();
-                    if (remainder.length > 0) blockBuf.write(remainder, 0, remainder.length);
+                int offset = 0;
+                while (offset < n) {
+                    int copy = Math.min(DEEZER_BLOCK_SIZE - blockFill, n - offset);
+                    System.arraycopy(buf, offset, block, blockFill, copy);
+                    blockFill += copy;
+                    offset += copy;
+                    if (blockFill < DEEZER_BLOCK_SIZE) continue;
+
                     if ((blockIndex % 3) == 0) {
-                        chunk = cipher.doFinal(chunk);
+                        int decryptedLength = cipher.doFinal(block, 0, DEEZER_BLOCK_SIZE,
+                                decryptedBlock, 0);
+                        rawOut.write(decryptedBlock, 0, decryptedLength);
+                    } else {
+                        rawOut.write(block, 0, DEEZER_BLOCK_SIZE);
                     }
-                    rawOut.write(chunk);
-                    read += chunk.length;
+                    read += DEEZER_BLOCK_SIZE;
                     blockIndex++;
+                    blockFill = 0;
                     if (listener != null) {
-                        final long totalBytes = total > 0 ? total : read;
-                        final int pct = total > 0 ? (int) (read * 100 / totalBytes) : -1;
-                        if (shouldFirePartialReady(read, totalBytes, partialFired)) {
+                        final int pct = total > 0 ? (int) (read * 100 / total) : -1;
+                        if (shouldFirePartialReady(read, total, partialFired)) {
                             partialFired = true;
                             rawOut.flush();
                             listener.onPartialReady(dest, read);
                         }
-                        if (read >= totalBytes || pct != lastNotifyPct
-                                && (pct < 0 || pct % 5 == 0 || read - lastNotifyDone >= 65536)) {
-                            listener.onProgress(read, totalBytes);
+                        long nowMs = System.currentTimeMillis();
+                        if (shouldNotifyProgress(read, total, lastNotifyDone, lastNotifyPct,
+                                nowMs, lastNotifyMs)) {
+                            listener.onProgress(read, total);
                             lastNotifyDone = read;
                             lastNotifyPct = pct;
+                            lastNotifyMs = nowMs;
                         }
                     }
                 }
             }
-            if (blockBuf.size() > 0) {
-                byte[] tail = blockBuf.toByteArray();
-                if ((blockIndex % 3) == 0 && tail.length == 2048) {
-                    tail = cipher.doFinal(tail);
-                }
-                rawOut.write(tail);
-                read += tail.length;
+            if (blockFill > 0) {
+                // Deezer encrypts only complete 2048-byte blocks. A short final block is raw.
+                rawOut.write(block, 0, blockFill);
+                read += blockFill;
             }
             rawOut.flush();
             rawOut.close();
             rawOut = null;
             if (listener != null) {
-                listener.onProgress(read, total > 0 ? total : read);
+                if (lastNotifyDone != read) {
+                    listener.onProgress(read, total > 0 ? total : read);
+                }
                 listener.onComplete(dest, track);
             }
         } catch (Exception e) {

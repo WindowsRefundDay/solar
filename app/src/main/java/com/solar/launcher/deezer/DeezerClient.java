@@ -49,6 +49,13 @@ public final class DeezerClient {
         return sessionValid && licenseToken != null && !licenseToken.isEmpty();
     }
 
+    /** Force the next request to obtain a fresh license token using the current ARL. */
+    public void invalidateSession() {
+        sessionValid = false;
+        licenseToken = "";
+        apiToken = "";
+    }
+
     public String soundFormat() {
         return soundFormat;
     }
@@ -85,12 +92,12 @@ public final class DeezerClient {
     /** Use bundled/demo ARL for this session only — cleared via {@link #clearArlOverride()}. */
     public void setArlOverride(String arl) {
         arlOverride = arl != null && arl.trim().length() >= 64 ? arl.trim() : null;
-        sessionValid = false;
+        invalidateSession();
     }
 
     public void clearArlOverride() {
         arlOverride = null;
-        sessionValid = false;
+        invalidateSession();
     }
 
     public boolean isUsingArlOverride() {

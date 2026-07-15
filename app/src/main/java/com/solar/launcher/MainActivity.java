@@ -158,6 +158,9 @@ public class MainActivity extends Activity {
     private static final String OTA_UPDATES_URL = BuildConfig.OTA_UPDATES_URL;
 
     public static final java.util.concurrent.ExecutorService IO_EXECUTOR = java.util.concurrent.Executors.newSingleThreadExecutor();
+    private final java.util.concurrent.ExecutorService libraryMaintenanceExecutor =
+            java.util.concurrent.Executors.newSingleThreadExecutor(
+                    new LowPriorityThreadFactory("LibraryMaintenance"));
     private static final android.view.animation.DecelerateInterpolator DECELERATE = new android.view.animation.DecelerateInterpolator();
     private SimpleDateFormat statusClockFormat;
     private SimpleDateFormat widgetTimeFormat;
@@ -165,6 +168,7 @@ public class MainActivity extends Activity {
     private boolean cachedClockIs24Hour;
     private int cachedBatteryLevel;
     private boolean cachedBatteryCharging;
+    private boolean cachedBatteryUsbPowered;
     private boolean batteryReceiverRegistered;
     private boolean systemStatusReceiverRegistered;
     private boolean systemStatusMediaReceiverRegistered;
@@ -175,8 +179,10 @@ public class MainActivity extends Activity {
             int level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
             int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
             int status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
+            int plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0);
             if (level >= 0 && scale > 0) cachedBatteryLevel = (int) ((level / (float) scale) * 100);
             cachedBatteryCharging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL;
+            cachedBatteryUsbPowered = plugged == BatteryManager.BATTERY_PLUGGED_USB;
         }
     };
     private final WheelPhysics wheelPhysics = new WheelPhysics();
@@ -547,7 +553,7 @@ public class MainActivity extends Activity {
     /** Index into {@link InactivityShutdownConfig#SHUTDOWN_MINUTES}. */
     private int inactivityShutdownIndex;
     /** Timestamp of last user interaction (key press, touch). */
-    private volatile long lastUserInteractionMs = System.currentTimeMillis();
+    private volatile long lastUserInteractionMs = android.os.SystemClock.elapsedRealtime();
     private final Handler inactivityHandler = new Handler(android.os.Looper.getMainLooper());
     private final Runnable inactivityCheckRunnable = new Runnable() {
         @Override
@@ -2185,6 +2191,7 @@ public class MainActivity extends Activity {
         // ponytail: ensure org.rockbox is disabled while Solar is the active launcher.
         // Both are registered as launchers — only one should be enabled at a time.
         LauncherSwitch.ensureRockboxDisabled(this);
+        LauncherSwitch.repairUsbStorageActivityIfDisabled(this);
 
         // ponytail: Force Y2 to run in Landscape orientation 480x360p.
         if (DeviceFeatures.isY2()) {
@@ -2256,10 +2263,12 @@ public class MainActivity extends Activity {
                 lastHandledState = connected;
 
                 if (connected) {
+                    resetInactivityTimer();
                     if (usbFocusHelper != null && usbFocusHelper.isUserDeclinedHostSession()) {
                         usbDialogDismissedThisConnection = true;
                         usbDialogShownThisConnection = true;
                         usbEnablePromptSession = false;
+                        UsbRecoveryAgent.ensureRunning(MainActivity.this, true, true, false);
                         // #region agent log
                         try {
                             org.json.JSONObject d = new org.json.JSONObject();
@@ -2315,6 +2324,7 @@ public class MainActivity extends Activity {
 
             @Override
             public void onChargerOnlyConnected() {
+                resetInactivityTimer();
                 maybeShowUsbConnectionPrompt(null);
             }
 
@@ -3559,6 +3569,8 @@ public class MainActivity extends Activity {
         int level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
         int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
         int status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
+        int plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0);
+        cachedBatteryUsbPowered = plugged == BatteryManager.BATTERY_PLUGGED_USB;
         boolean isCharging = (status == BatteryManager.BATTERY_STATUS_CHARGING
                 || status == BatteryManager.BATTERY_STATUS_FULL);
         int batteryPct = scale > 0 ? (int) ((level / (float) scale) * 100) : 0;
@@ -6340,10 +6352,14 @@ public class MainActivity extends Activity {
     }
 
     private void updateMainMenuBackground() {
+        updateMainMenuBackground(false);
+    }
+
+    private void updateMainMenuBackground(boolean playerBlurAlreadyBound) {
         if (currentScreenState == STATE_MENU) {
             updateScreenBackground(STATE_MENU);
         } else if (currentScreenState == STATE_PLAYER) {
-            updateScreenBackground(STATE_PLAYER);
+            updateScreenBackground(STATE_PLAYER, !playerBlurAlreadyBound);
         }
     }
 
@@ -6413,13 +6429,17 @@ public class MainActivity extends Activity {
     }
 
     private void updateScreenBackground(int screenState) {
+        updateScreenBackground(screenState, true);
+    }
+
+    private void updateScreenBackground(int screenState, boolean bindPlayerBlur) {
         if (ivMainBg == null) return;
         try {
             applyOverlayBackgrounds();
             com.solar.launcher.ui.ScreenBackdropTransition.BackdropSnapshot snap =
                     resolveBackdropSnapshot(screenState);
             applyBackdropSnapshot(snap, ivMainBg, ivScreenMask);
-            if (screenState == STATE_PLAYER) {
+            if (screenState == STATE_PLAYER && bindPlayerBlur) {
                 bindPlayerBlurBackdrop();
             }
             refreshRightPanePreviewLayout();
@@ -12490,6 +12510,11 @@ public class MainActivity extends Activity {
         return false;
     }
 
+    private boolean runRebootCommand(String reason, String command) {
+        RebootBreadcrumb.record(this, reason, command);
+        return runSuCommandSilently(command);
+    }
+
     private static String shQuote(String s) {
         return "'" + s.replace("'", "'\\''") + "'";
     }
@@ -15243,10 +15268,14 @@ public class MainActivity extends Activity {
 
     /** Power off via su — same path as inactivity auto-shutdown. */
     private void performDeviceShutdown() {
+        performDeviceShutdown("manual-shutdown");
+    }
+
+    private void performDeviceShutdown(final String reason) {
         new Thread(new Runnable() {
             @Override
             public void run() {
-                runSuCommandSilently("reboot -p");
+                runRebootCommand(reason, "reboot -p");
             }
         }, "SolarShutdown").start();
     }
@@ -15256,7 +15285,7 @@ public class MainActivity extends Activity {
         new Thread(new Runnable() {
             @Override
             public void run() {
-                runSuCommandSilently("reboot");
+                runRebootCommand("manual-restart", "reboot");
             }
         }, "SolarRestart").start();
     }
@@ -15265,7 +15294,7 @@ public class MainActivity extends Activity {
 
     /** Reset the inactivity timer — call on any user interaction. */
     private void resetInactivityTimer() {
-        lastUserInteractionMs = System.currentTimeMillis();
+        lastUserInteractionMs = android.os.SystemClock.elapsedRealtime();
     }
 
     /** Start the periodic inactivity check loop. */
@@ -15288,20 +15317,18 @@ public class MainActivity extends Activity {
         int minutes = inactivityShutdownMinutes();
         if (minutes <= 0) return;
 
-        // Don't shut down if media is playing
         boolean playing = false;
         try { playing = mediaPlayer != null && mediaPlayer.isPlaying(); } catch (Exception ignored) {}
         if (playing) {
-            // Media is playing — reset timer so shutdown won't happen immediately after playback stops
             resetInactivityTimer();
             return;
         }
 
-        // Don't shut down if USB storage mode is active
-        if (currentScreenState == STATE_USB_STORAGE) return;
-
-        long idleMs = System.currentTimeMillis() - lastUserInteractionMs;
-        if (idleMs >= InactivityShutdownConfig.shutdownDelayMs(minutes)) {
+        boolean usbConnected = cachedBatteryUsbPowered
+                || (usbFocusHelper != null && usbFocusHelper.isUsbConnected());
+        if (InactivityShutdownPolicy.shouldShutdown(minutes, false, usbConnected,
+                currentScreenState == STATE_USB_STORAGE,
+                android.os.SystemClock.elapsedRealtime(), lastUserInteractionMs)) {
             performInactivityShutdown();
         }
     }
@@ -15353,7 +15380,7 @@ public class MainActivity extends Activity {
         inactivityHandler.postDelayed(new Runnable() {
             @Override
             public void run() {
-                performDeviceShutdown();
+                performDeviceShutdown("inactivity-shutdown");
             }
         }, 1000);
     }
@@ -19602,7 +19629,9 @@ public class MainActivity extends Activity {
         if (usbFocusHelper != null) {
             usbFocusHelper.setInterceptPaused(true);
         }
-        UsbRecoveryAgent.ensureRunning(this);
+        boolean hostConnected = usbFocusHelper != null && usbFocusHelper.isHostConnected();
+        boolean declined = usbFocusHelper != null && usbFocusHelper.isUserDeclinedHostSession();
+        UsbRecoveryAgent.ensureRunning(this, hostConnected, declined, isUsbMassStorageActive());
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
@@ -28544,12 +28573,12 @@ public class MainActivity extends Activity {
                 }
             });
         }
-        new Thread(new Runnable() {
+        libraryMaintenanceExecutor.execute(new Runnable() {
             @Override
             public void run() {
                 runLibraryScanWorker(gen, userInitiated);
             }
-        }, "LibraryScan").start();
+        });
     }
 
     private void runLibraryScanWorker(final int gen, final boolean userInitiated) {
@@ -28748,12 +28777,12 @@ public class MainActivity extends Activity {
 
     /** Background 240px JPEG ingest — must not extend library scan worker lifetime. */
     private void scheduleAlbumArtIngestAsync(final int gen, final boolean allowStampSkip) {
-        new Thread(new Runnable() {
+        libraryMaintenanceExecutor.execute(new Runnable() {
             @Override
             public void run() {
                 buildAlbumArtCacheAfterScan(gen, allowStampSkip);
             }
-        }, "AlbumArtIngest").start();
+        });
     }
 
     private void reconcileCustomLibrary(java.util.ArrayList<SongItem> scanned) {
@@ -28918,7 +28947,7 @@ public class MainActivity extends Activity {
                 }
             });
         }
-        new Thread(new Runnable() {
+        libraryMaintenanceExecutor.execute(new Runnable() {
             @Override
             public void run() {
                 buildAlbumArtCacheAfterScan(gen);
@@ -28932,7 +28961,7 @@ public class MainActivity extends Activity {
                     }
                 });
             }
-        }, "AlbumArtRebuild").start();
+        });
     }
 
     /** Flow / library browse / Now Playing refresh after disk art cache ingest. */
@@ -38091,7 +38120,7 @@ public class MainActivity extends Activity {
                 final boolean ok = installSystemApk(apkFile);
                 final boolean replaced = ok || systemApkMatchesDownload(apkFile);
                 if (replaced) {
-                    runSuCommandSilently("reboot");
+                    runRebootCommand("ota-system-apk-replace", "reboot");
                     return;
                 }
                 runOnUiThread(new Runnable() {
@@ -38155,7 +38184,7 @@ public class MainActivity extends Activity {
         new Handler().postDelayed(new Runnable() {
             @Override
             public void run() {
-                runSuCommandSilently("reboot");
+                runRebootCommand("ota-reboot", "reboot");
             }
         }, 400);
     }
@@ -38316,6 +38345,7 @@ public class MainActivity extends Activity {
         playback.setMusicIndex(index);
         invalidateWavFallback();
         final File track = playback.musicPlaylist().get(index);
+        final long preparationGeneration = beginMusicPreparation();
         lastAlbumArtBytes = null;
         currentAlbumColor = ThemeManager.getListButtonFocusedBg() | 0xFF000000;
         // 🚀 [추가된 부분] 손상된 파일 방어막: 파일이 없거나 용량이 1KB(1024 bytes) 미만인 껍데기 파일일 경우
@@ -38373,105 +38403,8 @@ public class MainActivity extends Activity {
         tvPlayerTimeCurrent.setText("00:00");
         tvPlayerTimeTotal.setText("00:00");
 
-        try {
-            final AudioTags.Info tags = AudioTags.read(track, prefs);
-            String t = tags.title;
-            String a = tags.artist;
-            String al = tags.album;
-            lastAlbumArtBytes = tags.embeddedArt;
-
-            String safeFileName = track.getName().replace(".mp3", "").replace(".flac", "").replace(".wav", "").replace(".m4a", "");
-            File coverFile = coverFileForTrack(track);
-            final String trackPath = track.getAbsolutePath();
-            final boolean hasDeezerMeta = DeezerMetadata.hasMetadata(prefs, trackPath)
-                    || DeezerCache.isTempFile(streamAppCacheRoot(), track);
-
-            boolean hasValidTags = AudioTags.hasValidTags(tags);
-
-            // #region agent log
-            try {
-                org.json.JSONObject d = new org.json.JSONObject();
-                d.put("file", track.getName());
-                d.put("title", t);
-                d.put("artist", a);
-                d.put("album", al);
-                d.put("artistSource", tags.artistSource);
-                d.put("hasValidTags", hasValidTags);
-                d.put("hasEmbeddedArt", lastAlbumArtBytes != null && lastAlbumArtBytes.length > 0);
-                d.put("hasCachedCover", coverFile.exists());
-                DebugAgentLog.log(this, "MainActivity.prepareMusicTrack", "player tags", "H-B", d);
-            } catch (Exception ignored) {}
-            // #endregion
-
-            // 제목 화면에 표시
-            if (t != null && !t.trim().isEmpty()) tvPlayerTitle.setText(t);
-            else tvPlayerTitle.setText(safeFileName);
-
-            // 가수 / 앨범 — separate Now Playing lines
-            if (a != null && !a.trim().isEmpty()) {
-                tvPlayerArtist.setText(a);
-            } else {
-                tvPlayerArtist.setText("Unknown Artist");
-            }
-            if (al != null && !al.trim().isEmpty() && !"Unknown Album".equalsIgnoreCase(al.trim())) {
-                if (tvPlayerAlbum != null) tvPlayerAlbum.setText(al);
-            } else {
-                clearNowPlayingAlbumLine();
-            }
-            refreshPlayerMarquee();
-
-            // 2. 앨범 아트 세팅 및 인터넷 검색
-            if (lastAlbumArtBytes != null) {
-                // 원본 파일에 앨범 아트가 있으면 그대로 사용
-                updateMainMenuBackground();
-                refreshNowPlayingPreview();
-                try {
-                    android.graphics.BitmapFactory.Options optsCenter = new android.graphics.BitmapFactory.Options();
-                    optsCenter.inSampleSize = 2;
-                    android.graphics.Bitmap bmpCenter = android.graphics.BitmapFactory.decodeByteArray(lastAlbumArtBytes, 0, lastAlbumArtBytes.length, optsCenter);
-                    bindPlayerAlbumArt(bmpCenter);
-                    try {
-                        int centerX = bmpCenter.getWidth() / 2;
-                        int centerY = (int)(bmpCenter.getHeight() * 0.8);
-                        currentAlbumColor = bmpCenter.getPixel(centerX, centerY) | 0xFF000000;
-                    } catch (Exception e) {
-                        currentAlbumColor = ThemeManager.getListButtonFocusedBg() | 0xFF000000;
-                    }
-                    if (playerAlbumBlurEnabled) {
-                        android.graphics.BitmapFactory.Options optsBg = new android.graphics.BitmapFactory.Options();
-                        optsBg.inSampleSize = 4;
-                        android.graphics.Bitmap sourceBg = android.graphics.BitmapFactory.decodeByteArray(lastAlbumArtBytes, 0, lastAlbumArtBytes.length, optsBg);
-                        android.graphics.Bitmap blurredBg = preparePlayerBackdrop(sourceBg);
-                        ivPlayerBgBlur.setImageBitmap(blurredBg);
-                        if (sourceBg != blurredBg) sourceBg.recycle();
-                    } else {
-                        ivPlayerBgBlur.setImageResource(0);
-                    }
-                } catch (Throwable e) {}
-                maybeAutoFetchTrackInfo(track, tags, safeFileName, hasDeezerMeta);
-
-            } else if (coverFile.exists()) {
-                // 다운받아둔 앨범 아트가 있으면 사용
-                applyCachedCoverArt(coverFile.getAbsolutePath());
-                maybeAutoFetchTrackInfo(track, tags, safeFileName, hasDeezerMeta);
-
-            } else {
-                final String deezerCoverUrl = DeezerMetadata.coverUrl(prefs, trackPath);
-                if (deezerCoverUrl != null && !deezerCoverUrl.isEmpty()) {
-                    fetchDeezerCoverArt(track, deezerCoverUrl, coverFile);
-                } else {
-
-                setPlayerDefaultAlbumArt();
-                currentAlbumColor = ThemeManager.getListButtonFocusedBg() | 0xFF000000;
-                ivPlayerBgBlur.setImageResource(0); // 뒷배경 블러 비우기
-                updateMainMenuBackground();
-                refreshNowPlayingPreview();
-                maybeAutoFetchTrackInfo(track, tags, safeFileName, hasDeezerMeta);
-                }
-            }
-
-        } catch (Throwable t) {
-        }
+        scheduleMusicTrackPresentation(track, preparationGeneration, playerAlbumBlurEnabled,
+                ThemeManager.getListButtonFocusedBg() | 0xFF000000);
 
         if (WavFallback.needsFallback(track)) {
             // 24-bit / 32-bit / float WAV — StageFright rejects these on API 17, so play a
@@ -38492,6 +38425,224 @@ public class MainActivity extends Activity {
             return;
         }
         startMusicMediaPlayer(track, track);
+    }
+
+    private final java.util.concurrent.ThreadPoolExecutor musicPreparationExecutor =
+            createMusicPreparationExecutor();
+
+    static java.util.concurrent.ThreadPoolExecutor createMusicPreparationExecutor() {
+        return new java.util.concurrent.ThreadPoolExecutor(
+                1, 1, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+                new java.util.concurrent.ArrayBlockingQueue<Runnable>(1),
+                new java.util.concurrent.ThreadFactory() {
+                private int nextId;
+
+                @Override
+                public Thread newThread(Runnable runnable) {
+                    Thread thread = new Thread(runnable, "MusicPrepare-" + (++nextId));
+                    thread.setDaemon(true);
+                    return thread;
+                }
+            }, new java.util.concurrent.ThreadPoolExecutor.DiscardOldestPolicy());
+    }
+    private java.util.concurrent.Future<?> pendingMusicPreparation;
+    private volatile long musicPreparationGeneration;
+
+    /** Invalidate the previous track's metadata/art result before starting any storage work. */
+    private long beginMusicPreparation() {
+        musicPreparationGeneration++;
+        if (pendingMusicPreparation != null) {
+            pendingMusicPreparation.cancel(true);
+            pendingMusicPreparation = null;
+        }
+        return musicPreparationGeneration;
+    }
+
+    /** UI-thread ownership check for metadata/artwork prepared asynchronously. */
+    private boolean isCurrentMusicPreparation(long generation, File track) {
+        File current = playback.musicPlaylist().isEmpty()
+                ? null : playback.musicPlaylist().get(playback.musicIndex());
+        return playbackPreparationMatches(generation, musicPreparationGeneration,
+                track != null ? track.getAbsolutePath() : null,
+                current != null ? current.getAbsolutePath() : null,
+                playback.isMusicActive());
+    }
+
+    static boolean playbackPreparationMatches(long resultGeneration, long currentGeneration,
+            String resultPath, String currentPath, boolean musicActive) {
+        return musicActive && resultGeneration == currentGeneration && resultPath != null
+                && resultPath.equals(currentPath);
+    }
+
+    private static final class MusicTrackPresentation {
+        AudioTags.Info tags;
+        String safeFileName;
+        File coverFile;
+        String deezerCoverUrl;
+        boolean hasDeezerMeta;
+        byte[] artBytes;
+        Bitmap centerArt;
+        Bitmap backdropSource;
+        Bitmap backdrop;
+        int albumColor;
+    }
+
+    /** Metadata retrieval and bitmap allocation stay off Dalvik's UI thread. */
+    private void scheduleMusicTrackPresentation(final File track, final long generation,
+            final boolean prepareBackdrop, final int defaultAlbumColor) {
+        pendingMusicPreparation = musicPreparationExecutor.submit(new Runnable() {
+            @Override
+            public void run() {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND);
+                final MusicTrackPresentation result = loadMusicTrackPresentation(
+                        track, generation, prepareBackdrop, defaultAlbumColor);
+                if (generation != musicPreparationGeneration) {
+                    recycleMusicTrackPresentation(result);
+                    return;
+                }
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (!isActivityAlive() || !isCurrentMusicPreparation(generation, track)) {
+                            recycleMusicTrackPresentation(result);
+                            return;
+                        }
+                        pendingMusicPreparation = null;
+                        applyMusicTrackPresentation(track, generation, result);
+                    }
+                });
+            }
+        });
+    }
+
+    private MusicTrackPresentation loadMusicTrackPresentation(File track, long generation,
+            boolean prepareBackdrop, int defaultAlbumColor) {
+        MusicTrackPresentation result = new MusicTrackPresentation();
+        result.safeFileName = AudioTags.titleFromFileName(track.getName());
+        result.coverFile = coverFileForTrack(track);
+        result.albumColor = defaultAlbumColor;
+        try {
+            if (generation != musicPreparationGeneration) return result;
+            result.tags = AudioTags.read(track, prefs);
+            if (generation != musicPreparationGeneration) return result;
+            String path = track.getAbsolutePath();
+            result.hasDeezerMeta = DeezerMetadata.hasMetadata(prefs, path)
+                    || DeezerCache.isTempFile(streamAppCacheRoot(), track);
+            result.deezerCoverUrl = DeezerMetadata.coverUrl(prefs, path);
+            if (result.tags.embeddedArt != null && result.tags.embeddedArt.length > 0) {
+                result.artBytes = result.tags.embeddedArt;
+                decodeMusicTrackArtwork(result, null, generation, prepareBackdrop);
+            } else if (result.coverFile.isFile()) {
+                result.artBytes = readCoverJpegBytes(result.coverFile);
+                decodeMusicTrackArtwork(result, result.coverFile.getAbsolutePath(), generation,
+                        prepareBackdrop);
+            }
+        } catch (Throwable ignored) {
+            if (result.tags == null) result.tags = new AudioTags.Info();
+        }
+        return result;
+    }
+
+    private void decodeMusicTrackArtwork(MusicTrackPresentation result, String imagePath,
+            long generation, boolean prepareBackdrop) {
+        if (generation != musicPreparationGeneration) return;
+        BitmapFactory.Options centerOptions = new BitmapFactory.Options();
+        centerOptions.inSampleSize = 2;
+        centerOptions.inPreferredConfig = Bitmap.Config.RGB_565;
+        if (imagePath != null) {
+            result.centerArt = BitmapFactory.decodeFile(imagePath, centerOptions);
+        } else {
+            result.centerArt = BitmapFactory.decodeByteArray(
+                    result.artBytes, 0, result.artBytes.length, centerOptions);
+        }
+        if (result.centerArt != null) {
+            try {
+                result.albumColor = result.centerArt.getPixel(result.centerArt.getWidth() / 2,
+                        (int) (result.centerArt.getHeight() * 0.8f)) | 0xFF000000;
+            } catch (Throwable ignored) {}
+        }
+        if (!prepareBackdrop || generation != musicPreparationGeneration) return;
+        BitmapFactory.Options backdropOptions = new BitmapFactory.Options();
+        backdropOptions.inSampleSize = 4;
+        backdropOptions.inPreferredConfig = Bitmap.Config.RGB_565;
+        if (imagePath != null) {
+            result.backdropSource = BitmapFactory.decodeFile(imagePath, backdropOptions);
+        } else {
+            result.backdropSource = BitmapFactory.decodeByteArray(
+                    result.artBytes, 0, result.artBytes.length, backdropOptions);
+        }
+        if (result.backdropSource != null) {
+            if (generation != musicPreparationGeneration) return;
+            result.backdrop = preparePlayerBackdrop(result.backdropSource);
+        }
+    }
+
+    private void applyMusicTrackPresentation(File track, long generation,
+            MusicTrackPresentation result) {
+        AudioTags.Info tags = result.tags != null ? result.tags : new AudioTags.Info();
+        tvPlayerTitle.setText(tags.title != null && !tags.title.trim().isEmpty()
+                ? tags.title : result.safeFileName);
+        tvPlayerArtist.setText(tags.artist != null && !tags.artist.trim().isEmpty()
+                ? tags.artist : "Unknown Artist");
+        if (tags.album != null && !tags.album.trim().isEmpty()
+                && !"Unknown Album".equalsIgnoreCase(tags.album.trim())) {
+            if (tvPlayerAlbum != null) tvPlayerAlbum.setText(tags.album);
+        } else {
+            clearNowPlayingAlbumLine();
+        }
+        refreshPlayerMarquee();
+        syncVisualizerMetadata();
+
+        // #region agent log
+        try {
+            org.json.JSONObject d = new org.json.JSONObject();
+            d.put("file", track.getName());
+            d.put("title", tags.title);
+            d.put("artist", tags.artist);
+            d.put("album", tags.album);
+            d.put("artistSource", tags.artistSource);
+            d.put("hasValidTags", AudioTags.hasValidTags(tags));
+            d.put("hasEmbeddedArt", tags.embeddedArt != null && tags.embeddedArt.length > 0);
+            d.put("hasCachedCover", result.coverFile != null && result.coverFile.isFile());
+            DebugAgentLog.log(this, "MainActivity.prepareMusicTrack", "player tags", "H-B", d);
+        } catch (Exception ignored) {}
+        // #endregion
+
+        if (result.centerArt != null) {
+            lastAlbumArtBytes = result.artBytes;
+            currentAlbumColor = result.albumColor;
+            bindPlayerAlbumArt(result.centerArt);
+            if (playerAlbumBlurEnabled && result.backdrop != null && ivPlayerBgBlur != null) {
+                ivPlayerBgBlur.setImageBitmap(result.backdrop);
+            } else if (ivPlayerBgBlur != null) {
+                ivPlayerBgBlur.setImageResource(0);
+            }
+            if (result.backdropSource != null && result.backdropSource != result.backdrop) {
+                result.backdropSource.recycle();
+                result.backdropSource = null;
+            }
+            refreshNowPlayingPreview(result.centerArt);
+        } else if (result.deezerCoverUrl != null && !result.deezerCoverUrl.isEmpty()) {
+            fetchDeezerCoverArt(track, result.deezerCoverUrl, result.coverFile);
+        } else {
+            setPlayerDefaultAlbumArt();
+            currentAlbumColor = ThemeManager.getListButtonFocusedBg() | 0xFF000000;
+            if (ivPlayerBgBlur != null) ivPlayerBgBlur.setImageResource(0);
+        }
+        updateMainMenuBackground(true);
+        maybeAutoFetchTrackInfo(track, tags, result.safeFileName, result.hasDeezerMeta);
+    }
+
+    private static void recycleMusicTrackPresentation(MusicTrackPresentation result) {
+        if (result == null) return;
+        if (result.centerArt != null && !result.centerArt.isRecycled()) result.centerArt.recycle();
+        if (result.backdrop != null && result.backdrop != result.backdropSource
+                && !result.backdrop.isRecycled()) {
+            result.backdrop.recycle();
+        }
+        if (result.backdropSource != null && !result.backdropSource.isRecycled()) {
+            result.backdropSource.recycle();
+        }
     }
 
     private WavFallback wavFallback;
@@ -38634,32 +38785,10 @@ public class MainActivity extends Activity {
                         }
                         tvPlayerTimeTotal.setText(formatTime(mp.getDuration()));
                         updateMusicTrackCountUi();
-                        try {
-                            final AudioTags.Info preparedTags = AudioTags.read(track, prefs);
-                            if (preparedTags.title != null && !preparedTags.title.trim().isEmpty()) {
-                                tvPlayerTitle.setText(preparedTags.title);
-                            }
-                            if (preparedTags.artist != null && !preparedTags.artist.trim().isEmpty()) {
-                                tvPlayerArtist.setText(preparedTags.artist);
-                            }
-                            if (preparedTags.album != null && !preparedTags.album.trim().isEmpty()
-                                    && !"Unknown Album".equalsIgnoreCase(preparedTags.album.trim())) {
-                                if (tvPlayerAlbum != null) tvPlayerAlbum.setText(preparedTags.album);
-                            }
-                            refreshPlayerMarquee();
-                            syncVisualizerMetadata();
-                            // #region agent log
-                            try {
-                                org.json.JSONObject d = new org.json.JSONObject();
-                                d.put("file", track.getName());
-                                d.put("title", preparedTags.title);
-                                d.put("artist", preparedTags.artist);
-                                d.put("album", preparedTags.album);
-                                DebugAgentLog.log(MainActivity.this, "MainActivity.onPrepared",
-                                        "prepared tags", "H-B", d);
-                            } catch (Exception ignored) {}
-                            // #endregion
-                        } catch (Exception ignored) {}
+                        // Metadata/artwork are prepared once on the dedicated background worker.
+                        // If they have not arrived yet, its generation-owned UI commit refreshes
+                        // both player and visualizer labels without blocking this callback.
+                        syncVisualizerMetadata();
                         if (!isPausedByHand) {
                             mp.start();
                             applyPlaybackSpeed();
@@ -40575,7 +40704,6 @@ public class MainActivity extends Activity {
         if (isScreenInteractive()) {
             maybeRestoreWifiAfterSleepPolicy();
         }
-        UsbRecoveryAgent.ensureRunning(this);
         if (usbFocusHelper != null) usbFocusHelper.onResume();
         if (usbFocusHelper != null && usbFocusHelper.isHostConnected()
                 && !usbDialogDismissedThisConnection
@@ -40638,6 +40766,29 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
     }
 
+    /** Release every Activity-owned main-loop callback in one place before view teardown. */
+    private void clearOwnedUiCallbacks() {
+        if (settingsPreviewScrollHandler != null) {
+            settingsPreviewScrollHandler.removeCallbacksAndMessages(null);
+        }
+        inactivityHandler.removeCallbacksAndMessages(null);
+        themePreviewHandler.removeCallbacksAndMessages(null);
+        soulseekUiHandler.removeCallbacksAndMessages(null);
+        startupMountHandler.removeCallbacksAndMessages(null);
+        persistQueueHandler.removeCallbacksAndMessages(null);
+        wifiContextRefreshHandler.removeCallbacksAndMessages(null);
+        wifiContextScanFollowUpHandler.removeCallbacksAndMessages(null);
+        wifiContextScanDebounceHandler.removeCallbacksAndMessages(null);
+        btContextRefreshHandler.removeCallbacksAndMessages(null);
+        networkRescanHandler.removeCallbacksAndMessages(null);
+        connectivityUiDebounceHandler.removeCallbacksAndMessages(null);
+        soulseekPolicyDebounceHandler.removeCallbacksAndMessages(null);
+        clockHandler.removeCallbacksAndMessages(null);
+        progressHandler.removeCallbacksAndMessages(null);
+        volumeHandler.removeCallbacksAndMessages(null);
+        fastScrollHandler.removeCallbacksAndMessages(null);
+    }
+
     @Override
     protected void onDestroy() {
         if (instance == this) instance = null;
@@ -40647,7 +40798,16 @@ public class MainActivity extends Activity {
             deferredColdStartWork = null;
         }
         if (usbFocusHelper != null) usbFocusHelper.onDestroy();
+        UsbRecoveryAgent.stop(this);
         if (wavFallback != null) wavFallback.cancel();
+        libraryScanGen++;
+        libraryMaintenanceExecutor.shutdownNow();
+        musicPreparationGeneration++;
+        if (pendingMusicPreparation != null) {
+            pendingMusicPreparation.cancel(true);
+            pendingMusicPreparation = null;
+        }
+        musicPreparationExecutor.shutdownNow();
         stopInactivityMonitor();
         if (mediaSuite != null) mediaSuite.release();
         stopSettingsPreviewVerticalMarquee();
@@ -40658,14 +40818,8 @@ public class MainActivity extends Activity {
             try { wheelIndexedAdapter.unregisterDataSetObserver(wheelDataObserver); } catch (Exception ignored) {}
             wheelIndexedAdapter = null;
         }
-        super.onDestroy();
-        clockHandler.removeCallbacks(clockTask);
-        progressHandler.removeCallbacks(updateProgressTask);
-        progressHandler.removeCallbacks(podcastGrowingEdgePoll);
-        volumeHandler.removeCallbacks(hideVolumeTask);
-        volumeHandler.removeCallbacks(hideVolumeContextTask);
-        soulseekUiHandler.removeCallbacksAndMessages(null);
-        fastScrollHandler.removeCallbacksAndMessages(null);
+        clearOwnedUiCallbacks();
+        if (deezerScreen != null) deezerScreen.teardown();
 
         if (isServerRunning && webServer != null) {
             webServer.stopServer();
@@ -40710,6 +40864,7 @@ public class MainActivity extends Activity {
             adapter.closeProfileProxy(BluetoothProfile.A2DP, bluetoothA2dp);
             bluetoothA2dp = null;
         }
+        super.onDestroy();
     }
 
 
@@ -40851,16 +41006,29 @@ public class MainActivity extends Activity {
         }
     }
 
-    private static byte[] readCoverJpegBytes(File coverFile) {
-        if (coverFile == null || !coverFile.isFile() || coverFile.length() < 4096) return null;
+    static byte[] readCoverJpegBytes(File coverFile) {
+        if (coverFile == null || !coverFile.isFile()) return null;
+        long length = coverFile.length();
+        if (length <= 0L || length > Integer.MAX_VALUE) return null;
+        java.io.FileInputStream in = null;
         try {
-            java.io.FileInputStream in = new java.io.FileInputStream(coverFile);
-            byte[] data = new byte[(int) coverFile.length()];
-            int read = in.read(data);
-            in.close();
-            return read > 0 ? data : null;
+            in = new java.io.FileInputStream(coverFile);
+            byte[] data = new byte[(int) length];
+            int offset = 0;
+            while (offset < data.length) {
+                int count = in.read(data, offset, data.length - offset);
+                if (count < 0) break;
+                if (count == 0) continue;
+                offset += count;
+            }
+            if (offset == data.length) return data;
+            return offset > 0 ? java.util.Arrays.copyOf(data, offset) : null;
         } catch (Exception ignored) {
             return null;
+        } finally {
+            if (in != null) {
+                try { in.close(); } catch (Exception ignored) {}
+            }
         }
     }
 
@@ -41260,6 +41428,11 @@ public class MainActivity extends Activity {
     }
     // 💡 [수정] 메인 화면 미리보기도 재생 상태에 따라 아이콘을 똑똑하게 바꿉니다.
     private void refreshNowPlayingPreview() {
+        refreshNowPlayingPreview(null);
+    }
+
+    /** Reuse an already-decoded cover when the playback preparation worker has one. */
+    private void refreshNowPlayingPreview(android.graphics.Bitmap preparedArt) {
         if (isNowPlayingHomeFocused() && currentScreenState == STATE_MENU) {
             if (!playback.hasAnyQueue()) {
                 ivMenuPreview.setImageResource(R.drawable.music_circle);
@@ -41268,7 +41441,9 @@ public class MainActivity extends Activity {
                     tvMenuPreviewArtist.setVisibility(View.GONE);
                 }
             } else {
-                if (lastAlbumArtBytes != null && lastAlbumArtBytes.length > 0) {
+                if (preparedArt != null && !preparedArt.isRecycled()) {
+                    ivMenuPreview.setImageBitmap(decorateAlbumArtForPreview(preparedArt));
+                } else if (lastAlbumArtBytes != null && lastAlbumArtBytes.length > 0) {
                     try {
                         android.graphics.BitmapFactory.Options opts = new android.graphics.BitmapFactory.Options();
                         opts.inSampleSize = 2;

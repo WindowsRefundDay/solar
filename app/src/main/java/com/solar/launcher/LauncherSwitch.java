@@ -1,6 +1,7 @@
 package com.solar.launcher;
 
 import android.content.Context;
+import android.content.ComponentName;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 
@@ -79,14 +80,10 @@ public final class LauncherSwitch {
     public static void assertRockboxDisabledWhileSolarHome(final Context context) {
         if (context == null) return;
         if (!RockboxDisable.isSolarEnabled(context)) return;
+        if (!isRockboxEnabled(context)) return;
         new Thread(new Runnable() {
             @Override
             public void run() {
-                try {
-                    Runtime.getRuntime().exec(new String[]{"su", "-c",
-                            "pm enable com.android.systemui/com.android.systemui.usb.UsbStorageActivity"}).waitFor();
-                } catch (Exception ignored) {}
-
                 for (int attempt = 0; attempt < 30; attempt++) {
                     if (!isRockboxEnabled(context)) return;
                     if (attempt == 0) {
@@ -118,6 +115,32 @@ public final class LauncherSwitch {
                 }
             }
         }, "RockboxAutoDisable").start();
+    }
+
+    /** Repair the historical component-disable workaround only when it is actually disabled. */
+    public static void repairUsbStorageActivityIfDisabled(final Context context) {
+        if (context == null) return;
+        final ComponentName component = new ComponentName("com.android.systemui",
+                "com.android.systemui.usb.UsbStorageActivity");
+        int state;
+        try {
+            state = context.getPackageManager().getComponentEnabledSetting(component);
+        } catch (Exception e) {
+            return;
+        }
+        if (state != PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                && state != PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER) {
+            return;
+        }
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Runtime.getRuntime().exec(new String[]{"su", "-c",
+                            "pm enable " + component.flattenToShortString()}).waitFor();
+                } catch (Exception ignored) {}
+            }
+        }, "UsbStorageActivityRepair").start();
     }
 
     /** Switch to Rockbox — sync keymap/codecs, enable Rockbox, start it, then disable Solar. */

@@ -19,6 +19,7 @@ import com.solar.launcher.FocusScrollHelper;
 import com.solar.launcher.GetMusicSearch;
 import com.solar.launcher.MusicSearchEntry;
 import com.solar.launcher.R;
+import com.solar.launcher.SolarLog;
 import com.solar.launcher.net.TlsHelper;
 import com.solar.launcher.theme.ThemeManager;
 import com.solar.launcher.soulseek.SoulseekSearchSuggestions;
@@ -136,6 +137,8 @@ public final class DeezerScreen {
     private boolean usingArlOverride;
     private boolean downloadAutoRetryPending;
     private int lastFailedAction = ACTION_PLAY;
+    /** Counts one user-started transfer and every automatic retry/fallback attempt. */
+    private int downloadAttempt;
     private final Handler downloadRetryHandler = new Handler(Looper.getMainLooper());
     private Runnable downloadAutoRetryRunnable;
     private Button searchStatusRow;
@@ -689,6 +692,7 @@ public final class DeezerScreen {
         downloadAutoRetryPending = false;
         cancelAutoRetrySchedule();
         if (!autoRetry) {
+            downloadAttempt = 0;
             downloadAutoRetryUsed = false;
             if (DeezerAccount.isUserArlConfigured(host.prefs())) {
                 downloadArlFallbackTier = DeezerAccount.ArlFallbackTier.USER;
@@ -699,6 +703,9 @@ public final class DeezerScreen {
             }
             restoreUserArlSessionIfNeeded();
         }
+        downloadAttempt++;
+        final int attempt = downloadAttempt;
+        final DeezerAccount.ArlFallbackTier attemptTier = downloadArlFallbackTier;
         partialPlaybackStarted = false;
         growingFile = null;
         downloadFailed = false;
@@ -707,6 +714,10 @@ public final class DeezerScreen {
         activeDownload = r;
         downloadPercent = 0;
         transferStartMs = System.currentTimeMillis();
+        SolarLog.i("DeezerDownload", "attempt=" + attempt
+                + " tier=" + attemptTier
+                + " trigger=" + (autoRetry ? "retry" : "user")
+                + " trackId=" + r.id + " action=" + action);
         buildDownloadUi(r, action);
         if (downloader != null) downloader.cancel();
         downloader = new DeezerDownloader(client);
@@ -764,6 +775,8 @@ public final class DeezerScreen {
                         if (activeDownload == null || activeDownload.id != r.id) return;
                         cancelAutoRetrySchedule();
                         downloadAutoRetryUsed = false;
+                        SolarLog.i("DeezerDownload", "complete attempt=" + attempt
+                                + " tier=" + attemptTier + " trackId=" + r.id);
                         restoreUserArlSessionIfNeeded();
                         DeezerMetadata.saveForTrackComplete(host.context(), destFile, r, track);
                         host.prefetchDeezerCover(destFile);
@@ -805,10 +818,17 @@ public final class DeezerScreen {
                         if (downloader != null) downloader.cancel();
                         final int failedAction = pendingAction != 0 ? pendingAction : ACTION_PLAY;
                         downloadFailureReason = message != null ? message : host.string(R.string.deezer_error_unknown);
+                        SolarLog.w("DeezerDownload", "failed attempt=" + attempt
+                                + " tier=" + attemptTier + " trackId=" + r.id
+                                + " reason=" + downloadFailureReason);
+                        // A media/CDN error can leave a cached license token stale even though
+                        // the ARL is still valid. Re-authenticate before the next attempt.
+                        client.invalidateSession();
                         activeDownload = null;
                         pendingAction = 0;
                         host.onDeezerStreamDownloadFailed();
-                        if (!downloadAutoRetryUsed) {
+                        if (!downloadAutoRetryUsed
+                                && !isAuthorizationFailure(downloadFailureReason)) {
                             downloadAutoRetryUsed = true;
                             lastFailedAction = failedAction;
                             scheduleAutoRetry(r);
@@ -820,7 +840,10 @@ public final class DeezerScreen {
                                 downloadArlFallbackTier = next;
                                 applyArlFallbackTier(next);
                                 lastFailedAction = failedAction;
-                                scheduleAutoRetry(r);
+                                // A 401/403 is deterministic for this credential; move to the
+                                // next tier without waiting for a redundant same-tier retry.
+                                scheduleAutoRetry(r,
+                                        isAuthorizationFailure(downloadFailureReason));
                             } else {
                                 restoreUserArlSessionIfNeeded();
                                 downloadFailed = true;
@@ -958,8 +981,12 @@ public final class DeezerScreen {
     }
 
     private void scheduleAutoRetry(final DeezerResult r) {
+        scheduleAutoRetry(r, false);
+    }
+
+    private void scheduleAutoRetry(final DeezerResult r, boolean immediateFallback) {
         showRetryingUi(r);
-        long delayMs = RETRY_DELAY_MIN_MS
+        long delayMs = immediateFallback ? 250L : RETRY_DELAY_MIN_MS
                 + (long) (Math.random() * (RETRY_DELAY_MAX_MS - RETRY_DELAY_MIN_MS));
         downloadAutoRetryPending = true;
         downloadAutoRetryRunnable = new Runnable() {
@@ -971,6 +998,9 @@ public final class DeezerScreen {
             }
         };
         downloadRetryHandler.postDelayed(downloadAutoRetryRunnable, delayMs);
+        SolarLog.i("DeezerDownload", "retry scheduled attempt=" + (downloadAttempt + 1)
+                + " tier=" + downloadArlFallbackTier + " delayMs=" + delayMs
+                + " trackId=" + r.id);
         // #region agent log
         try {
             org.json.JSONObject d = new org.json.JSONObject();
@@ -982,6 +1012,14 @@ public final class DeezerScreen {
                     "auto retry scheduled", "H-RETRY", d);
         } catch (Exception ignored) {}
         // #endregion
+    }
+
+    /** Authentication rejections cannot be fixed by retrying the same ARL/session. */
+    private static boolean isAuthorizationFailure(String reason) {
+        if (reason == null) return false;
+        String lower = reason.toLowerCase(Locale.US);
+        return lower.contains("http 401") || lower.contains("http 403")
+                || lower.contains("unauthorized") || lower.contains("forbidden");
     }
 
     private void showRetryingUi(DeezerResult r) {

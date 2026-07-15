@@ -8,6 +8,9 @@ import android.os.IBinder;
  * function list actually changes (MountService alone is not enough on Y1).
  */
 public class UmsEnabler {
+    static final String MASS_STORAGE_USB_CONFIG = "mass_storage,adb";
+    static final String DEFAULT_USB_CONFIG = "mtp,adb";
+
     public static void main(String[] args) {
         if (args.length < 1) {
             System.err.println("Usage: UmsEnabler [1|0]");
@@ -22,12 +25,16 @@ public class UmsEnabler {
             mountService.getClass().getMethod("setUsbMassStorageEnabled", boolean.class)
                     .invoke(mountService, enable);
             // ponytail: Y1 keeps mass_storage in the kernel list until config is switched.
-            setUsbConfig(enable ? "mass_storage,adb" : "adb");
+            setUsbConfig(usbConfigFor(enable));
             System.out.println("UMS enable=" + enable + " executed successfully.");
         } catch (Exception e) {
             e.printStackTrace();
             System.exit(1);
         }
+    }
+
+    static String usbConfigFor(boolean enable) {
+        return enable ? MASS_STORAGE_USB_CONFIG : DEFAULT_USB_CONFIG;
     }
 
     private static void setUsbConfig(String config) throws Exception {

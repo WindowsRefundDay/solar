@@ -8,6 +8,7 @@ SOLAR_APK=""
 SOLAR_TAG=""
 SOLAR_APK_URL=""
 OUTPUT=""
+AVRCP_PROFILE="metadata"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 WORK_DIR=""
@@ -20,12 +21,13 @@ source "$SCRIPT_DIR/solar-repo.sh"
 
 usage() {
     cat >&2 <<EOF
-usage: $0 <a|b|y2> (--apk PATH | [--solar-tag TAG] [--solar-apk-url URL]) [output.zip]
+usage: $0 <a|b|y2> (--apk PATH | [--solar-tag TAG] [--solar-apk-url URL]) [--avrcp-profile PROFILE] [output.zip]
 
   a|b|y2              Y1 type A (2.0.0+), Y1 type B (pre-2.0.0), or Y2 ATA (MT6582)
   --apk PATH          Local signed app-release.apk (CI / local builds)
   --solar-tag         GitHub release tag on ${SOLAR_GITHUB_REPO} (default: latest)
   --solar-apk-url     Direct APK download URL (skips GitHub HTML lookup)
+  --avrcp-profile     none, metadata (default), or metadata+no-standby
   output.zip          Output archive path
 EOF
     exit 1
@@ -50,6 +52,14 @@ while [ "$#" -gt 0 ]; do
         --solar-apk-url)
             SOLAR_APK_URL="${2:-}"
             [ -n "$SOLAR_APK_URL" ] || usage
+            shift 2
+            ;;
+        --avrcp-profile)
+            AVRCP_PROFILE="${2:-}"
+            case "$AVRCP_PROFILE" in
+                none|metadata|metadata+no-standby) ;;
+                *) usage ;;
+            esac
             shift 2
             ;;
         -h|--help)
@@ -165,6 +175,20 @@ require_cmd zip
 require_cmd cmp
 require_cmd openssl
 require_cmd sudo
+require_cmd sha256sum
+
+BASE_MANIFEST="$REPO_ROOT/solar-rom/base-images.sha256"
+BASE_ZIP_SHA256=""
+BASE_BOOT_SHA256=""
+BASE_SCATTER_SHA256=""
+if [ "$TYPE" != "y2" ]; then
+    [ -f "$BASE_MANIFEST" ] || die "missing base manifest: $BASE_MANIFEST"
+    manifest_row=$(awk -F'|' -v type="$TYPE" '$1 == type { print; exit }' "$BASE_MANIFEST")
+    [ -n "$manifest_row" ] || die "base manifest has no entry for type $TYPE"
+    IFS='|' read -r manifest_type manifest_url BASE_ZIP_SHA256 BASE_BOOT_SHA256 BASE_SCATTER_SHA256 \
+        <<< "$manifest_row"
+    [ "$manifest_url" = "$BASE_URL" ] || die "base URL differs from pinned manifest for type $TYPE"
+fi
 
 resolve_latest_solar_tag() {
     local release_url tag
@@ -236,19 +260,7 @@ install_solar_boot_assets() {
         die "missing $SOLAR_SYS/bin/bootanimation"
     fi
 
-    if [ -f "$SOLAR_SYS/boot.img" ]; then
-        echo "==> Replace boot.img in ROM archive"
-        cp "$SOLAR_SYS/boot.img" "$base_dir/boot.img"
-    else
-        die "missing $SOLAR_SYS/boot.img"
-    fi
-
-    if [ -f "$SOLAR_SYS/logo.bin" ]; then
-        echo "==> Replace logo.bin in ROM archive"
-        cp "$SOLAR_SYS/logo.bin" "$base_dir/logo.bin"
-    else
-        die "missing $SOLAR_SYS/logo.bin"
-    fi
+    "$SCRIPT_DIR/apply-variant-archive-assets.sh" "$TYPE" "$SOLAR_SYS" "$base_dir"
 }
 
 audit_rom_contents() {
@@ -266,10 +278,15 @@ audit_rom_contents() {
         fi
     done
 
-    if find "$sys_mount/app" "$sys_mount/priv-app" -iname '*innioasis*' 2>/dev/null | grep -q .; then
-        echo "audit fail: stock launcher APK still present under /system/app" >&2
-        errors=$((errors + 1))
-    fi
+    for directory in app priv-app; do
+        for package in com.innioasis.y1 com.innioasis.y2; do
+            if [ -e "$sys_mount/$directory/$package.apk" ] \
+                    || [ -e "$sys_mount/$directory/$package.odex" ]; then
+                echo "audit fail: stock launcher still present: /system/$directory/$package" >&2
+                errors=$((errors + 1))
+            fi
+        done
+    done
 
     if [ "$TYPE" = "y2" ] && find "$sys_mount/priv-app" -iname '*factorylauncher*' 2>/dev/null | grep -q .; then
         echo "audit fail: stock Y2 factory launcher still present in /system/priv-app" >&2
@@ -295,8 +312,8 @@ audit_rom_contents() {
         if [ ! -f "$sys_mount/etc/init.d/99SolarInit.sh" ]; then
             echo "audit fail: 99SolarInit.sh missing (SD Music/Podcasts/Themes + TLS sanity)" >&2
             errors=$((errors + 1))
-        elif ! grep -q 'disable-rockbox-for-solar.sh' "$sys_mount/etc/init.d/99SolarInit.sh" 2>/dev/null; then
-            echo "audit fail: 99SolarInit must run disable-rockbox-for-solar.sh on first boot" >&2
+        elif ! grep -q 'solar-deferred-init.sh' "$sys_mount/etc/init.d/99SolarInit.sh" 2>/dev/null; then
+            echo "audit fail: 99SolarInit must launch bounded deferred boot work" >&2
             errors=$((errors + 1))
         fi
 
@@ -367,8 +384,19 @@ audit_rom_contents() {
             errors=$((errors + 1))
         fi
 
+        if [ ! -f "$sys_mount/etc/solar/solar-deferred-init.sh" ]; then
+            echo "audit fail: solar-deferred-init.sh missing" >&2
+            errors=$((errors + 1))
+        fi
+
         if [ ! -f "$sys_mount/etc/init.d/99Y1ButtonScript" ]; then
             echo "audit fail: 99Y1ButtonScript missing (Back+Play Rockbox gesture)" >&2
+            errors=$((errors + 1))
+        elif ! grep -q 'GETEVENT_BIN.*-t' "$sys_mount/etc/init.d/99Y1ButtonScript" 2>/dev/null; then
+            echo "audit fail: 99Y1ButtonScript must use one blocking getevent reader" >&2
+            errors=$((errors + 1))
+        elif grep -qE 'dd if=|xxd|reverse_bytes' "$sys_mount/etc/init.d/99Y1ButtonScript" 2>/dev/null; then
+            echo "audit fail: 99Y1ButtonScript contains per-event parser processes" >&2
             errors=$((errors + 1))
         fi
 
@@ -434,10 +462,12 @@ audit_rom_contents() {
         errors=$((errors + 1))
     fi
 
-    if find "$user_mount" -maxdepth 1 -name 'com.innioasis.*.apk' 2>/dev/null | grep -q .; then
-        echo "audit fail: stock Innioasis launcher APK present in userdata" >&2
-        errors=$((errors + 1))
-    fi
+    for package in com.innioasis.y1 com.innioasis.y2; do
+        if [ -e "$user_mount/$package.apk" ] || [ -e "$user_mount/data/$package.apk" ]; then
+            echo "audit fail: stock launcher present in userdata: $package" >&2
+            errors=$((errors + 1))
+        fi
+    done
 
     if [ "$errors" -ne 0 ]; then
         die "ROM audit failed with $errors error(s)"
@@ -451,6 +481,7 @@ BASE_DIR="$WORK_DIR/base"
 MOUNT_SYS="$BASE_DIR/mount_sys"
 MOUNT_USER="$BASE_DIR/mount_user"
 STAGING_APK="$WORK_DIR/solar.apk"
+INPUT_MANIFEST_TMP="$WORK_DIR/rom-inputs.json"
 
 mkdir -p "$BASE_DIR" "$MOUNT_SYS" "$MOUNT_USER"
 
@@ -469,10 +500,53 @@ else
     download_solar_apk "$STAGING_APK"
 fi
 
+echo "==> Recording canonical transformation inputs"
+manifest_args=(
+    --repo-root "$REPO_ROOT"
+    --variant "$TYPE"
+    --profile "$AVRCP_PROFILE"
+    --base-sha256 "${BASE_ZIP_SHA256:-unpinned-y2}"
+    --apk "$STAGING_APK"
+    --output "$INPUT_MANIFEST_TMP"
+    --input "$REPO_ROOT/solar-rom/base-images.sha256"
+    --input "$REPO_ROOT/solar-rom/avrcp-images.sha256"
+    --input "$REPO_ROOT/solar-rom/platform-cert.sha256"
+    --input "$SCRIPT_DIR/build-rom.sh"
+    --input "$REPO_ROOT/scripts/stage-y1-system-prep.sh"
+    --input "$REPO_ROOT/scripts/apply-y1-system-prep.sh"
+    --input-dir "$REPO_ROOT/solar-rom/system"
+    --input-dir "$REPO_ROOT/solar-rom/scripts"
+    --input-dir "$REPO_ROOT/app/src/main/assets/certs"
+)
+if [ "$AVRCP_PROFILE" != "none" ]; then
+    manifest_args+=(--input-dir "$REPO_ROOT/solar-rom/patches/avrcp")
+fi
+python3 "$SCRIPT_DIR/input_manifest.py" "${manifest_args[@]}"
+
 echo "==> Downloading type-${TYPE} base firmware"
-curl -fsSL -o "$BASE_DIR/rom.zip" "$BASE_URL"
+if [ -n "${SOLAR_BASE_ROM_ZIP:-}" ]; then
+    [ -f "$SOLAR_BASE_ROM_ZIP" ] || die "SOLAR_BASE_ROM_ZIP not found: $SOLAR_BASE_ROM_ZIP"
+    cp "$SOLAR_BASE_ROM_ZIP" "$BASE_DIR/rom.zip"
+    echo "==> Using local pinned base: $SOLAR_BASE_ROM_ZIP"
+else
+    curl -fsSL -o "$BASE_DIR/rom.zip" "$BASE_URL"
+fi
+if [ -n "$BASE_ZIP_SHA256" ]; then
+    actual_base_sha=$(sha256sum "$BASE_DIR/rom.zip" | awk '{print $1}')
+    [ "$actual_base_sha" = "$BASE_ZIP_SHA256" ] \
+        || die "type-${TYPE} base SHA-256 mismatch: expected $BASE_ZIP_SHA256, got $actual_base_sha"
+fi
 unzip -q "$BASE_DIR/rom.zip" -d "$BASE_DIR"
 normalize_firmware_layout
+
+if [ -n "$BASE_BOOT_SHA256" ]; then
+    actual_boot_sha=$(sha256sum "$BASE_DIR/boot.img" | awk '{print $1}')
+    actual_scatter_sha=$(sha256sum "$BASE_DIR/$SCATTER_FILE" | awk '{print $1}')
+    [ "$actual_boot_sha" = "$BASE_BOOT_SHA256" ] \
+        || die "type-${TYPE} base boot.img SHA-256 mismatch"
+    [ "$actual_scatter_sha" = "$BASE_SCATTER_SHA256" ] \
+        || die "type-${TYPE} scatter SHA-256 mismatch"
+fi
 
 [ -f "$BASE_DIR/system.img" ] || die "system.img not found under $BASE_DIR after unzip"
 [ -f "$BASE_DIR/userdata.img" ] || die "userdata.img not found under $BASE_DIR after unzip"
@@ -486,11 +560,16 @@ sudo mount -t ext4 -o loop "$SYSTEM_MOUNT_SRC" "$MOUNT_SYS"
 sudo mount -t ext4 -o loop "$USERDATA_MOUNT_SRC" "$MOUNT_USER"
 
 echo "==> Patching system partition"
-while IFS= read -r apk; do
-    [ -n "$apk" ] || continue
-    echo "  removing $apk"
-    sudo rm -f "$apk"
-done < <(find "$MOUNT_SYS/priv-app" -iname '*innioasis*' 2>/dev/null || true)
+for directory in app priv-app; do
+    for package in com.innioasis.y1 com.innioasis.y2; do
+        if [ -e "$MOUNT_SYS/$directory/$package.apk" ] \
+                || [ -e "$MOUNT_SYS/$directory/$package.odex" ]; then
+            echo "  removing system/$directory/$package"
+            sudo rm -f "$MOUNT_SYS/$directory/$package.apk" \
+                "$MOUNT_SYS/$directory/$package.odex"
+        fi
+    done
+done
 
 if [ "$TYPE" = "y2" ]; then
     while IFS= read -r apk; do
@@ -505,14 +584,6 @@ if [ "$TYPE" = "y2" ]; then
         echo "  removing factory test: $apk"
         sudo rm -f "$apk" "${apk%.apk}.odex"
     done < <(find "$MOUNT_SYS" -iname '*factorytest*' 2>/dev/null || true)
-else
-    for apk in "$MOUNT_SYS/app"/com.*.apk; do
-        [ -e "$apk" ] || continue
-        base=$(basename "$apk")
-        [ "$base" = "$SYSTEM_APK_NAME" ] && continue
-        echo "  removing system/app/$base"
-        sudo rm -f "$apk"
-    done
 fi
 
 # Keep org.rockbox.apk + librockbox.so from base firmware for launcher switching.
@@ -546,16 +617,19 @@ if [ "$TYPE" != "y2" ]; then
     sudo cp "$SCRIPT_DIR/sync-y1-keymap.sh" "$MOUNT_SYS/etc/solar/sync-y1-keymap.sh"
     sudo cp "$SCRIPT_DIR/disable-rockbox-for-solar.sh" "$MOUNT_SYS/etc/solar/disable-rockbox-for-solar.sh"
     sudo cp "$SCRIPT_DIR/solar-usb-recovery-agent.sh" "$MOUNT_SYS/etc/solar/solar-usb-recovery-agent.sh"
+    sudo cp "$SCRIPT_DIR/solar-deferred-init.sh" "$MOUNT_SYS/etc/solar/solar-deferred-init.sh"
     sudo cp "$SCRIPT_DIR/Y1-Rockbox.kl" "$MOUNT_SYS/etc/solar/Y1-Rockbox.kl"
     sudo chmod 755 "$MOUNT_SYS/etc/solar/switch-to-stock.sh" "$MOUNT_SYS/etc/solar/switch-to-rockbox.sh" \
         "$MOUNT_SYS/etc/solar/sync-rockbox-libs.sh" "$MOUNT_SYS/etc/solar/sync-y1-keymap.sh" \
         "$MOUNT_SYS/etc/solar/disable-rockbox-for-solar.sh" \
-        "$MOUNT_SYS/etc/solar/solar-usb-recovery-agent.sh"
+        "$MOUNT_SYS/etc/solar/solar-usb-recovery-agent.sh" \
+        "$MOUNT_SYS/etc/solar/solar-deferred-init.sh"
     sudo chmod 644 "$MOUNT_SYS/etc/solar/Y1-Rockbox.kl"
     sudo chown root:root "$MOUNT_SYS/etc/solar/switch-to-stock.sh" "$MOUNT_SYS/etc/solar/switch-to-rockbox.sh" \
         "$MOUNT_SYS/etc/solar/sync-rockbox-libs.sh" "$MOUNT_SYS/etc/solar/sync-y1-keymap.sh" \
         "$MOUNT_SYS/etc/solar/disable-rockbox-for-solar.sh" \
-        "$MOUNT_SYS/etc/solar/solar-usb-recovery-agent.sh" "$MOUNT_SYS/etc/solar/Y1-Rockbox.kl"
+        "$MOUNT_SYS/etc/solar/solar-usb-recovery-agent.sh" \
+        "$MOUNT_SYS/etc/solar/solar-deferred-init.sh" "$MOUNT_SYS/etc/solar/Y1-Rockbox.kl"
 
     sudo cp "$REPO_ROOT/solar-rom/system/99Y1ButtonScript" "$MOUNT_SYS/etc/init.d/99Y1ButtonScript"
     sudo chmod 755 "$MOUNT_SYS/etc/init.d/99Y1ButtonScript"
@@ -582,21 +656,21 @@ if [ -f "$MOUNT_SYS/usr/keylayout/mtk-kpd.kl" ]; then
 fi
 
 if [ "$TYPE" != "y2" ]; then
-    echo "==> AVRCP Bluetooth stack (Y1Bridge + mtkbt patches; hardware keylayout unchanged)"
-    chmod +x "$SCRIPT_DIR/apply-avrcp-patches.sh"
-    sudo "$SCRIPT_DIR/apply-avrcp-patches.sh" "$MOUNT_SYS"
+    if [ "$AVRCP_PROFILE" != "none" ]; then
+        echo "==> AVRCP Bluetooth profile: $AVRCP_PROFILE"
+        chmod +x "$SCRIPT_DIR/apply-avrcp-patches.sh"
+        sudo "$SCRIPT_DIR/apply-avrcp-patches.sh" "$MOUNT_SYS" "$AVRCP_PROFILE"
+    else
+        echo "==> AVRCP Bluetooth profile: none (stock binaries retained)"
+    fi
 
     install_solar_boot_assets "$BASE_DIR" "$MOUNT_SYS"
 fi
 
 echo "==> Patching userdata partition"
-while IFS= read -r apk; do
-    [ -n "$apk" ] || continue
-    echo "  removing userdata/$(basename "$apk")"
-    sudo rm -f "$apk"
-done < <(find "$MOUNT_USER" -maxdepth 1 -name 'com.innioasis.*.apk' 2>/dev/null || true)
-sudo rm -f "$MOUNT_USER/data/com.innioasis.y1.apk"
-sudo rm -f "$MOUNT_USER/data/com.innioasis.y2.apk"
+for package in com.innioasis.y1 com.innioasis.y2; do
+    sudo rm -f "$MOUNT_USER/$package.apk" "$MOUNT_USER/data/$package.apk"
+done
 sudo rm -f "$MOUNT_USER"/*_launcher.apk
 sudo rm -f "$MOUNT_USER/data/*_launcher_initialized"
 sudo rm -f "$MOUNT_USER/data/.solar_rom_home_ready"
@@ -634,3 +708,5 @@ rm -f "$OUTPUT"
 )
 
 echo "==> Built $OUTPUT ($(du -h "$OUTPUT" | awk '{print $1}'))"
+cp "$INPUT_MANIFEST_TMP" "$OUTPUT.inputs.json"
+echo "==> Input manifest: $OUTPUT.inputs.json"

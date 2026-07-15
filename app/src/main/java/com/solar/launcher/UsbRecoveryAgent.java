@@ -21,35 +21,47 @@ public final class UsbRecoveryAgent {
     private static final String DATA_SCRIPT = "/data/data/solar-usb-recovery-agent.sh";
     private static final String PIDFILE = "/data/data/.solar_usb_recovery.pid";
     private static final long START_MIN_INTERVAL_MS = 60_000L;
-    private static volatile long lastStartMs = 0L;
+    private static final UsbRecoveryStartGate START_GATE =
+            new UsbRecoveryStartGate(START_MIN_INTERVAL_MS);
 
     private UsbRecoveryAgent() {}
 
     /** Start the singleton recovery loop (no-op if already running). */
-    public static void ensureRunning(final Context context) {
-        if (context == null) return;
+    public static void ensureRunning(final Context context, boolean hostConnected,
+            boolean userDeclined, boolean massStorageActive) {
+        if (context == null || !shouldRun(hostConnected, userDeclined, massStorageActive)) return;
         if (!RockboxDisable.isSolarEnabled(context)) return;
-        long now = System.currentTimeMillis();
-        if (now - lastStartMs < START_MIN_INTERVAL_MS) return;
-        lastStartMs = now;
+        final int startToken = START_GATE.tryAcquire(android.os.SystemClock.elapsedRealtime());
+        if (startToken < 0) return;
         new Thread(new Runnable() {
             @Override
             public void run() {
+                boolean started = false;
                 try {
                     String script = resolveScriptPath(context);
                     if (script == null) return;
                     if (LauncherSwitch.isRockboxEnabled(context)) return;
-                    runSu("sh " + shellQuote(script) + " </dev/null >/dev/null 2>&1 &");
-                    Log.i(TAG, "recovery agent started");
+                    if (!START_GATE.isCurrent(startToken)) return;
+                    started = runSu("sh " + shellQuote(script) + " </dev/null >/dev/null 2>&1 &");
+                    if (started) Log.i(TAG, "recovery agent started");
                 } catch (Exception e) {
                     Log.w(TAG, "ensureRunning failed: " + e.getMessage());
+                } finally {
+                    START_GATE.complete(startToken, started,
+                            android.os.SystemClock.elapsedRealtime());
                 }
             }
         }, "UsbRecoveryAgent").start();
     }
 
+    static boolean shouldRun(boolean hostConnected, boolean userDeclined,
+            boolean massStorageActive) {
+        return hostConnected && userDeclined && !massStorageActive;
+    }
+
     /** Kill the poll loop on USB disconnect so it doesn't idle-poll until Solar exits. */
     public static void stop(final Context context) {
+        START_GATE.reset();
         new Thread(new Runnable() {
             @Override
             public void run() {

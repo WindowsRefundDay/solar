@@ -11,6 +11,7 @@ FILES=(
     sync-y1-keymap.sh
     disable-rockbox-for-solar.sh
     solar-usb-recovery-agent.sh
+    solar-deferred-init.sh
     Y1-Rockbox.kl
 )
 errors=0

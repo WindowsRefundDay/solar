@@ -7,6 +7,7 @@ import android.graphics.Canvas;
 import android.graphics.LinearGradient;
 import android.graphics.Matrix;
 import android.graphics.Paint;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.Typeface;
@@ -92,7 +93,8 @@ public final class FlowView extends View {
     private static final float FLOW_REFLECTION_CENTER_ALPHA = 0.50f;
     private static final int CENTER_REFLECTION_MAX_BANDS = 8;
     private static final int SIDE_REFLECTION_MAX_BANDS = 6;
-    private static final int SIDE_REFLECTION_SCROLL_MAX_BANDS = 4;
+    private static final int CENTER_REFLECTION_MOTION_MAX_BANDS = 4;
+    private static final int SIDE_REFLECTION_MOTION_MAX_BANDS = 3;
     private boolean debugTheme;
     private int lastNotifiedFocus = -1;
     private float viewW;
@@ -143,6 +145,12 @@ public final class FlowView extends View {
     private long lastScrollWheelLogMs;
     /** Coalesce anim ticks when frames arrive faster than display can show. */
     private long lastAnimInvalidateMs;
+    /** Reused dirty/cull bounds — marquee ticks must not redraw the full carousel. */
+    private final Rect frontMarqueeDirtyRect = new Rect();
+    private final Rect backFaceMarqueeDirtyRect = new Rect();
+    private final Rect drawClipBounds = new Rect();
+    private final RectF slotCullRect = new RectF();
+    private final RectF mappedSlotBounds = new RectF();
     /** ponytail: debounce rapid wheel inputs — coalesce ticks faster than animation can settle. */
     private static final long SCROLL_DEBOUNCE_MS = 80L;
     private long lastScrollWheelMs;
@@ -155,7 +163,7 @@ public final class FlowView extends View {
             if (s == FlowFlipController.STATE_BACK
                     || s == FlowFlipController.STATE_FLIP_TO_BACK) return;
             if (titleAlpha < 0.01f) return;
-            postInvalidateOnAnimation();
+            postInvalidateRectOnAnimation(frontMarqueeDirtyRect);
             postDelayed(this, 48);
         }
     };
@@ -165,7 +173,9 @@ public final class FlowView extends View {
         @Override
         public void run() {
             if (!isShown()) return;
-            if (flip.getState() == FlowFlipController.STATE_BACK) invalidate();
+            if (flip.getState() == FlowFlipController.STATE_BACK) {
+                postInvalidateRectOnAnimation(backFaceMarqueeDirtyRect);
+            }
         }
     };
 
@@ -1011,6 +1021,8 @@ public final class FlowView extends View {
         super.onSizeChanged(w, h, oldw, oldh);
         viewW = w;
         viewH = h;
+        frontMarqueeDirtyRect.setEmpty();
+        backFaceMarqueeDirtyRect.setEmpty();
         engine.setViewport(viewW, viewH);
         cachedMetrics = null;
         prepareEmptyPlaceholder();
@@ -1057,6 +1069,7 @@ public final class FlowView extends View {
             drawEmptyHint(canvas, w, h);
             return;
         }
+        canvas.getClipBounds(drawClipBounds);
         // Idle guard — handoff prep can zero side/center alphas while animTick is not posted.
         if (!com.solar.launcher.flow.FlowPlayerHandoff.isHandoffAnimating()
                 && !handoffRevealActive
@@ -1338,6 +1351,14 @@ public final class FlowView extends View {
         postDelayed(frontMarqueeTick, 48);
     }
 
+    private void postInvalidateRectOnAnimation(Rect dirty) {
+        if (dirty == null || dirty.isEmpty()) {
+            postInvalidateOnAnimation();
+            return;
+        }
+        postInvalidateOnAnimation(dirty.left, dirty.top, dirty.right, dirty.bottom);
+    }
+
     private void stopFrontFaceMarqueeTick() {
         removeCallbacks(frontMarqueeTick);
     }
@@ -1375,15 +1396,7 @@ public final class FlowView extends View {
     private void drawCoverAt(Canvas canvas, int index, FlowEngine.SlotTransform t,
             CoverFlowLayout.Metrics metrics, float extraRotY, boolean backFace, float enlarge) {
         FlowItem item = items.get(index);
-        Bitmap bmp = cache != null ? cache.get(item.coverKey) : null;
-        bmp = coverBitmapForDraw(index, item, bmp);
         final boolean isVisualCenter = index == engine.getVisualCenterIndex();
-        if (bmp == null && callback != null && !backFace) {
-            // Pinned NP art covers the center slot during crossfade — no async grey placeholder.
-            if (!(isVisualCenter && handoffPinBitmap != null && !handoffPinBitmap.isRecycled())) {
-                callback.requestCover(index, item.coverKey, item);
-            }
-        }
 
         float left = t.centerX - t.width * 0.5f;
         float top = t.centerY - t.height * 0.5f;
@@ -1412,6 +1425,39 @@ public final class FlowView extends View {
         camera.restore();
         matrix.preTranslate(-pivotX, -t.centerY);
         matrix.postTranslate(pivotX, t.centerY);
+
+        // Dirty marquee frames carry a narrow clip. Cull slots before bitmap lookup, decode request,
+        // shadow and reflection work when the complete transformed slot cannot touch that clip.
+        // The local bound includes the deepest reflection and shadow so settled pixels are preserved.
+        float coverScale = metrics.displaySize > 0f
+                ? drawRect.width() / metrics.displaySize : 1f;
+        float reflectionBottom = backFace || noReflections
+                ? drawRect.bottom : drawRect.bottom + metrics.reflectHeight * coverScale;
+        float shadowBottom = drawRect.bottom + drawRect.height() * 0.18f;
+        slotCullRect.set(drawRect.left, drawRect.top, drawRect.right,
+                Math.max(reflectionBottom, shadowBottom));
+        mappedSlotBounds.set(slotCullRect);
+        matrix.mapRect(mappedSlotBounds);
+        if (!intersectsClip(mappedSlotBounds, drawClipBounds)) {
+            canvas.restore();
+            return;
+        }
+
+        if (backFace) {
+            mappedSlotBounds.roundOut(backFaceMarqueeDirtyRect);
+            if (!backFaceMarqueeDirtyRect.intersect(0, 0, getWidth(), getHeight())) {
+                backFaceMarqueeDirtyRect.setEmpty();
+            }
+        }
+
+        Bitmap bmp = cache != null ? cache.get(item.coverKey) : null;
+        bmp = coverBitmapForDraw(index, item, bmp);
+        if (bmp == null && callback != null && !backFace) {
+            // Pinned NP art covers the center slot during crossfade — no async grey placeholder.
+            if (!(isVisualCenter && handoffPinBitmap != null && !handoffPinBitmap.isRecycled())) {
+                callback.requestCover(index, item.coverKey, item);
+            }
+        }
         // #region agent log
         boolean dbgUsingBaked = false;
         logDrawCoverGlitchIfNeeded(index, totalRotY, pivotX, t, metrics, dbgUsingBaked);
@@ -1425,7 +1471,10 @@ public final class FlowView extends View {
             coverPaint.setAlpha(255);
             return;
         }
-        drawSlotShadow(canvas, t, slotAlpha);
+        boolean motionActive = isVisualMotionActive();
+        if (shouldDrawSlotShadow(motionActive, isVisualCenter)) {
+            drawSlotShadow(canvas, t, slotAlpha);
+        }
 
         if (backFace) {
             drawBackFace(canvas, drawRect);
@@ -1435,8 +1484,6 @@ public final class FlowView extends View {
                 // iPod Classic: center cover keeps floor reflection while idle; deferred after handoff.
                 boolean skipReflect = shouldSkipCoverReflection(noReflections, isVisualCenter);
                 // Scale reflection band with perspective-shrunk cover — baked bitmap is displaySize-native.
-                float coverScale = metrics.displaySize > 0f
-                        ? drawRect.width() / metrics.displaySize : 1f;
                 reflectH = skipReflect ? 0f : metrics.reflectHeight * coverScale;
                 // #region agent log
                 if (isVisualCenter && com.solar.launcher.Debug898913Log.ENABLED
@@ -1493,7 +1540,7 @@ public final class FlowView extends View {
                             totalRotY, t, metrics, false);
                     // #endregion
                     drawDynamicCoverAndReflection(canvas, bmp, drawRect, slotAlpha,
-                            reflectH, metrics, isVisualCenter, totalRotY);
+                            reflectH, metrics, isVisualCenter, totalRotY, motionActive);
                 }
             } else {
                 if (isVisualCenter && handoffPinBitmap != null && !handoffPinBitmap.isRecycled()
@@ -1521,15 +1568,42 @@ public final class FlowView extends View {
     }
 
     private void drawDynamicCoverAndReflection(Canvas canvas, Bitmap bmp, RectF rect, float slotAlpha,
-            float reflectH, CoverFlowLayout.Metrics metrics, boolean isVisualCenter, float totalRotY) {
+            float reflectH, CoverFlowLayout.Metrics metrics, boolean isVisualCenter, float totalRotY,
+            boolean motionActive) {
         canvas.drawBitmap(bmp, null, rect, coverPaint);
         if (reflectH <= 0f) return;
         float reflectionAlpha = reflectionAlphaForDraw(slotAlpha, handoffReflectRevealAlpha, totalRotY);
-        int bands = isVisualCenter ? CENTER_REFLECTION_MAX_BANDS
-                : (engine.isCarouselScrolling() ? SIDE_REFLECTION_SCROLL_MAX_BANDS
-                : SIDE_REFLECTION_MAX_BANDS);
+        int bands = reflectionBandCount(isVisualCenter, motionActive);
         FlowAlbumArt3d.drawReflectionFloorCoarse(canvas, bmp, rect, reflectionAlpha,
                 reflectH, metrics.reflectTable, reflectionPaint, null, bands);
+    }
+
+    private boolean isVisualMotionActive() {
+        int flipState = flip.getState();
+        return engine.isAnimating()
+                || flipState == FlowFlipController.STATE_FLIP_TO_BACK
+                || flipState == FlowFlipController.STATE_FLIP_TO_FRONT
+                || flipState == FlowFlipController.STATE_HANDOFF
+                || FlowPlayerHandoff.isHandoffAnimating()
+                || handoffRevealActive;
+    }
+
+    static int reflectionBandCount(boolean isVisualCenter, boolean motionActive) {
+        if (motionActive) {
+            return isVisualCenter
+                    ? CENTER_REFLECTION_MOTION_MAX_BANDS : SIDE_REFLECTION_MOTION_MAX_BANDS;
+        }
+        return isVisualCenter ? CENTER_REFLECTION_MAX_BANDS : SIDE_REFLECTION_MAX_BANDS;
+    }
+
+    static boolean shouldDrawSlotShadow(boolean motionActive, boolean isVisualCenter) {
+        return !motionActive || isVisualCenter;
+    }
+
+    static boolean intersectsClip(RectF bounds, Rect clip) {
+        return bounds != null && clip != null && !clip.isEmpty()
+                && bounds.left < clip.right && clip.left < bounds.right
+                && bounds.top < clip.bottom && clip.top < bounds.bottom;
     }
 
     private void drawSlotShadow(Canvas canvas, FlowEngine.SlotTransform t, float slotAlpha) {
@@ -1645,6 +1719,13 @@ public final class FlowView extends View {
         float titleY = metrics.reflectTop + metrics.reflectHeight * 0.45f;
         float maxW = w * 0.88f;
         float x = w * 0.5f - maxW * 0.5f;
+        // Both marquee implementations clip horizontally to this span. Keep a small vertical
+        // allowance for font ascent/descent so each 48 ms tick redraws only the label floor.
+        frontMarqueeDirtyRect.set(
+                Math.max(0, (int) Math.floor(x - 4f)),
+                Math.max(0, (int) Math.floor(titleY - w * 0.09f)),
+                Math.min((int) w, (int) Math.ceil(x + maxW + 4f)),
+                Math.min((int) h, (int) Math.ceil(titleY + h * 0.055f + w * 0.065f)));
         textPaint.setAlpha((int) (255 * titleAlpha));
         textPaint.setTextAlign(Paint.Align.LEFT);
         textPaint.setTextSize(w * 0.068f);

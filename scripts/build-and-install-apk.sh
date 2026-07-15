@@ -104,7 +104,7 @@ chmod +x gradlew scripts/ensure-platform-keystore.sh \
 ./solar-rom/scripts/sync-y1-assets.sh
 
 echo "==> Building $BUILD_TYPE APK with $GRADLE_TASK..."
-./gradlew "$GRADLE_TASK" "${GRADLE_ARGS[@]}"
+./gradlew "$GRADLE_TASK" "${GRADLE_ARGS[@]+${GRADLE_ARGS[@]}}"
 
 [[ -f "$APK_PATH" ]] || {
   echo "ERROR: APK was not created at $APK_PATH" >&2

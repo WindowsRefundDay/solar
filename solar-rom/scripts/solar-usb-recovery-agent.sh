@@ -33,13 +33,6 @@ rockbox_disabled() {
 }
 
 bring_solar_home() {
-    # #region agent log
-    ts=$(date +%s%3N 2>/dev/null || date +%s)
-    echo "{\"sessionId\":\"317b34\",\"timestamp\":${ts},\"location\":\"solar-usb-recovery-agent.sh:bring_solar_home\",\"message\":\"recovery dismiss\",\"hypothesisId\":\"H2\",\"data\":{}}" \
-        >>/storage/sdcard0/solar/debug-317b34.log 2>/dev/null
-    echo "{\"sessionId\":\"317b34\",\"timestamp\":${ts},\"location\":\"solar-usb-recovery-agent.sh:bring_solar_home\",\"message\":\"recovery dismiss\",\"hypothesisId\":\"H2\",\"data\":{}}" \
-        >>/data/data/com.solar.launcher/files/debug-317b34.log 2>/dev/null
-    # #endregion
     # ponytail: BACK finishes UsbStorageActivity; one HOME brings Solar — no dumpsys storm.
     input keyevent 4
     sleep 0.15
