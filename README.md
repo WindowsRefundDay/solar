@@ -14,6 +14,20 @@ Custom firmware and launcher for the **Innioasis Y1** — a full interface repla
 - **Y1 themes** — install and apply themes from the original Y1 firmware
 - **Rockbox-Y1** — co-installed; switch launchers from Settings (unified keymap, no reboot)
 
+## Recent stability and performance work
+
+The current `main` branch includes a broad Y1 reliability pass across the launcher and ROM tooling:
+
+- Hardened `MainActivity` and media playback teardown so player callbacks, releases, and activity shutdown remain generation-safe and do not block the UI.
+- Improved scrolling and screen transitions with smoother wheel physics, iPod-style easing, coordinated artwork work, and fewer unnecessary CPU loops.
+- Made library scanning safer around transient storage failures and added concurrency coverage so an interrupted scan does not erase a healthy library.
+- Improved Deezer metadata, download, queue, and playback preparation paths, with focused regression tests.
+- Added safer USB recovery, UMS, inactivity-shutdown, reboot breadcrumb, and low-priority worker handling for Y1 background operations.
+- Expanded ROM build and verification tooling, including Y1 asset synchronization, deferred initialization, AVRCP/Vold patch support, variant archive assets, manifest/checksum validation, and ROM policy tests.
+- Added live-log and recovery utilities for diagnosing device startup, USB, playback, and ROM-installation issues.
+
+These changes are designed for the Y1's Android API 17 environment and are accompanied by focused JVM regression tests. The full host test suite may still require device-specific or optional external tooling for Soulseek and filesystem-harness tests.
+
 ## Screenshots
 
 | | |
@@ -64,13 +78,13 @@ A Demo Account is included for testers, please configure your own to ensure reli
 
 # How to get started with Solar
 
-Head to the [Solar GitHub repository](https://github.com/thesolarproject/solar) and download a copy of the ROM from the [Releases](https://github.com/thesolarproject/solar) tab.
+Head to the [Solar GitHub repository](https://github.com/WindowsRefundDay/solar) and download a copy of the ROM from the [Releases](https://github.com/WindowsRefundDay/solar/releases) tab.
 
 ### Install in Innioasis updater app:
 
-[1.Download](https://github.com/thesolarproject/solar/releases/latest/download/rom.zip) the [rom.zip](https://github.com/thesolarproject/solar/releases/latest/download/rom.zip) file
+[1.Download](https://github.com/WindowsRefundDay/solar/releases/latest/download/rom.zip) the [rom.zip](https://github.com/WindowsRefundDay/solar/releases/latest/download/rom.zip) file
 
-2. click "Browse Files" in the updater app and select the [rom.zip](https://github.com/thesolarproject/solar/releases/latest/download/rom.zip) file
+2. click "Browse Files" in the updater app and select the [rom.zip](https://github.com/WindowsRefundDay/solar/releases/latest/download/rom.zip) file
 
 3. Installation will begin
 
@@ -81,7 +95,7 @@ Extract [rom.zip](https://github.com/thesolarproject/solar/releases/latest/downl
 ### Install with MTKClient
 
 1. Install [MTKClient](https://github.com/bkerler/mtkclient)
-2. Download [the latest Solar firmware](https://github.com/thesolarproject/solar/releases/latest) (rom.zip or rom\_type\_b.zip) (Try Type A first, if scrolling doesn't work then try B)
+2. Download [the latest Solar firmware](https://github.com/WindowsRefundDay/solar/releases/latest) (rom.zip or rom\_type\_b.zip) (Try Type A first, if scrolling doesn't work then try B)
 3. Unpack the archive:mkdir rom && cd rom unzip ../rom.zip
 4. Turn of the device, disconnect from the PC
 5. Start the flashing process:cd rom python ../mtk.py w logo,uboot,bootimg,recovery,android,usrdata logo.bin,lk.bin,boot.img,recovery.img,system.img,userdata.img
@@ -91,4 +105,4 @@ Extract [rom.zip](https://github.com/thesolarproject/solar/releases/latest/downl
 
 # How to leave feedback and report issues.
 
-Please leave your feedback and issue reports in the [Issues Tracker](https://github.com/thesolarproject/solar/issues)
+Please leave your feedback and issue reports in the [Issues Tracker](https://github.com/WindowsRefundDay/solar/issues)
