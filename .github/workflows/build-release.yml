@@ -41,7 +41,7 @@ jobs:
           ./solar-rom/scripts/prepare-release.sh
 
       - name: Verify OTA PAT can push to solar-update
-        if: ${{ secrets.SOLAR_GITHUB_PAT != '' }}
+        if: secrets.SOLAR_GITHUB_PAT != ''
         env:
           SOLAR_GITHUB_PAT: ${{ secrets.SOLAR_GITHUB_PAT }}
         run: |
@@ -147,7 +147,7 @@ jobs:
           generate_release_notes: false
 
       - name: Publish OTA catalog
-        if: ${{ secrets.SOLAR_GITHUB_PAT != '' }}
+        if: secrets.SOLAR_GITHUB_PAT != ''
         env:
           SOLAR_GITHUB_PAT: ${{ secrets.SOLAR_GITHUB_PAT }}
         run: |
