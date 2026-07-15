@@ -160,7 +160,7 @@ case "$TYPE" in
         ;;
     y2)
         # Y2 ATA support is maintained for future Innioasis Y2 release; not built in CI yet.
-        BASE_URL="https://github.com/y1-community/y2-ata-rom/releases/download/y2-ata/rom.zip"
+        BASE_URL="https://github.com/y1-community/y2-ata-rom/releases/download/y2-ata/rom_y2.zip"
         OUTPUT="${OUTPUT:-$REPO_ROOT/rom_y2.zip}"
         SCATTER_FILE="MT6582_Android_scatter.txt"
         ;;
