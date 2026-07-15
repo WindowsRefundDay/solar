@@ -19,6 +19,8 @@ jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      SOLAR_GITHUB_PAT: ${{ secrets.SOLAR_GITHUB_PAT }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,9 +43,7 @@ jobs:
           ./solar-rom/scripts/prepare-release.sh
 
       - name: Verify OTA PAT can push to solar-update
-        if: secrets.SOLAR_GITHUB_PAT != ''
-        env:
-          SOLAR_GITHUB_PAT: ${{ secrets.SOLAR_GITHUB_PAT }}
+        if: env.SOLAR_GITHUB_PAT != ''
         run: |
           chmod +x scripts/verify-ota-pat.sh scripts/configure-solar-update-pages.sh
           ./scripts/verify-ota-pat.sh
@@ -147,9 +147,7 @@ jobs:
           generate_release_notes: false
 
       - name: Publish OTA catalog
-        if: secrets.SOLAR_GITHUB_PAT != ''
-        env:
-          SOLAR_GITHUB_PAT: ${{ secrets.SOLAR_GITHUB_PAT }}
+        if: env.SOLAR_GITHUB_PAT != ''
         run: |
           chmod +x scripts/publish-ota-updates.sh
           NIGHTLY=false
