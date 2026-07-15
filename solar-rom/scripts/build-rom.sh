@@ -8,6 +8,7 @@ SOLAR_APK=""
 SOLAR_TAG=""
 SOLAR_APK_URL=""
 OUTPUT=""
+BT_PAIRING=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 WORK_DIR=""
@@ -26,6 +27,9 @@ usage: $0 <a|b|y2> (--apk PATH | [--solar-tag TAG] [--solar-apk-url URL]) [outpu
   --apk PATH          Local signed app-release.apk (CI / local builds)
   --solar-tag         GitHub release tag on ${SOLAR_GITHUB_REPO} (default: latest)
   --solar-apk-url     Direct APK download URL (skips GitHub HTML lookup)
+  --bt-pairing        Apply koensayr Bluetooth pairing config (CoD + audio.conf +
+                      pairing blacklists). Y1 only; default OFF. See
+                      solar-rom/docs/BT-PAIRING-CONFIG.md.
   output.zip          Output archive path
 EOF
     exit 1
@@ -51,6 +55,10 @@ while [ "$#" -gt 0 ]; do
             SOLAR_APK_URL="${2:-}"
             [ -n "$SOLAR_APK_URL" ] || usage
             shift 2
+            ;;
+        --bt-pairing)
+            BT_PAIRING=1
+            shift
             ;;
         -h|--help)
             usage
@@ -439,6 +447,24 @@ audit_rom_contents() {
         errors=$((errors + 1))
     fi
 
+    # Bluetooth pairing config (only when --bt-pairing was requested). Fail-closed
+    # so a silently-missed edit breaks the build rather than shipping half-applied.
+    if [ "$TYPE" != "y2" ] && [ "${BT_PAIRING:-0}" = "1" ]; then
+        if ! grep -q '^ro.bluetooth.class=10486812' "$sys_mount/build.prop" 2>/dev/null; then
+            echo "audit fail: --bt-pairing set but ro.bluetooth.class missing from build.prop" >&2
+            errors=$((errors + 1))
+        fi
+        if grep -q '^persist.bluetooth.avrcpversion' "$sys_mount/build.prop" 2>/dev/null; then
+            echo "audit fail: persist.bluetooth.avrcpversion must not be set (mtkbt can't deliver it)" >&2
+            errors=$((errors + 1))
+        fi
+        if [ -f "$sys_mount/etc/bluetooth/audio.conf" ] \
+                && ! grep -q '^Enable=Source,Control,Target' "$sys_mount/etc/bluetooth/audio.conf"; then
+            echo "audit fail: --bt-pairing set but audio.conf Enable not applied" >&2
+            errors=$((errors + 1))
+        fi
+    fi
+
     if [ "$errors" -ne 0 ]; then
         die "ROM audit failed with $errors error(s)"
     fi
@@ -585,6 +611,12 @@ if [ "$TYPE" != "y2" ]; then
     echo "==> AVRCP Bluetooth stack (Y1Bridge + mtkbt patches; hardware keylayout unchanged)"
     chmod +x "$SCRIPT_DIR/apply-avrcp-patches.sh"
     sudo "$SCRIPT_DIR/apply-avrcp-patches.sh" "$MOUNT_SYS"
+
+    if [ "$BT_PAIRING" = "1" ]; then
+        echo "==> Bluetooth pairing config (--bt-pairing)"
+        chmod +x "$SCRIPT_DIR/apply-bt-pairing.sh"
+        sudo "$SCRIPT_DIR/apply-bt-pairing.sh" "$MOUNT_SYS"
+    fi
 
     install_solar_boot_assets "$BASE_DIR" "$MOUNT_SYS"
 fi
